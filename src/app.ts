@@ -4,45 +4,48 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import rateLimit from "express-rate-limit";
 import { v4 as uuidv4 } from "uuid";
+import { env } from "./config/env";
 import { errorHandler } from "./middleware/errorHandler";
 import { AppError } from "./utils/error";
-import { success } from "./utils/response";
-import { HealthCheckResponse } from './types/health';
-import { pool } from './config/db';
+//import { success } from "./utils/response";
+import { HealthCheckResponse } from "./types/health";
+import { pool } from "./config/db";
 import authRoutes from "./modules/auth/auth.routes";
 // ADD: customers module — import alongside auth
 import customersRoutes from "./modules/customers/customers.routes";
-import transactionsRoutes from './modules/transactions/transactions.routes';
-import dashboardRoutes from './modules/transactions/dashboard.routes';
-import paymentsRoutes from './modules/payments/payments.routes';
-import agentRoutes from './verticals/market/agent.routes';
-import expensesRoutes from './modules/expenses/expenses.routes';
-import adminRoutes from './modules/admin/admin.routes';
+import transactionsRoutes from "./modules/transactions/transactions.routes";
+import dashboardRoutes from "./modules/transactions/dashboard.routes";
+import paymentsRoutes from "./modules/payments/payments.routes";
+import agentRoutes from "./verticals/market/agent.routes";
+import expensesRoutes from "./modules/expenses/expenses.routes";
+import adminRoutes from "./modules/admin/admin.routes";
 
 const app = express();
 
 // Security Headers & CORS
 app.use(helmet());
 const allowedOrigins: string[] = [
-  'http://localhost:5173', // local frontend dev
-  env.FRONTEND_URL,        // production frontend (Vercel), see env.ts patch below
+    "http://localhost:5173", // local frontend dev
+    env.FRONTEND_URL // production frontend (Vercel), see env.ts patch below
 ].filter((origin): origin is string => origin.length > 0);
 
 app.use(
-  cors({
-    origin: (requestOrigin, callback) => {
-      // Allow requests with no Origin header at all (server-to-server
-      // calls, curl, Postman, Safaricom's own callback POST) — CORS is
-      // a browser-enforced mechanism; a missing Origin header means the
-      // request isn't coming from a browser in the first place, so
-      // there's nothing for CORS to protect against here.
-      if (!requestOrigin || allowedOrigins.includes(requestOrigin)) {
-        callback(null, true);
-        return;
-      }
-      callback(new Error(`Origin ${requestOrigin} is not allowed by CORS`));
-    },
-  })
+    cors({
+        origin: (requestOrigin, callback) => {
+            // Allow requests with no Origin header at all (server-to-server
+            // calls, curl, Postman, Safaricom's own callback POST) — CORS is
+            // a browser-enforced mechanism; a missing Origin header means the
+            // request isn't coming from a browser in the first place, so
+            // there's nothing for CORS to protect against here.
+            if (!requestOrigin || allowedOrigins.includes(requestOrigin)) {
+                callback(null, true);
+                return;
+            }
+            callback(
+                new Error(`Origin ${requestOrigin} is not allowed by CORS`)
+            );
+        }
+    })
 );
 
 // Request Parser
@@ -50,34 +53,35 @@ app.use(express.json());
 
 // Request ID Generation Middleware
 app.use((req: Request, _res: Response, next: NextFunction) => {
-req.requestId = uuidv4();
-next();
+    req.requestId = uuidv4();
+    next();
 });
 
 // Production HTTP logger
 app.use(
-pinoHttp({
-customProps: (req) => ({            // FIX: reqCustomProps → customProps (pino-http v9)
-requestId: (req as Request).requestId,
-}),
-autoLogging: {
-ignore: (req) => req.url === "/api/v1/health",
-},
-})
+    pinoHttp({
+        customProps: req => ({
+            // FIX: reqCustomProps → customProps (pino-http v9)
+            requestId: (req as Request).requestId
+        }),
+        autoLogging: {
+            ignore: req => req.url === "/api/v1/health"
+        }
+    })
 );
 
 // Global Rate Limiting
 const limiter = rateLimit({
-windowMs: 15 * 60 * 1000,
-max: 100,
-standardHeaders: true,
-legacyHeaders: false,
-message: {
-success: false,
-error: {
-message: "Too many requests. Please try again later.",
-},
-},
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+        success: false,
+        error: {
+            message: "Too many requests. Please try again later."
+        }
+    }
 });
 app.use(limiter);
 
@@ -108,28 +112,28 @@ app.use(limiter);
 const apiRouter = express.Router();
 
 // Health check — no auth required
-apiRouter.get('/health', async (_req: Request, res: Response) => {
-  let dbStatus: HealthCheckResponse['db'] = 'connected';
+apiRouter.get("/health", async (_req: Request, res: Response) => {
+    let dbStatus: HealthCheckResponse["db"] = "connected";
 
-  try {
-    // SELECT 1 — cheapest possible round-trip that confirms the pool
-    // can actually acquire a connection and the database responds.
-    // Not a real query against any table — just a liveness probe.
-    await pool.query('SELECT 1');
-  } catch {
-    dbStatus = 'error';
-  }
+    try {
+        // SELECT 1 — cheapest possible round-trip that confirms the pool
+        // can actually acquire a connection and the database responds.
+        // Not a real query against any table — just a liveness probe.
+        await pool.query("SELECT 1");
+    } catch {
+        dbStatus = "error";
+    }
 
-  const response: HealthCheckResponse = {
-    status: dbStatus === 'connected' ? 'ok' : 'error',
-    db: dbStatus,
-    timestamp: new Date().toISOString(),
-  };
+    const response: HealthCheckResponse = {
+        status: dbStatus === "connected" ? "ok" : "error",
+        db: dbStatus,
+        timestamp: new Date().toISOString()
+    };
 
-  // 200 when healthy, 503 when the DB check fails — Render's health
-  // check (and most uptime monitors) treat a non-2xx response as
-  // "unhealthy," which is the actual signal you want on a DB outage.
-  res.status(dbStatus === 'connected' ? 200 : 503).json(response);
+    // 200 when healthy, 503 when the DB check fails — Render's health
+    // check (and most uptime monitors) treat a non-2xx response as
+    // "unhealthy," which is the actual signal you want on a DB outage.
+    res.status(dbStatus === "connected" ? 200 : 503).json(response);
 });
 
 // FIX 2: AUTH ROUTES MOVED TO AFTER apiRouter CREATION, BEFORE MOUNT.
@@ -139,12 +143,12 @@ apiRouter.use("/auth", authRoutes);
 
 // ADD: customers routes — protected by verifyToken inside customers.routes.ts
 apiRouter.use("/customers", customersRoutes);
-apiRouter.use('/transactions', transactionsRoutes);
-apiRouter.use('/dashboard', dashboardRoutes);
-apiRouter.use('/payments', paymentsRoutes);
-apiRouter.use('/agent', agentRoutes);
-apiRouter.use('/expenses', expensesRoutes);
-apiRouter.use('/admin', adminRoutes);
+apiRouter.use("/transactions", transactionsRoutes);
+apiRouter.use("/dashboard", dashboardRoutes);
+apiRouter.use("/payments", paymentsRoutes);
+apiRouter.use("/agent", agentRoutes);
+apiRouter.use("/expenses", expensesRoutes);
+apiRouter.use("/admin", adminRoutes);
 // FIX 1 (continued): Single mount — this line appears exactly once, after
 // all sub-routes are attached to apiRouter above.
 app.use("/api/v1", apiRouter);
@@ -153,12 +157,12 @@ app.use("/api/v1", apiRouter);
 // 404 handler — must come after all routes, before errorHandler
 // ---------------------------------------------------------------------------
 app.use((req: Request, _res: Response, next: NextFunction) => {
-next(
-new AppError(
-`Endpoint not found: ${req.method} ${req.originalUrl}`,
-404
-)
-);
+    next(
+        new AppError(
+            `Endpoint not found: ${req.method} ${req.originalUrl}`,
+            404
+        )
+    );
 });
 
 // Global Error Handler — must be last
