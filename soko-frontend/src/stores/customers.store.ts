@@ -91,7 +91,7 @@ this.isLoading = false;
 async archiveCustomer(id: string): Promise < void > {
 await customersApi.archiveCustomer(id);
 this.customers = this.customers.filter((c) => c.id !== id);
-}],
+},
 
 async deleteCustomer(id: string): Promise < void > {
 await customersApi.deleteCustomer(id);
