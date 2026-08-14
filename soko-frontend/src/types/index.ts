@@ -10,33 +10,41 @@
 // ---------------------------------------------------------------------------
 
 export interface Customer {
-  id: string;
-  name: string;
-  phone: string | null;
-  current_balance: string;
+    id: string;
+    name: string;
+    phone: string | null;
+    current_balance: string;
 }
 
 export interface Transaction {
-  id: string;
-  type: 'sale' | 'payment' | 'adjustment';
-  amount: string;
-  description: string | null;
-  balance_after: string;
-  created_at: string;
+    id: string;
+    type: "sale" | "payment" | "adjustment";
+    amount: string;
+    description: string | null;
+    balance_after: string;
+    created_at: string;
 }
 
 export interface DashboardSummary {
-  total_outstanding: string;
-  total_collected_today: string;
-  total_sales_today: string;
-  customers_with_debt: number;
-  top_debtors: Array<{ id: string; name: string; balance: string }>;
+    total_outstanding: string;
+    total_collected_today: string;
+    total_sales_today: string;
+    customers_with_debt: number;
+    top_debtors: Array<{ id: string; name: string; balance: string }>;
+}
+
+
+export interface AppErrorPayload {
+    message: string;
+    code?: string;
+    details?: unknown;
 }
 
 export interface ApiResponse<T> {
-  success: boolean;
-  data: T | null;
-  error: string | null;
+    success: boolean;
+    data?: T;
+    error?: AppErrorPayload;
+    meta?: PaginationMeta;
 }
 
 // ---------------------------------------------------------------------------
@@ -52,57 +60,57 @@ export interface ApiResponse<T> {
  * address/notes that only the detail view needs).
  */
 export interface CustomerDetail extends Customer {
-  email: string | null;
-  address: string | null;
-  notes: string | null;
-  is_archived: boolean;
-  created_at: string;
+    email: string | null;
+    address: string | null;
+    notes: string | null;
+    is_archived: boolean;
+    created_at: string;
 }
 
 export interface AuthUser {
-  id: string;
-  email: string;
-  name: string;
-  avatar_url: string | null;
+    id: string;
+    email: string;
+    name: string;
+    avatar_url: string | null;
 }
 
 export interface AuthOrg {
-  id: string;
-  name: string;
-  slug: string;
-  business_type: string;
-  plan: string;
+    id: string;
+    name: string;
+    slug: string;
+    business_type: string;
+    plan: string;
 }
 
 export interface TokenPair {
-  accessToken: string;
-  refreshToken: string;
+    accessToken: string;
+    refreshToken: string;
 }
 
 export interface AuthResult {
-  user: AuthUser;
-  org: AuthOrg;
-  tokens: TokenPair;
+    user: AuthUser;
+    org: AuthOrg;
+    tokens: TokenPair;
 }
 
 export interface RegisterPayload {
-  name: string;
-  email: string;
-  password: string;
-  orgName: string;
-  businessType: 'core' | 'shop' | 'salon' | 'stays' | 'market';
+    name: string;
+    email: string;
+    password: string;
+    orgName: string;
+    businessType: "core" | "shop" | "salon" | "stays" | "market";
 }
 
 export interface LoginPayload {
-  email: string;
-  password: string;
+    email: string;
+    password: string;
 }
 
 export interface PaginationMeta {
-  page: number;
-  limit: number;
-  totalItems: number;
-  totalPages: number;
+    page: number;
+    limit: number;
+    totalItems: number;
+    totalPages: number;
 }
 
 /**
@@ -113,27 +121,27 @@ export interface PaginationMeta {
  * ApiResponse<T> directly would silently drop pagination data.
  */
 export interface PaginatedApiResponse<T> extends ApiResponse<T> {
-  meta?: PaginationMeta;
+    meta?: PaginationMeta;
 }
 
 export interface CustomerLedgerResult {
-  customer: { id: string; name: string; phone: string | null };
-  current_balance: string;
-  transactions: Transaction[];
-  total: number;
+    customer: { id: string; name: string; phone: string | null };
+    current_balance: string;
+    transactions: Transaction[];
+    total: number;
 }
 
 export interface RecordTransactionPayload {
-  customerId: string;
-  type: 'sale' | 'payment' | 'adjustment';
-  amount: number;
-  description?: string;
+    customerId: string;
+    type: "sale" | "payment" | "adjustment";
+    amount: number;
+    description?: string;
 }
 
 export interface CreateCustomerPayload {
-  name: string;
-  phone?: string;
-  email?: string;
-  address?: string;
-  notes?: string;
+    name: string;
+    phone?: string;
+    email?: string;
+    address?: string;
+    notes?: string;
 }

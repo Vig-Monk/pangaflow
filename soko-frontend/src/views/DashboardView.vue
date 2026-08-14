@@ -1,202 +1,346 @@
 <script setup lang="ts">
-// =============================================================================
-// src/views/DashboardView.vue
-// Financial summary — outstanding balance, today's collections/sales,
-// top debtors. Uses useApi to load getDashboardSummary on mount.
-// =============================================================================
-
-import { onMounted } from 'vue';
+// ==================================================
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { useApi } from '@/composables/useApi';
-import * as transactionsApi from '@/api/transactions.api';
-import { useAuthStore } from '@/stores/auth.store';
+import { useDashboardStore } from '@/stores/dashboard';
+import { useLedgerStore } from '@/stores/ledger';
+import { usePaymentsStore } from '@/stores/payments';
+import { useCustomersStore } from '@/stores/customers';
+import { useStoreSettingsStore } from '@/stores/store';
+import { useProductsStore } from '@/stores/products';
+import { useToast } from '@/composables/useToast';
+import { apiGet } from '@/services/apiClient';
+import StatCard from '@/components/ledger/StatCard.vue';
+import LedgerRow from '@/components/ledger/LedgerRow.vue';
+import EmptyState from '@/components/ui/EmptyState.vue';
+import Modal from '@/components/ui/Modal.vue';
+import Button from '@/components/ui/Button.vue';
+import CurrencyInput from '@/components/ui/CurrencyInput.vue';
+import PhoneInput from '@/components/ui/PhoneInput.vue';
+import { Store, Inbox, AlertTriangle, Tag, Plus, CreditCard, ArrowUpRight } from 'lucide-vue-next';
 
 const router = useRouter();
-const authStore = useAuthStore();
+const dashboardStore = useDashboardStore();
+const ledgerStore = useLedgerStore();
+const paymentsStore = usePaymentsStore();
+const customersStore = useCustomersStore();
+const storeSettingsStore = useStoreSettingsStore();
+const productsStore = useProductsStore();
+const { push: pushToast } = useToast();
 
-const {
-  data: summary,
-  isLoading,
-  error,
-  execute: loadSummary,
-} = useApi(transactionsApi.getDashboardSummary);
+const ordersSummary = ref({ today_count: 0, today_revenue: '0', pending_count: 0 });
+const lowStockCount = ref(0);
 
-onMounted(() => {
-  loadSummary();
+onMounted(async () => {
+  dashboardStore.fetchFull();
+  customersStore.fetchList({ limit: 100 });
+  storeSettingsStore.fetchSettings();
+
+  // Fetch low stock items count & orders summary metrics in parallel
+  try {
+    const [ordersRes, inventoryRes] = await Promise.all([
+      apiGet<any>('/orders/summary'),
+      productsStore.fetchInventory({ low_stock: true, limit: 1 })
+    ]);
+    ordersSummary.value = ordersRes;
+    lowStockCount.value = productsStore.inventoryTotal;
+  } catch {
+    // Non-blocking operational metric fallback
+  }
 });
 
 function formatCurrency(value: string): string {
   const num = parseFloat(value);
-  return `KES ${num.toLocaleString('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  return `KES ${num.toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
 }
 
-function goToCustomer(id: string): void {
-  router.push(`/customers/${id}`);
+function formatTimestamp(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
+
+// Record Sale modal
+const showSaleModal = ref(false);
+const saleCustomerId = ref('');
+const saleAmount = ref(0);
+const saleDescription = ref('');
+const isSavingSale = ref(false);
+
+function openSaleModal(): void {
+  saleCustomerId.value = '';
+  saleAmount.value = 0;
+  saleDescription.value = '';
+  showSaleModal.value = true;
+}
+
+async function submitSale(): Promise<void> {
+  if (!saleCustomerId.value || saleAmount.value <= 0) return;
+  isSavingSale.value = true;
+  try {
+    await ledgerStore.recordSale(saleCustomerId.value, saleAmount.value, saleDescription.value || undefined);
+    pushToast({ message: 'Sale recorded', variant: 'success' });
+    showSaleModal.value = false;
+  } catch (err) {
+    pushToast({ message: err instanceof Error ? err.message : 'Failed to record sale', variant: 'error' });
+  } finally {
+    isSavingSale.value = false;
+  }
+}
+
+// Collect Payment modal
+const showPaymentModal = ref(false);
+const paymentCustomerId = ref('');
+const paymentAmount = ref(0);
+const paymentPhone = ref('');
+const isSubmittingPayment = ref(false);
+
+function openPaymentModal(): void {
+  paymentCustomerId.value = '';
+  paymentAmount.value = 0;
+  paymentPhone.value = '';
+  showPaymentModal.value = true;
+}
+
+async function submitPayment(): Promise<void> {
+  if (!paymentCustomerId.value || paymentAmount.value <= 0 || !paymentPhone.value) return;
+  isSubmittingPayment.value = true;
+  try {
+    const result = await paymentsStore.collectViaMpesa({
+      customerId: paymentCustomerId.value,
+      amount: paymentAmount.value,
+      phone: paymentPhone.value,
+    });
+    pushToast({ message: result.customerMessage, variant: 'info' });
+    showPaymentModal.value = false;
+  } catch (err) {
+    pushToast({ message: err instanceof Error ? err.message : 'Failed to initiate payment', variant: 'error' });
+  } finally {
+    isSubmittingPayment.value = false;
+  }
+}
+
+const summary = computed(() => dashboardStore.summary);
+const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft');
 </script>
 
 <template>
-  <div class="dashboard">
-    <header class="dashboard-header">
-      <div>
-        <p class="org-name text-muted">{{ authStore.orgName }}</p>
-        <h1 class="page-title">Dashboard</h1>
-      </div>
-    </header>
+  <div class="dashboard-page">
+    <div class="dashboard-top-heading">
+      <h1 class="page-title">Dashboard</h1>
+      
+      <!-- Operational Snapshot Quick Status Badges (Prompt 8 / Bug #8) -->
+      <div class="operational-badges-row">
+        <router-link :to="{ name: 'store-settings' }" class="op-badge op-badge--store" :class="storeStatus">
+          <Store :size="14" />
+          <span>Store: <strong>{{ storeStatus.toUpperCase() }}</strong></span>
+        </router-link>
 
-    <div v-if="isLoading && !summary" class="state-message text-muted">
-      Loading dashboard…
+        <router-link :to="{ name: 'merchant-orders' }" class="op-badge">
+          <Inbox :size="14" />
+          <span>Orders Today: <strong>{{ ordersSummary.today_count }}</strong></span>
+        </router-link>
+
+        <router-link :to="{ name: 'inventory' }" class="op-badge" :class="{ 'op-badge--warning': lowStockCount > 0 }">
+          <AlertTriangle :size="14" />
+          <span>Low Stock: <strong>{{ lowStockCount }}</strong></span>
+        </router-link>
+      </div>
     </div>
 
-    <div v-else-if="error" class="state-message text-danger">
-      {{ error }}
-      <button class="btn-secondary retry-btn" @click="loadSummary()">Retry</button>
+    <!-- Financial KPI Stat Cards Row -->
+    <div class="stat-row">
+      <StatCard
+        label="Revenue (this month)"
+        :value="summary ? formatCurrency(summary.this_month.revenue) : ''"
+        :loading="dashboardStore.loading"
+      />
+      <StatCard
+        label="Expenses (this month)"
+        :value="summary ? formatCurrency(summary.this_month.expenses) : ''"
+        :loading="dashboardStore.loading"
+        variant="negative"
+      />
+      <StatCard
+        label="Outstanding Credit"
+        :value="summary ? formatCurrency(summary.this_month.outstanding_balance) : ''"
+        :loading="dashboardStore.loading"
+      />
     </div>
 
-    <template v-else-if="summary">
-      <div class="summary-grid">
-        <div class="card summary-card outstanding">
-          <p class="summary-label text-muted">Total Outstanding</p>
-          <p class="summary-value text-amber">
-            {{ formatCurrency(summary.total_outstanding) }}
-          </p>
-        </div>
+    <section class="activity-section">
+      <h2 class="section-title">Recent Activity</h2>
 
-        <div class="card summary-card">
-          <p class="summary-label text-muted">Collected Today</p>
-          <p class="summary-value text-teal">
-            {{ formatCurrency(summary.total_collected_today) }}
-          </p>
-        </div>
+      <EmptyState
+        v-if="!dashboardStore.loading && summary && summary.recent_transactions.length === 0"
+        title="No activity yet"
+        description="Record your first sale to see it here."
+      />
 
-        <div class="card summary-card">
-          <p class="summary-label text-muted">Sales Today</p>
-          <p class="summary-value">
-            {{ formatCurrency(summary.total_sales_today) }}
-          </p>
-        </div>
-
-        <div class="card summary-card">
-          <p class="summary-label text-muted">Customers With Debt</p>
-          <p class="summary-value">{{ summary.customers_with_debt }}</p>
-        </div>
+      <div v-else class="activity-list">
+        <LedgerRow
+          v-for="tx in summary?.recent_transactions ?? []"
+          :key="tx.id"
+          :customer-name="tx.customer_name ?? tx.customer_id"
+          :amount="formatCurrency(tx.amount)"
+          :type="tx.type"
+          :timestamp="formatTimestamp(tx.created_at)"
+        />
       </div>
+    </section>
 
-      <section class="top-debtors-section">
-        <h2 class="section-title">Top Debtors</h2>
+    <!-- Floating action buttons -->
+    <div class="fab-stack">
+      <Button variant="primary" size="lg" @click="openSaleModal"><Plus :size="18" /> Record Sale</Button>
+      <Button variant="secondary" size="lg" @click="openPaymentModal"><CreditCard :size="18" /> Collect Payment</Button>
+    </div>
 
-        <div v-if="summary.top_debtors.length === 0" class="empty-state text-muted">
-          No outstanding balances. 🎉
-        </div>
+    <!-- Record Sale modal -->
+    <Modal :open="showSaleModal" title="Record Sale" @close="showSaleModal = false">
+      <div class="modal-form">
+        <select v-model="saleCustomerId" class="modal-form__select">
+          <option value="" disabled>Select customer</option>
+          <option v-for="c in customersStore.list" :key="c.id" :value="c.id">{{ c.name }}</option>
+        </select>
+        <CurrencyInput v-model="saleAmount" />
+        <input v-model="saleDescription" type="text" placeholder="Description (optional)" class="modal-form__input" />
+      </div>
+      <template #footer>
+        <Button variant="ghost" @click="showSaleModal = false">Cancel</Button>
+        <Button variant="primary" :loading="isSavingSale" @click="submitSale">Save</Button>
+      </template>
+    </Modal>
 
-        <ul v-else class="debtor-list">
-          <li
-            v-for="debtor in summary.top_debtors"
-            :key="debtor.id"
-            class="debtor-item card touchable"
-            @click="goToCustomer(debtor.id)"
-          >
-            <span class="debtor-name">{{ debtor.name }}</span>
-            <span class="debtor-balance text-amber">{{ formatCurrency(debtor.balance) }}</span>
-          </li>
-        </ul>
-      </section>
-    </template>
+    <!-- Collect Payment modal -->
+    <Modal :open="showPaymentModal" title="Collect Payment via M-Pesa" @close="showPaymentModal = false">
+      <div class="modal-form">
+        <select v-model="paymentCustomerId" class="modal-form__select">
+          <option value="" disabled>Select customer</option>
+          <option v-for="c in customersStore.list" :key="c.id" :value="c.id">{{ c.name }}</option>
+        </select>
+        <CurrencyInput v-model="paymentAmount" />
+        <PhoneInput v-model="paymentPhone" />
+      </div>
+      <template #footer>
+        <Button variant="ghost" @click="showPaymentModal = false">Cancel</Button>
+        <Button variant="primary" :loading="isSubmittingPayment" @click="submitPayment">Send STK Push</Button>
+      </template>
+    </Modal>
   </div>
 </template>
 
 <style scoped>
-.dashboard {
-  padding: 16px;
-  padding-top: 24px;
+.dashboard-page {
+  padding: var(--space-6);
+  padding-bottom: var(--space-16);
+  max-width: 960px;
+  margin: 0 auto;
 }
 
-.dashboard-header {
-  margin-bottom: 20px;
-}
-
-.org-name {
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+.dashboard-top-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
 }
 
 .page-title {
-  font-size: 24px;
-  font-weight: 700;
-  margin-top: 2px;
+  font-size: var(--text-2xl);
 }
 
-.state-message {
-  text-align: center;
-  padding: 40px 16px;
-}
-
-.retry-btn {
-  display: block;
-  margin: 12px auto 0;
-}
-
-.summary-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-bottom: 24px;
-}
-
-.summary-card {
+/* Operational Badges (Prompt 8 / Bug #8) */
+.operational-badges-row {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
 }
 
-.summary-card.outstanding {
-  grid-column: span 2;
+.op-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  text-decoration: none;
+  transition: border-color var(--duration-fast) var(--ease-standard);
 }
 
-.summary-label {
-  font-size: 13px;
+.op-badge:hover {
+  border-color: var(--color-ink);
 }
 
-.summary-value {
-  font-size: 22px;
-  font-weight: 700;
+.op-badge strong {
+  color: var(--color-text);
 }
 
-.summary-card.outstanding .summary-value {
-  font-size: 32px;
+.op-badge--store.published {
+  border-color: var(--color-ledger-green);
+  color: var(--color-ledger-green);
+}
+.op-badge--store.published strong {
+  color: var(--color-ledger-green);
+}
+
+.op-badge--warning {
+  border-color: var(--color-market-clay);
+  color: var(--color-market-clay);
+}
+.op-badge--warning strong {
+  color: var(--color-market-clay);
+}
+
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-8);
+}
+
+@media (max-width: 768px) {
+  .stat-row { grid-template-columns: 1fr; }
 }
 
 .section-title {
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 10px;
+  font-size: var(--text-lg);
+  margin-bottom: var(--space-3);
 }
 
-.empty-state {
-  text-align: center;
-  padding: 24px;
-}
-
-.debtor-list {
-  list-style: none;
+.activity-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
-.debtor-item {
+.fab-stack {
+  position: fixed;
+  bottom: var(--space-6);
+  right: var(--space-6);
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  min-height: var(--touch-min);
+  flex-direction: column;
+  gap: var(--space-3);
+  z-index: 50;
 }
 
-.debtor-name {
-  font-weight: 500;
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
 }
 
-.debtor-balance {
-  font-weight: 600;
+.modal-form__select,
+.modal-form__input {
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  color: var(--color-text);
 }
 </style>

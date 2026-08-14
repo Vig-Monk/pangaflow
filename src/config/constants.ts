@@ -23,11 +23,11 @@ export const BUSINESS_TYPES: readonly BusinessType[] = [
   'market',
 ] as const;
 
+export const ROLES: readonly Role[] = ['owner', 'admin', 'staff'] as const;
+
 // ---------------------------------------------------------------------------
 // Roles — array form of the existing Role union
 // ---------------------------------------------------------------------------
-
-export const ROLES: readonly Role[] = ['owner', 'admin', 'staff'] as const;
 
 // ---------------------------------------------------------------------------
 // Plans — genuinely new. Nothing before this prompt defines pricing.
@@ -42,10 +42,11 @@ export const ROLES: readonly Role[] = ['owner', 'admin', 'staff'] as const;
 // ---------------------------------------------------------------------------
 
 export const PLANS = {
-  free: { customerLimit: 10, label: 'Free', price_kes: 0 },
-  pro: { customerLimit: null, label: 'Pro', price_kes: 500, price_usd: 4 },
-  business: { customerLimit: null, label: 'Business', price_kes: 2499, price_usd: 20 },
+  free:     { customerLimit: 10,   productLimit: 20,   label: 'Free',     price_kes: 0 },
+  pro:      { customerLimit: null, productLimit: null,  label: 'Pro',      price_kes: 500,  price_usd: 4 },
+  business: { customerLimit: null, productLimit: null,  label: 'Business', price_kes: 2499, price_usd: 20 },
 } as const;
+
 
 // PlanName re-exported here for convenience (constants.ts consumers
 // importing plan-related types shouldn't need a second import from
@@ -69,6 +70,6 @@ void _planNamesMatchCheck; // referenced so it isn't flagged as an unused const
 // PLAN_NAMES — iterable array of plan keys, derived from PLANS itself
 // rather than hand-typed separately (Object.keys on a const-asserted
 // object already gives the correct literal union array type).
-// ---------------------------------------------------------------------------
+// -------------------------------------------------------------------------
 
 export const PLAN_NAMES = Object.keys(PLANS) as PlanName[];

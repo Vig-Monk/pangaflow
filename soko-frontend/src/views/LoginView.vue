@@ -5,20 +5,27 @@
 
 import { ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { useAuthStore } from '@/stores/auth.store';
+import { useAuthStore } from '@/stores/auth';
+import { isRequired, isValidEmail } from '@/composables/useFormValidation';
+import Button from '@/components/ui/Button.vue';
 
-const router = useRouter();
 const route = useRoute();
+const router = useRouter();
 const authStore = useAuthStore();
 
-const email = ref<string>('');
-const password = ref<string>('');
-const isSubmitting = ref<boolean>(false);
+const email = ref('');
+const password = ref('');
+const isSubmitting = ref(false);
 const formError = ref<string | null>(null);
 
+function validate(): string | null {
+  return isValidEmail(email.value) ?? isRequired(password.value);
+}
+
 async function handleSubmit(): Promise<void> {
-  if (email.value.trim().length === 0 || password.value.length === 0) {
-    formError.value = 'Please enter both email and password';
+  const validationError = validate();
+  if (validationError) {
+    formError.value = validationError;
     return;
   }
 
@@ -26,10 +33,8 @@ async function handleSubmit(): Promise<void> {
   formError.value = null;
 
   try {
-    await authStore.login({ email: email.value.trim(), password: password.value });
-
-    const redirectPath =
-      typeof route.query.redirect === 'string' ? route.query.redirect : '/';
+    await authStore.login(email.value.trim(), password.value);
+    const redirectPath = typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard';
     await router.push(redirectPath);
   } catch (err) {
     formError.value = err instanceof Error ? err.message : 'Login failed';
@@ -40,85 +45,132 @@ async function handleSubmit(): Promise<void> {
 </script>
 
 <template>
-  <div class="auth-screen">
-    <div class="auth-card card">
+  <div class="auth-page">
+    <div class="auth-card">
       <h1 class="auth-title">Soko</h1>
-      <p class="auth-subtitle text-muted">Log in to your account</p>
+      <p class="auth-subtitle">Log in to your account</p>
 
       <form class="auth-form" @submit.prevent="handleSubmit">
-        <input
-          v-model="email"
-          type="email"
-          inputmode="email"
-          autocomplete="email"
-          placeholder="Email address"
-          class="input-field"
-          :disabled="isSubmitting"
-        />
-        <input
-          v-model="password"
-          type="password"
-          autocomplete="current-password"
-          placeholder="Password"
-          class="input-field"
-          :disabled="isSubmitting"
-        />
+        <div class="field">
+          <label class="field__label" for="email">Email</label>
+          <input
+            id="email"
+            v-model="email"
+            type="email"
+            autocomplete="email"
+            class="field__input"
+            :disabled="isSubmitting"
+          />
+        </div>
 
-        <p v-if="formError" class="form-error text-danger">{{ formError }}</p>
+        <div class="field">
+          <label class="field__label" for="password">Password</label>
+          <input
+            id="password"
+            v-model="password"
+            type="password"
+            autocomplete="current-password"
+            class="field__input"
+            :disabled="isSubmitting"
+          />
+        </div>
 
-        <button type="submit" class="btn-primary" :disabled="isSubmitting">
-          {{ isSubmitting ? 'Logging in…' : 'Log In' }}
-        </button>
+        <p v-if="formError" class="error-banner" role="alert">{{ formError }}</p>
+
+        <Button type="submit" variant="primary" size="lg" :loading="isSubmitting" style="width: 100%">
+          Log In
+        </Button>
       </form>
 
-      <p class="auth-footer text-muted">
+      <p class="auth-footer">
         Don't have an account?
-        <RouterLink to="/register">Register</RouterLink>
+        <RouterLink :to="{ name: 'register' }">Register</RouterLink>
       </p>
     </div>
   </div>
 </template>
 
 <style scoped>
-.auth-screen {
-  min-height: 100%;
+.auth-page {
+  min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  background: var(--color-bg);
+  padding: var(--space-4);
 }
 
 .auth-card {
   width: 100%;
-  max-width: 400px;
+  max-width: 420px;
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-8);
 }
 
 .auth-title {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--color-teal);
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: 500;
+  color: var(--color-ink);
   text-align: center;
 }
 
 .auth-subtitle {
   text-align: center;
-  margin-top: 4px;
-  margin-bottom: 24px;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  margin-top: var(--space-1);
+  margin-bottom: var(--space-6);
 }
 
 .auth-form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-4);
 }
 
-.form-error {
-  font-size: 14px;
+.field__label {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: var(--space-1);
+}
+
+.field__input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  color: var(--color-text);
+  outline: none;
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+.field__input:focus { border-color: var(--color-ink); }
+
+.error-banner {
+  background: color-mix(in srgb, var(--color-market-clay) 10%, transparent);
+  color: var(--color-market-clay);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
 }
 
 .auth-footer {
   text-align: center;
-  margin-top: 20px;
-  font-size: 14px;
+  margin-top: var(--space-6);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.auth-footer a {
+  color: var(--color-ink);
+  font-weight: 600;
 }
 </style>

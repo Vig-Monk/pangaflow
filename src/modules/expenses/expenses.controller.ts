@@ -115,3 +115,18 @@ export async function fullDashboardHandler(
     next(err);
   }
 }
+// ADD this handler alongside the existing ones:
+
+export async function categoriesHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { orgId } = requireAuth(req);
+    const result = await expensesService.categories(orgId);
+    success(res, result);
+  } catch (err) {
+    next(err);
+  }
+}

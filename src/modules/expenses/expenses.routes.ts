@@ -7,6 +7,7 @@
 import { Router } from 'express';
 import { verifyToken } from '../../middleware/auth';
 import {
+	categoriesHandler,
   createHandler,
   listHandler,
   profitLossHandler,
@@ -23,6 +24,7 @@ router.use(verifyToken);
 // This module has no GET /:id route today, but the ordering convention
 // is kept consistent in case one is added later (e.g. GET /expenses/:id
 // for a single-expense detail view).
+router.get('/categories', categoriesHandler);
 router.get('/summary', summaryHandler);
 router.get('/profit-loss', profitLossHandler);
 

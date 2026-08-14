@@ -1,16 +1,22 @@
 <script setup lang="ts">
 // =============================================================================
 // src/views/CustomerDetailView.vue
-// Customer ledger + record-transaction form. This is the core daily-use
-// screen for a trader: check a customer's balance, record a sale or a
-// payment against it.
+// Highest-trust screen in the app — every currency figure and status
+// state here is deliberate, nothing decorative.
 // =============================================================================
 
-import { computed, onMounted, ref } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
-import { useApi } from '@/composables/useApi';
-import * as transactionsApi from '@/api/transactions.api';
-import { RecordTransactionPayload } from '@/types';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { useCustomersStore } from '@/stores/customers';
+import { useLedgerStore } from '@/stores/ledger';
+import { usePaymentsStore } from '@/stores/payments';
+import { useToast } from '@/composables/useToast';
+import Button from '@/components/ui/Button.vue';
+import Modal from '@/components/ui/Modal.vue';
+import CurrencyInput from '@/components/ui/CurrencyInput.vue';
+import PhoneInput from '@/components/ui/PhoneInput.vue';
+import Pagination from '@/components/ui/Pagination.vue';
+import EmptyState from '@/components/ui/EmptyState.vue';
+import LedgerRow from '@/components/ledger/LedgerRow.vue';
 
 interface Props {
   id: string;
@@ -18,359 +24,363 @@ interface Props {
 
 const props = defineProps<Props>();
 
-const route = useRoute();
-const router = useRouter();
-
-const {
-  data: ledger,
-  isLoading: isLoadingLedger,
-  error: ledgerError,
-  execute: loadLedger,
-} = useApi(transactionsApi.getCustomerLedger);
-
-// -----------------------------------------------------------------------
-// Record-transaction form state
-// -----------------------------------------------------------------------
-
-const showRecordForm = ref<boolean>(false);
-const transactionType = ref<RecordTransactionPayload['type']>('sale');
-const amountInput = ref<string>('');
-const descriptionInput = ref<string>('');
-const isSubmittingTx = ref<boolean>(false);
-const txFormError = ref<string | null>(null);
-
-const customerId = computed<string>(() => props.id || (route.params.id as string));
+const customersStore = useCustomersStore();
+const ledgerStore = useLedgerStore();
+const paymentsStore = usePaymentsStore();
+const { push: pushToast } = useToast();
 
 onMounted(() => {
-  loadLedger(customerId.value);
+  customersStore.fetchOne(props.id);
+  ledgerStore.fetchLedger(props.id, { page: 1 });
+});
+
+onUnmounted(() => {
+  stopPolling();
 });
 
 function formatCurrency(value: string): string {
   const num = parseFloat(value);
-  return `KES ${num.toLocaleString('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  return `KES ${num.toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
 }
 
-function formatDate(isoString: string): string {
-  const date = new Date(isoString);
-  return date.toLocaleDateString('en-KE', {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+function formatTimestamp(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
-function transactionLabel(type: string): string {
-  if (type === 'sale') return 'Sale';
-  if (type === 'payment') return 'Payment';
-  return 'Adjustment';
+const customer = computed(() => customersStore.current);
+const balanceSign = computed(() => {
+  const bal = parseFloat(customer.value?.current_balance ?? '0');
+  return bal > 0 ? 'owed' : 'credit';
+});
+
+// ---------------------------------------------------------------------------
+// Record Sale modal — "secondary, not danger" per design.md's explicit
+// instruction, even though a sale increases what's owed.
+// ---------------------------------------------------------------------------
+
+const showSaleModal = ref(false);
+const saleAmount = ref(0);
+const saleDescription = ref('');
+const isSavingSale = ref(false);
+
+function openSaleModal(): void {
+  saleAmount.value = 0;
+  saleDescription.value = '';
+  showSaleModal.value = true;
 }
 
-function openRecordForm(type: RecordTransactionPayload['type']): void {
-  transactionType.value = type;
-  showRecordForm.value = true;
-  txFormError.value = null;
-  amountInput.value = '';
-  descriptionInput.value = '';
-}
-
-function closeRecordForm(): void {
-  showRecordForm.value = false;
-  txFormError.value = null;
-}
-
-async function handleRecordTransaction(): Promise<void> {
-  const amount = parseFloat(amountInput.value);
-
-  if (isNaN(amount) || amount <= 0) {
-    txFormError.value = 'Please enter a valid amount greater than zero';
-    return;
-  }
-
-  isSubmittingTx.value = true;
-  txFormError.value = null;
-
+async function submitSale(): Promise<void> {
+  if (saleAmount.value <= 0) return;
+  isSavingSale.value = true;
   try {
-    await transactionsApi.recordTransaction({
-      customerId: customerId.value,
-      type: transactionType.value,
-      amount,
-      description: descriptionInput.value.trim() || undefined,
-    });
-
-    closeRecordForm();
-    // Reload the ledger so the new transaction and updated balance appear
-    await loadLedger(customerId.value);
+    await ledgerStore.recordSale(props.id, saleAmount.value, saleDescription.value || undefined);
+    pushToast({ message: 'Sale recorded', variant: 'success' });
+    showSaleModal.value = false;
+    customersStore.fetchOne(props.id); // refresh header balance
   } catch (err) {
-    txFormError.value =
-      err instanceof Error ? err.message : 'Failed to record transaction';
+    pushToast({ message: err instanceof Error ? err.message : 'Failed to record sale', variant: 'error' });
   } finally {
-    isSubmittingTx.value = false;
+    isSavingSale.value = false;
   }
 }
 
-function goBack(): void {
-  router.push('/customers');
+// ---------------------------------------------------------------------------
+// Collect Payment modal + M-Pesa polling
+// ---------------------------------------------------------------------------
+
+type PaymentFlowState = 'idle' | 'waiting' | 'failed';
+
+const showPaymentModal = ref(false);
+const paymentAmount = ref(0);
+const paymentPhone = ref('');
+const isSubmittingPayment = ref(false);
+const paymentFlowState = ref<PaymentFlowState>('idle');
+const activeCheckoutRequestId = ref<string | null>(null);
+
+let pollHandle: ReturnType<typeof setInterval> | undefined;
+
+const POLL_INTERVAL_MS = 3000;
+
+function openPaymentModal(): void {
+  paymentAmount.value = 0;
+  // Pre-filled from the customer's phone — Customer.phone is
+  // `string | null`; PhoneInput's modelValue is plain `string`, so a
+  // null phone defaults to an empty field rather than breaking the
+  // component's type contract.
+  paymentPhone.value = customer.value?.phone ?? '';
+  paymentFlowState.value = 'idle';
+  showPaymentModal.value = true;
+}
+
+async function submitPayment(): Promise<void> {
+  if (paymentAmount.value <= 0 || paymentPhone.value.length === 0) return;
+  isSubmittingPayment.value = true;
+  try {
+    const result = await paymentsStore.collectViaMpesa({
+      customerId: props.id,
+      amount: paymentAmount.value,
+      phone: paymentPhone.value,
+    });
+    activeCheckoutRequestId.value = result.checkoutRequestId;
+    paymentFlowState.value = 'waiting';
+    startPolling(result.checkoutRequestId);
+  } catch (err) {
+    pushToast({ message: err instanceof Error ? err.message : 'Failed to initiate payment', variant: 'error' });
+  } finally {
+    isSubmittingPayment.value = false;
+  }
+}
+
+function startPolling(checkoutRequestId: string): void {
+  stopPolling();
+  pollHandle = setInterval(async () => {
+    const status = await paymentsStore.pollStatus(checkoutRequestId);
+
+    // null means "endpoint not implemented yet / status unknown" — per
+    // Phase 2's explicit contract. Keep waiting, do NOT treat as failure.
+    if (status === null || status === 'pending') {
+      return;
+    }
+
+    if (status === 'completed') {
+      stopPolling();
+      paymentFlowState.value = 'idle';
+      showPaymentModal.value = false;
+      pushToast({ message: 'Payment received', variant: 'success' });
+      ledgerStore.fetchLedger(props.id, { page: 1 });
+      customersStore.fetchOne(props.id);
+      return;
+    }
+
+    if (status === 'failed') {
+      stopPolling();
+      paymentFlowState.value = 'failed';
+    }
+  }, POLL_INTERVAL_MS);
+}
+
+function stopPolling(): void {
+  if (pollHandle) {
+    clearInterval(pollHandle);
+    pollHandle = undefined;
+  }
+}
+
+function retryPayment(): void {
+  paymentFlowState.value = 'idle';
+  activeCheckoutRequestId.value = null;
 }
 </script>
 
 <template>
-  <div class="customer-detail">
-    <header class="view-header">
-      <button class="back-btn" @click="goBack">← Back</button>
-    </header>
-
-    <div v-if="isLoadingLedger && !ledger" class="state-message text-muted">
-      Loading customer…
-    </div>
-
-    <div v-else-if="ledgerError" class="state-message text-danger">
-      {{ ledgerError }}
-    </div>
-
-    <template v-else-if="ledger">
-      <div class="card customer-summary">
-        <h1 class="customer-name">{{ ledger.customer.name }}</h1>
-        <p v-if="ledger.customer.phone" class="customer-phone text-muted">
-          {{ ledger.customer.phone }}
-        </p>
+  <div class="detail-page">
+    <template v-if="customer">
+      <header class="detail-header">
+        <div>
+          <h1 class="customer-name">{{ customer.name }}</h1>
+          <p v-if="customer.phone" class="customer-phone">{{ customer.phone }}</p>
+        </div>
 
         <div class="balance-block">
-          <p class="balance-label text-muted">Current Balance</p>
-          <p
-            class="balance-value"
-            :class="parseFloat(ledger.current_balance) > 0 ? 'text-amber' : 'text-teal'"
-          >
-            {{ formatCurrency(ledger.current_balance) }}
+          <p class="balance-label">Current Balance</p>
+          <p class="balance-value tabular-figure" :class="balanceSign === 'owed' ? 'balance-value--owed' : 'balance-value--credit'">
+            {{ formatCurrency(customer.current_balance) }}
           </p>
         </div>
 
-        <div class="action-buttons">
-          <button class="btn-primary" @click="openRecordForm('sale')">Record Sale</button>
-          <button class="btn-secondary" @click="openRecordForm('payment')">
-            Record Payment
-          </button>
+        <div class="header-actions">
+          <!-- secondary, NOT danger, per design.md's explicit instruction -->
+          <Button variant="secondary" size="lg" @click="openSaleModal">Record Sale</Button>
+          <Button variant="primary" size="lg" @click="openPaymentModal">Collect Payment</Button>
         </div>
-      </div>
-
-      <!-- Record transaction inline form -->
-      <div v-if="showRecordForm" class="card record-form">
-        <h2 class="record-form-title">
-          {{ transactionType === 'sale' ? 'Record Sale' : 'Record Payment' }}
-        </h2>
-        <input
-          v-model="amountInput"
-          type="number"
-          inputmode="decimal"
-          placeholder="Amount (KES)"
-          class="input-field"
-          :disabled="isSubmittingTx"
-        />
-        <input
-          v-model="descriptionInput"
-          type="text"
-          placeholder="Description (optional)"
-          class="input-field"
-          :disabled="isSubmittingTx"
-        />
-        <p v-if="txFormError" class="form-error text-danger">{{ txFormError }}</p>
-        <div class="record-form-actions">
-          <button class="btn-secondary" :disabled="isSubmittingTx" @click="closeRecordForm">
-            Cancel
-          </button>
-          <button
-            class="btn-primary"
-            :disabled="isSubmittingTx"
-            @click="handleRecordTransaction"
-          >
-            {{ isSubmittingTx ? 'Saving…' : 'Save' }}
-          </button>
-        </div>
-      </div>
+      </header>
 
       <section class="ledger-section">
         <h2 class="section-title">Transaction History</h2>
 
-        <div v-if="ledger.transactions.length === 0" class="empty-state text-muted">
-          No transactions yet.
+        <EmptyState
+          v-if="!ledgerStore.loadingLedger && ledgerStore.entries.length === 0"
+          title="No transactions yet"
+        />
+
+        <div v-else class="ledger-list">
+          <LedgerRow
+            v-for="tx in ledgerStore.entries"
+            :key="tx.id"
+            :customer-name="customer.name"
+            :amount="formatCurrency(tx.amount)"
+            :type="tx.type"
+            :timestamp="formatTimestamp(tx.created_at)"
+            :balance-after="formatCurrency(tx.balance_after)"
+          />
         </div>
 
-        <ul v-else class="transaction-list">
-          <li
-            v-for="transaction in ledger.transactions"
-            :key="transaction.id"
-            class="transaction-item card"
-          >
-            <div class="transaction-main">
-              <span class="transaction-type" :class="`type-${transaction.type}`">
-                {{ transactionLabel(transaction.type) }}
-              </span>
-              <span
-                class="transaction-amount"
-                :class="transaction.type === 'payment' ? 'text-teal' : 'text-amber'"
-              >
-                {{ transaction.type === 'payment' ? '−' : '+' }}{{ formatCurrency(transaction.amount) }}
-              </span>
-            </div>
-            <p v-if="transaction.description" class="transaction-description text-muted">
-              {{ transaction.description }}
-            </p>
-            <div class="transaction-meta text-muted">
-              <span>{{ formatDate(transaction.created_at) }}</span>
-              <span>Balance: {{ formatCurrency(transaction.balance_after) }}</span>
-            </div>
-          </li>
-        </ul>
+        <Pagination
+          v-if="ledgerStore.entries.length > 0"
+          :page="ledgerStore.page"
+          :total-pages="Math.max(1, Math.ceil(ledgerStore.total / 20))"
+          :on-change="(p) => ledgerStore.fetchLedger(id, { page: p })"
+        />
       </section>
     </template>
+
+    <!-- Record Sale modal -->
+    <Modal :open="showSaleModal" title="Record Sale" @close="showSaleModal = false">
+      <div class="modal-form">
+        <CurrencyInput v-model="saleAmount" />
+        <textarea v-model="saleDescription" placeholder="Description (optional)" class="modal-form__textarea" rows="3" />
+      </div>
+      <template #footer>
+        <Button variant="ghost" @click="showSaleModal = false">Cancel</Button>
+        <Button variant="primary" :loading="isSavingSale" @click="submitSale">Save</Button>
+      </template>
+    </Modal>
+
+    <!-- Collect Payment modal -->
+    <Modal
+      :open="showPaymentModal"
+      title="Collect Payment via M-Pesa"
+      :persistent="paymentFlowState === 'waiting'"
+      @close="showPaymentModal = false"
+    >
+      <div v-if="paymentFlowState === 'idle'" class="modal-form">
+        <CurrencyInput v-model="paymentAmount" />
+        <PhoneInput v-model="paymentPhone" />
+      </div>
+
+      <div v-else-if="paymentFlowState === 'waiting'" class="payment-waiting">
+        <span class="payment-waiting__spinner" aria-hidden="true" />
+        <p class="payment-waiting__text">
+          Waiting for confirmation — ask the customer to enter their M-Pesa PIN.
+        </p>
+      </div>
+
+      <div v-else-if="paymentFlowState === 'failed'" class="payment-failed">
+        <p class="payment-failed__text">Payment failed or was cancelled.</p>
+      </div>
+
+      <template #footer>
+        <template v-if="paymentFlowState === 'idle'">
+          <Button variant="ghost" @click="showPaymentModal = false">Cancel</Button>
+          <Button variant="primary" :loading="isSubmittingPayment" @click="submitPayment">Send STK Push</Button>
+        </template>
+        <template v-else-if="paymentFlowState === 'failed'">
+          <Button variant="ghost" @click="showPaymentModal = false">Close</Button>
+          <Button variant="primary" @click="retryPayment">Try Again</Button>
+        </template>
+      </template>
+    </Modal>
   </div>
 </template>
 
 <style scoped>
-.customer-detail {
-  padding: 16px;
-  padding-top: 16px;
+.detail-page {
+  padding: var(--space-6);
+  max-width: 720px;
+  margin: 0 auto;
 }
 
-.view-header {
-  margin-bottom: 12px;
-}
-
-.back-btn {
-  background: transparent;
-  color: var(--color-teal-light);
-  padding: 0;
-  min-height: var(--touch-min);
-  font-size: 15px;
-}
-
-.state-message {
-  text-align: center;
-  padding: 40px 16px;
-}
-
-.customer-summary {
-  margin-bottom: 16px;
+.detail-header {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  margin-bottom: var(--space-6);
 }
 
 .customer-name {
-  font-size: 22px;
-  font-weight: 700;
+  font-size: var(--text-2xl);
 }
 
 .customer-phone {
-  font-size: 14px;
-  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  margin-top: var(--space-1);
 }
 
 .balance-block {
-  margin: 16px 0;
+  margin: var(--space-5) 0;
 }
 
 .balance-label {
-  font-size: 13px;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
 }
 
 .balance-value {
-  font-size: 32px;
-  font-weight: 700;
+  font-size: var(--text-4xl);
 }
 
-.action-buttons {
+.balance-value--owed { color: var(--color-market-clay); }
+.balance-value--credit { color: var(--color-ledger-green); }
+
+.header-actions {
   display: flex;
-  gap: 8px;
-}
-
-.action-buttons button {
-  flex: 1;
-}
-
-.record-form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.record-form-title {
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.record-form-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-}
-
-.form-error {
-  font-size: 14px;
+  gap: var(--space-3);
 }
 
 .section-title {
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 10px;
+  font-size: var(--text-lg);
+  margin-bottom: var(--space-3);
 }
 
-.empty-state {
-  text-align: center;
-  padding: 24px;
-}
-
-.transaction-list {
-  list-style: none;
+.ledger-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
 }
 
-.transaction-item {
+.modal-form {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-4);
 }
 
-.transaction-main {
+.modal-form__textarea {
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  color: var(--color-text);
+  resize: vertical;
+}
+
+.payment-waiting {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
   align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-8) var(--space-4);
+  text-align: center;
 }
 
-.transaction-type {
-  font-weight: 600;
-  font-size: 14px;
-  padding: 2px 8px;
-  border-radius: 6px;
+.payment-waiting__spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-ink);
+  border-radius: 50%;
+  animation: payment-spin 1s linear infinite;
 }
 
-.transaction-type.type-sale {
-  background: rgba(217, 119, 6, 0.15);
-  color: var(--color-amber);
+@keyframes payment-spin {
+  to { transform: rotate(360deg); }
 }
 
-.transaction-type.type-payment {
-  background: rgba(13, 148, 136, 0.15);
-  color: var(--color-teal);
+@media (prefers-reduced-motion: reduce) {
+  .payment-waiting__spinner { animation: none; }
 }
 
-.transaction-type.type-adjustment {
-  background: rgba(148, 163, 184, 0.15);
-  color: var(--color-muted);
+.payment-waiting__text {
+  color: var(--color-text);
+  line-height: var(--leading-relaxed);
 }
 
-.transaction-amount {
-  font-weight: 700;
-  font-size: 16px;
-}
-
-.transaction-description {
-  font-size: 14px;
-}
-
-.transaction-meta {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
+.payment-failed__text {
+  color: var(--color-market-clay);
+  text-align: center;
+  padding: var(--space-4) 0;
 }
 </style>

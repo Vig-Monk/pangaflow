@@ -3,7 +3,6 @@ import { z } from 'zod';
 
 dotenv.config();
 
-
 const envSchema = z.object({
   PORT:                        z.coerce.number().default(3000),
   NODE_ENV:                    z.enum(['development', 'production', 'test']).default('development'),
@@ -16,8 +15,11 @@ const envSchema = z.object({
   DARAJA_BASE_URL:             z.string().url().default('https://sandbox.safaricom.co.ke'),
   DARAJA_SHORTCODE:            z.string().min(1),
   DARAJA_PASSKEY:              z.string().min(1),
-  ADMIN_SECRET: z.string().min(16, 'ADMIN_SECRET must be at least 16 characters'),
-FRONTEND_URL: z.string().url().optional().default('')
+  ADMIN_SECRET:                z.string().min(16, 'ADMIN_SECRET must be at least 16 characters'),
+  FRONTEND_URL:                z.string().url().optional().default('http://localhost:5173'),
+  CLOUDINARY_CLOUD_NAME:       z.string().min(1),
+  CLOUDINARY_API_KEY:          z.string().min(1),
+  CLOUDINARY_API_SECRET:       z.string().min(1)
 });
 
 const parsed = envSchema.safeParse(process.env);
