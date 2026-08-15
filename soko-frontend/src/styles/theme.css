@@ -1,88 +1,175 @@
 /* =============================================================================
    src/styles/theme.css
    SOKO CONSOLE DESIGN SYSTEM
-   Premium commerce palette — Soko red, deep espresso, soft white.
+
+   Brand:
+   - Soko Red      #D91E4E
+   - Deep Espresso #0D0907
+   - Soft White    #FAFAF8
+   - Emerald       #16845B / #35B77D
+
+   Design direction:
+   Premium commerce, strong hierarchy, restrained surfaces,
+   architectural corners and soft elevation.
    ========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&family=Manrope:wght@500;600;700&display=swap');
+
+
+/* =============================================================================
+   LIGHT THEME
+   ========================================================================== */
 
 :root {
-  /* ---------- Brand palette ---------- */
 
-  /* Soko signature red — primary actions and brand moments */
+  /* --------------------------------------------------------------------------
+     BRAND
+     -------------------------------------------------------------------------- */
+
+  /* Soko signature red */
   --color-ink: #D91E4E;
   --color-ink-hover: #B91843;
 
-  /* Deep espresso — neutral strong actions and dark surfaces */
+  /* Deep neutral */
   --color-dark: #0D0907;
   --color-dark-hover: #211915;
 
   /*
-   * Legacy alias.
-   * Existing components using --color-gold now inherit Soko red.
-   * No gold remains in the visual system.
+   * Legacy compatibility.
+   * Existing components using --color-gold automatically receive
+   * the current Soko accent rather than the old gold.
    */
   --color-gold: #D91E4E;
   --color-gold-hover: #B91843;
 
-  /* ---------- Functional colors ---------- */
 
-  --color-ledger-green: #3F7658;
-  --color-market-clay: #A95543;
-  --color-info: #5E7187;
+  /* --------------------------------------------------------------------------
+     SEMANTIC COLORS
+     -------------------------------------------------------------------------- */
 
-  /* ---------- Surfaces ---------- */
+  /*
+   * Strong emerald.
+   *
+   * This replaces the previous teal/green system.
+   * It is intentionally more saturated so it remains visible
+   * without becoming neon.
+   */
+  --color-ledger-green: #16845B;
+  --color-ledger-green-hover: #116C4A;
 
-  /* Soft white — easier on the eyes than pure white */
+  /*
+   * Dashboard positive-state surface.
+   * Derived from the same green family.
+   */
+  --color-ledger-green-soft: #E8F5EF;
+
+  /*
+   * Strong red for negative/destructive states.
+   * Same family as the Soko brand accent.
+   */
+  --color-market-clay: #B5443A;
+  --color-market-clay-hover: #96372F;
+
+  /*
+   * Red-tinted surface.
+   * Replaces the old faded pink.
+   */
+  --color-market-clay-soft: #FCE9EE;
+
+  /* Informational blue — deliberately neutral and restrained */
+  --color-info: #58718A;
+  --color-info-soft: #EDF2F6;
+
+
+  /* --------------------------------------------------------------------------
+     SURFACES
+     -------------------------------------------------------------------------- */
+
   --color-bg: #FAFAF8;
 
-  /* Cards and panels */
   --color-surface: #FFFFFF;
+
   --color-surface-raised: #FFFFFF;
 
   /*
    * Extremely soft border.
-   * Designed to feel like the edge of elevation rather than
-   * a visible line around the component.
+   * Intended to read almost like the edge of a shadow.
    */
   --color-border: #ECEBE8;
 
-  /* ---------- Text ---------- */
+
+  /* --------------------------------------------------------------------------
+     TEXT
+     -------------------------------------------------------------------------- */
 
   --color-text: #0D0907;
+
   --color-text-muted: #77716D;
 
   /*
    * Always white.
-   * Primary colored buttons therefore use white text
-   * consistently in both light and dark themes.
+   * Primary Soko-red buttons therefore have white text
+   * in both themes.
    */
   --color-text-inverse: #FFFFFF;
 
-  /* ---------- Focus / interaction ---------- */
+
+  /* --------------------------------------------------------------------------
+     FOCUS
+     -------------------------------------------------------------------------- */
 
   --color-focus-ring: #D91E4E;
 
-  /* ---------- Typography ---------- */
 
-  --font-display: 'Fraunces', Georgia, serif;
-  --font-body: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  /* =============================================================================
+     TYPOGRAPHY
+     ========================================================================== */
+
+  /*
+   * Inter:
+   * Clean, neutral interface typography.
+   *
+   * Manrope:
+   * Stronger display hierarchy without the playful/editorial feeling
+   * of the previous Fraunces-heavy system.
+   *
+   * IBM Plex Mono:
+   * Prices, quantities, IDs and financial figures.
+   */
+
+  --font-display: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
   --font-mono: 'IBM Plex Mono', 'SF Mono', Consolas, monospace;
 
-  --text-xs: 0.75rem;
-  --text-sm: 0.8125rem;
-  --text-base: 1rem;
-  --text-lg: 1.125rem;
-  --text-xl: 1.25rem;
-  --text-2xl: 1.5rem;
-  --text-3xl: 2rem;
-  --text-4xl: 2.5rem;
+
+  /* --------------------------------------------------------------------------
+     TYPE SCALE
+     -------------------------------------------------------------------------- */
+
+  --text-xs: 0.75rem;       /* 12px */
+  --text-sm: 0.8125rem;     /* 13px */
+  --text-base: 0.9375rem;   /* 15px */
+  --text-lg: 1.0625rem;     /* 17px */
+  --text-xl: 1.25rem;       /* 20px */
+  --text-2xl: 1.5rem;       /* 24px */
+  --text-3xl: 2rem;         /* 32px */
+  --text-4xl: 2.5rem;       /* 40px */
+
+
+  /* --------------------------------------------------------------------------
+     LINE HEIGHT
+     -------------------------------------------------------------------------- */
 
   --leading-tight: 1.2;
   --leading-normal: 1.5;
   --leading-relaxed: 1.7;
 
-  /* ---------- Spacing (4px base grid) ---------- */
+
+  /* =============================================================================
+     SPACING
+     ========================================================================== */
 
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -95,23 +182,38 @@
   --space-12: 3rem;
   --space-16: 4rem;
 
-  /* ---------- Radius ---------- */
+
+  /* =============================================================================
+     RADIUS
+     ========================================================================== */
 
   /*
-   * Boxier, more architectural treatment.
-   * Full is reserved for pills and circular controls.
+   * Boxier, architectural system.
+   * Full remains reserved for pills and circular controls.
    */
+
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-full: 999px;
 
-  /* ---------- Shadows ---------- */
+
+  /* =============================================================================
+     SHADOWS
+     ========================================================================== */
 
   /*
-   * Soft neutral shadows.
-   * Combined with the subtle border, surfaces should feel lifted
-   * rather than outlined.
+   * Neutral, extremely soft shadows.
+   *
+   * The goal is:
+   *
+   * surface
+   *    ↓
+   * subtle edge
+   *    ↓
+   * soft elevation
+   *
+   * rather than heavy outlined cards.
    */
 
   --shadow-sm:
@@ -126,7 +228,10 @@
     0 12px 32px rgba(13, 9, 7, 0.075),
     0 4px 8px rgba(13, 9, 7, 0.035);
 
-  /* ---------- Motion ---------- */
+
+  /* =============================================================================
+     MOTION
+     ========================================================================== */
 
   --duration-fast: 120ms;
   --duration-base: 200ms;
@@ -137,12 +242,14 @@
 
 
 /* =============================================================================
-   DARK MODE
-   Deep espresso rather than blue-black or green-black.
+   DARK THEME
    ========================================================================== */
 
 [data-theme='dark'] {
-  /* ---------- Brand ---------- */
+
+  /* --------------------------------------------------------------------------
+     BRAND
+     -------------------------------------------------------------------------- */
 
   --color-ink: #D91E4E;
   --color-ink-hover: #EF3A67;
@@ -150,54 +257,75 @@
   --color-dark: #0D0907;
   --color-dark-hover: #211915;
 
-  /* Legacy alias — remains Soko red */
+  /* Legacy compatibility */
   --color-gold: #D91E4E;
   --color-gold-hover: #EF3A67;
 
-  /* ---------- Functional colors ---------- */
 
-  --color-ledger-green: #6FA27F;
-  --color-market-clay: #C87563;
-  --color-info: #8FA5BC;
-
-  /* ---------- Surfaces ---------- */
+  /* --------------------------------------------------------------------------
+     SEMANTIC COLORS
+     -------------------------------------------------------------------------- */
 
   /*
-   * Layered warm-charcoal surfaces.
+   * Brighter emerald for dark surfaces.
    *
-   * Background:
-   * #0D0907
-   *
-   * Card:
-   * #171311
-   *
-   * Raised:
-   * #211C19
+   * It remains clearly green without becoming fluorescent.
    */
+  --color-ledger-green: #35B77D;
+  --color-ledger-green-hover: #50CC94;
+
+  --color-ledger-green-soft: #12382A;
+
+  /*
+   * Same Soko red family.
+   */
+  --color-market-clay: #E06A59;
+  --color-market-clay-hover: #ED806F;
+
+  --color-market-clay-soft: #3D171F;
+
+  --color-info: #8FA8BF;
+  --color-info-soft: #1B2730;
+
+
+  /* --------------------------------------------------------------------------
+     SURFACES
+     -------------------------------------------------------------------------- */
+
   --color-bg: #0D0907;
+
   --color-surface: #171311;
+
   --color-surface-raised: #211C19;
 
-  /* Quiet dark border */
+  /*
+   * Quiet dark border.
+   */
   --color-border: #2B2522;
 
-  /* ---------- Text ---------- */
+
+  /* --------------------------------------------------------------------------
+     TEXT
+     -------------------------------------------------------------------------- */
 
   --color-text: #F4F1EE;
+
   --color-text-muted: #A69F9A;
 
-  /*
-   * Always white.
-   * Primary red buttons therefore have identical text treatment
-   * across both themes.
-   */
+  /* Always white for buttons */
   --color-text-inverse: #FFFFFF;
 
-  /* ---------- Focus ---------- */
+
+  /* --------------------------------------------------------------------------
+     FOCUS
+     -------------------------------------------------------------------------- */
 
   --color-focus-ring: #D91E4E;
 
-  /* ---------- Shadows ---------- */
+
+  /* --------------------------------------------------------------------------
+     SHADOWS
+     -------------------------------------------------------------------------- */
 
   --shadow-sm:
     0 1px 2px rgba(0, 0, 0, 0.22);
@@ -213,10 +341,11 @@
 
 
 /* =============================================================================
-   RESPECT SYSTEM COLOR PREFERENCE
+   SYSTEM DARK MODE
    ========================================================================== */
 
 @media (prefers-color-scheme: dark) {
+
   :root:not([data-theme='light']) {
     color-scheme: dark;
   }
@@ -237,8 +366,10 @@ html {
 
 body {
   margin: 0;
+
   background: var(--color-bg);
   color: var(--color-text);
+
   font-family: var(--font-body);
   font-size: var(--text-base);
   line-height: var(--leading-normal);
@@ -251,12 +382,42 @@ body {
     color var(--duration-base) var(--ease-standard);
 }
 
+
+/* =============================================================================
+   TYPOGRAPHIC HIERARCHY
+   ========================================================================== */
+
+/*
+ * Display typography is now reserved for actual hierarchy.
+ * Normal UI headings remain clean and modern.
+ */
+
 h1,
 h2,
+h3,
+h4,
+h5,
+h6,
 .page-title {
   font-family: var(--font-display);
-  font-weight: 500;
+  color: var(--color-text);
   line-height: var(--leading-tight);
+}
+
+h1,
+.page-title {
+  font-weight: 700;
+}
+
+h2,
+h3 {
+  font-weight: 600;
+}
+
+h4,
+h5,
+h6 {
+  font-weight: 600;
 }
 
 
@@ -287,13 +448,17 @@ h2,
    ========================================================================== */
 
 @media (prefers-reduced-motion: reduce) {
+
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+
     transition-duration: 0.01ms !important;
+
     scroll-behavior: auto !important;
+
     animation-delay: 0s !important;
   }
 }
@@ -319,3 +484,4 @@ h2,
 .stitch--adjust {
   --stitch-color: var(--color-ink);
 }
+``
