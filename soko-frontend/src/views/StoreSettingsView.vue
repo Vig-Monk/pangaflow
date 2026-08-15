@@ -20,6 +20,7 @@ import {
   Globe,
   Key,
   Info,
+  ExternalLink,
 } from 'lucide-vue-next';
 
 const storeSettingsStore = useStoreSettingsStore();
@@ -78,10 +79,11 @@ onMounted(async () => {
 const isNewStore = computed(() => !storeSettingsStore.settings?.id);
 const wasPreviouslyDraft = computed(() => storeSettingsStore.settings?.status !== 'published');
 const isMpesaVerified = computed(() => mpesaStore.credentials?.status === 'verified');
+const isStorePublished = computed(() => form.status === 'published');
 
 const publicStorefrontUrl = computed(() => {
   if (!form.slug) return '#';
-  return `${window.location.origin}/store/${form.slug.trim().toLowerCase()}`;
+  return `/store/${form.slug.trim().toLowerCase()}`;
 });
 
 async function uploadImage(event: Event, targetType: 'logo' | 'cover'): Promise<void> {
@@ -191,8 +193,13 @@ async function handleSave(): Promise<void> {
           </button>
         </div>
 
-        <a v-if="!isNewStore" :href="publicStorefrontUrl" target="_blank" class="view-store-link">
-          <Button variant="secondary">View Live Store ↗</Button>
+        <a 
+          v-if="!isNewStore && isStorePublished" 
+          :href="publicStorefrontUrl" 
+          target="_blank" 
+          class="view-store-link"
+        >
+          <Button variant="secondary">View Live Store <ExternalLink :size="14" /></Button>
         </a>
       </div>
     </header>
@@ -326,7 +333,7 @@ async function handleSave(): Promise<void> {
             <h2>Publishing Status</h2>
           </div>
 
-          <!-- Informational M-Pesa Readiness Card (Non-blocking) -->
+          <!-- Informational M-Pesa Readiness Card -->
           <div v-if="!isMpesaVerified" class="payment-info-card">
             <div class="info-left">
               <Info :size="18" class="text-muted" />
@@ -344,7 +351,7 @@ async function handleSave(): Promise<void> {
             <p>Direct M-Pesa STK Push active. Shoppers can pay instantly to your Till/Paybill.</p>
           </div>
 
-          <!-- Bulletproof Interactive Status Buttons -->
+          <!-- Interactive Status Buttons with explicit active styles -->
           <div class="toggle-row">
             <button
               type="button"
@@ -481,7 +488,7 @@ async function handleSave(): Promise<void> {
 .fade-banner-enter-from, .fade-banner-leave-to { opacity: 0; }
 
 .workspace-grid { display: flex; gap: var(--space-6); align-items: flex-start; }
-.workspace-controls { flex: 1.2; display: flex; flex-direction: column; gap: var(--space-5); }
+.workspace-controls { flex: 1.2; display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
 .workspace-preview-pane {
   flex: 1;
   position: sticky;
@@ -493,6 +500,8 @@ async function handleSave(): Promise<void> {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  min-width: 0;
+  max-width: 100%;
 }
 
 @media (max-width: 1023px) { .mobile-hidden { display: none !important; } }
@@ -506,6 +515,7 @@ async function handleSave(): Promise<void> {
   flex-direction: column;
   gap: var(--space-4);
 }
+
 
 .publishing-card { transition: border-color var(--duration-base) var(--ease-standard); }
 .card-published-active { border-color: var(--color-ledger-green); }
@@ -600,27 +610,61 @@ async function handleSave(): Promise<void> {
 }
 .upload-overlay-btn.disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Interactive Toggle Options */
 .toggle-row { display: flex; flex-direction: column; gap: var(--space-3); }
 @media (min-width: 640px) { .toggle-row { flex-direction: row; } }
-.toggle-choice { flex: 1; cursor: pointer; }
-.toggle-choice input { display: none; }
+
 .choice-box {
-  display: flex; gap: var(--space-3); align-items: flex-start;
-  padding: var(--space-4); background: var(--color-bg); border: 1px solid var(--color-border);
-  border-radius: var(--radius-md); transition: border-color var(--duration-fast) var(--ease-standard);
+  flex: 1;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-4);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: all var(--duration-fast) var(--ease-standard);
 }
-.toggle-choice input:checked + .choice-box {
-  border-color: var(--color-ink); background: color-mix(in srgb, var(--color-ink) 5%, transparent);
+.choice-box:hover {
+  border-color: var(--color-text-muted);
 }
+
+.choice-box--active {
+  border-color: var(--brand-primary);
+  background: color-mix(in srgb, var(--brand-primary) 8%, transparent);
+}
+
 .choice-indicator {
-  width: 16px; height: 16px; border: 2px solid var(--color-border);
-  border-radius: 50%; display: inline-block; flex-shrink: 0; position: relative; margin-top: 2px;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-border);
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+  position: relative;
+  margin-top: 2px;
 }
-.toggle-choice input:checked + .choice-box .choice-indicator { border-color: var(--color-ink); }
-.toggle-choice input:checked + .choice-box .choice-indicator::after {
-  content: ''; position: absolute; width: 8px; height: 8px; background: var(--color-ink);
-  border-radius: 50%; top: 50%; left: 50%; transform: translate(-50%, -50%);
+
+.choice-box--active .choice-indicator {
+  border-color: var(--brand-primary);
 }
+
+.choice-box--active .choice-indicator::after {
+  content: '';
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: var(--brand-primary);
+  border-radius: 50%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
 .choice-title { font-size: var(--text-sm); font-weight: 600; color: var(--color-text); }
 .choice-desc { font-size: var(--text-xs); color: var(--color-text-muted); margin-top: 2px; }
 
@@ -631,18 +675,84 @@ async function handleSave(): Promise<void> {
 .dot-live { background: var(--color-ledger-green); }
 .preview-bar-title { font-size: var(--text-xs); font-weight: 600; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
 
-.preview-device-frame { background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; display: flex; flex-direction: column; }
-.preview-mini-header { background: var(--color-surface); padding: var(--space-3); display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--color-border); }
+.preview-device-frame {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-mini-header {
+  background: var(--color-surface);
+  padding: var(--space-3);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--color-border);
+}
+
 .preview-brand-slot { display: flex; align-items: center; gap: var(--space-2); }
 .preview-mini-logo { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; }
 .preview-mini-name { font-size: var(--text-sm); font-weight: 600; }
 .preview-mini-cart { font-size: 14px; }
 
+/* In-Pane Preview Hero Wrapper Scalability */
 .preview-hero-wrapper {
   overflow: hidden;
   border-bottom: 1px solid var(--color-border);
+  width: 100%;
 }
 
-.preview-mini-catalog-hint { padding: var(--space-4); text-align: center; font-size: var(--text-xs); color: var(--color-text-muted); }
+.preview-hero-wrapper :deep(.hero-banner-wrap) {
+  min-height: 200px;
+}
+
+.preview-hero-wrapper :deep(.hero-branding) {
+  padding: var(--space-5) var(--space-3);
+}
+
+.preview-hero-wrapper :deep(.hero-headline) {
+  font-size: var(--text-xl) !important;
+}
+
+.preview-hero-wrapper :deep(.hero-subheadline) {
+  font-size: var(--text-xs) !important;
+}
+
+.preview-hero-wrapper :deep(.hero-cta-btn) {
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-xs);
+}
+
+.preview-hero-wrapper :deep(.hero-split-container) {
+  flex-direction: column !important;
+  min-height: auto;
+}
+
+.preview-hero-wrapper :deep(.hero-split-content) {
+  padding: var(--space-4);
+}
+
+.preview-hero-wrapper :deep(.hero-split-media) {
+  min-height: 140px;
+}
+
+.preview-hero-wrapper :deep(.hero-minimal-container) {
+  padding: var(--space-6) var(--space-3);
+}
+
+.preview-hero-wrapper :deep(.promo-overlay) {
+  padding: var(--space-4);
+}
+
+.preview-mini-catalog-hint {
+  padding: var(--space-4);
+  text-align: center;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
 .text-teal { color: var(--color-ledger-green); }
 </style>

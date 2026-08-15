@@ -26,7 +26,7 @@ defineProps<Props>();
         <div v-else class="hero-banner hero-banner--default" />
         
         <div class="hero-branding">
-          <h1 class="hero-headline font-display">{{ settings?.hero_headline || settings?.name || 'Welcome to our Shop' }}</h1>
+          <h1 class="hero-headline">{{ settings?.hero_headline || settings?.name || 'Welcome to our Shop' }}</h1>
           <p class="hero-subheadline">{{ settings?.hero_subheadline || settings?.description || 'Explore our exclusive selection of verified items.' }}</p>
           <button v-if="settings?.hero_cta_label" class="hero-cta-btn" type="button">
             {{ settings.hero_cta_label }}
@@ -39,7 +39,7 @@ defineProps<Props>();
     <template v-else-if="settings?.hero_layout === 'split'">
       <div class="hero-split-container">
         <div class="hero-split-content">
-          <h1 class="hero-headline font-display">{{ settings?.hero_headline || settings?.name || 'Welcome to our Shop' }}</h1>
+          <h1 class="hero-headline">{{ settings?.hero_headline || settings?.name || 'Welcome to our Shop' }}</h1>
           <p class="hero-subheadline">{{ settings?.hero_subheadline || settings?.description || 'Explore our collection.' }}</p>
           <button v-if="settings?.hero_cta_label" class="hero-cta-btn" type="button">
             {{ settings.hero_cta_label }}
@@ -55,7 +55,7 @@ defineProps<Props>();
     <!-- 3. MINIMAL LAYOUT -->
     <template v-else-if="settings?.hero_layout === 'minimal'">
       <div class="hero-minimal-container">
-        <h1 class="hero-headline font-display">{{ settings?.hero_headline || settings?.name || 'Welcome to our Shop' }}</h1>
+        <h1 class="hero-headline">{{ settings?.hero_headline || settings?.name || 'Welcome to our Shop' }}</h1>
         <p class="hero-subheadline">{{ settings?.hero_subheadline || settings?.description || 'Explore our collection.' }}</p>
         <button v-if="settings?.hero_cta_label" class="hero-cta-btn hero-cta-btn--dark" type="button">
           {{ settings.hero_cta_label }}
@@ -72,7 +72,7 @@ defineProps<Props>();
         <div class="promo-overlay">
           <div class="promo-content">
             <span class="promo-badge">Featured Shop</span>
-            <h1 class="hero-headline font-display">{{ settings?.hero_headline || settings?.name || 'Welcome to our Shop' }}</h1>
+            <h1 class="hero-headline">{{ settings?.hero_headline || settings?.name || 'Welcome to our Shop' }}</h1>
             <p class="hero-subheadline">{{ settings?.hero_subheadline || settings?.description || 'Explore our collection.' }}</p>
             <button v-if="settings?.hero_cta_label" class="hero-cta-btn" type="button">
               {{ settings.hero_cta_label }}
@@ -127,6 +127,7 @@ defineProps<Props>();
 }
 
 .hero-headline {
+  font-family: var(--font-display);
   font-size: var(--text-3xl);
   color: #FFFFFF;
   line-height: var(--leading-tight);
@@ -141,7 +142,7 @@ defineProps<Props>();
 
 .hero-cta-btn {
   background: var(--color-gold);
-  color: var(--color-text);
+  color: var(--color-text-inverse, #FFFFFF);
   border: none;
   padding: var(--space-3) var(--space-8);
   border-radius: var(--radius-full);
@@ -173,7 +174,10 @@ defineProps<Props>();
   gap: var(--space-3);
 }
 
-.hero-split-content .hero-headline { color: var(--color-text); font-size: var(--text-2xl); }
+.hero-split-content .hero-headline {
+  color: var(--color-text);
+  font-size: var(--text-2xl);
+}
 .hero-split-content .hero-subheadline { color: var(--color-text-muted); }
 
 .hero-split-media {
@@ -240,7 +244,7 @@ defineProps<Props>();
 
 .promo-badge {
   background: var(--color-gold);
-  color: var(--color-text);
+  color: var(--color-text-inverse, #FFFFFF);
   font-size: var(--text-xs);
   font-weight: 700;
   text-transform: uppercase;
