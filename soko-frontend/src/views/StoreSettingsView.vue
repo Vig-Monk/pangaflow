@@ -164,7 +164,7 @@ async function handleSave(): Promise<void> {
     if (isTransitioningToLive) {
       showPublishCelebration.value = true;
     } else {
-      pushToast({ message: 'Store configurations saved', variant: 'success' });
+      pushToast({ message: 'Store configurations saved successfully', variant: 'success' });
     }
   } catch (err) {
     pushToast({ message: err instanceof Error ? err.message : 'Save failed', variant: 'error' });
@@ -326,13 +326,13 @@ async function handleSave(): Promise<void> {
             <h2>Publishing Status</h2>
           </div>
 
-          <!-- Informational M-Pesa Setup Card (Non-blocking) -->
+          <!-- Informational M-Pesa Readiness Card (Non-blocking) -->
           <div v-if="!isMpesaVerified" class="payment-info-card">
             <div class="info-left">
               <Info :size="18" class="text-muted" />
               <div>
                 <p class="info-title">Accepting Cash on Delivery / Manual M-Pesa</p>
-                <p class="info-desc">You can publish right away. Connect your Till or Paybill anytime to enable direct STK push payments.</p>
+                <p class="info-desc">You can publish your store right away. Connect your Till or Paybill anytime to enable direct online STK push payments.</p>
               </div>
             </div>
             <RouterLink :to="{ name: 'mpesa-setup' }">
@@ -344,27 +344,33 @@ async function handleSave(): Promise<void> {
             <p>Direct M-Pesa STK Push active. Shoppers can pay instantly to your Till/Paybill.</p>
           </div>
 
+          <!-- Bulletproof Interactive Status Buttons -->
           <div class="toggle-row">
-            <label class="toggle-choice">
-              <input type="radio" value="draft" v-model="form.status" />
-              <div class="choice-box">
-                <span class="choice-indicator"></span>
-                <div>
-                  <p class="choice-title">Draft Mode</p>
-                  <p class="choice-desc">Storefront is offline and hidden from public shoppers.</p>
-                </div>
+            <button
+              type="button"
+              class="choice-box"
+              :class="{ 'choice-box--active': form.status === 'draft' }"
+              @click="form.status = 'draft'"
+            >
+              <span class="choice-indicator"></span>
+              <div class="choice-text">
+                <p class="choice-title">Draft Mode</p>
+                <p class="choice-desc">Storefront is offline and hidden from public shoppers.</p>
               </div>
-            </label>
-            <label class="toggle-choice">
-              <input type="radio" value="published" v-model="form.status" />
-              <div class="choice-box">
-                <span class="choice-indicator"></span>
-                <div>
-                  <p class="choice-title">Published &amp; Live</p>
-                  <p class="choice-desc">Storefront is live and accepting customer orders.</p>
-                </div>
+            </button>
+
+            <button
+              type="button"
+              class="choice-box"
+              :class="{ 'choice-box--active': form.status === 'published' }"
+              @click="form.status = 'published'"
+            >
+              <span class="choice-indicator"></span>
+              <div class="choice-text">
+                <p class="choice-title">Published &amp; Live</p>
+                <p class="choice-desc">Storefront is live and ready to accept customer orders.</p>
               </div>
-            </label>
+            </button>
           </div>
         </section>
 
@@ -395,7 +401,7 @@ async function handleSave(): Promise<void> {
           </div>
 
           <div class="preview-mini-catalog-hint">
-            <p>Catalog product grid dynamically updates upon publishing changes.</p>
+            <p>Catalog product grid dynamically updates upon saving changes.</p>
           </div>
         </div>
       </div>
@@ -447,7 +453,7 @@ async function handleSave(): Promise<void> {
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
-.tab-btn.active { background: var(--color-ink); color: var(--color-text-inverse); }
+.tab-btn.active { background: var(--brand-primary); color: #FFFFFF; }
 
 .publish-celebration-banner {
   background: color-mix(in srgb, var(--color-ledger-green) 12%, var(--color-surface));
@@ -503,7 +509,6 @@ async function handleSave(): Promise<void> {
 
 .publishing-card { transition: border-color var(--duration-base) var(--ease-standard); }
 .card-published-active { border-color: var(--color-ledger-green); }
-
 .card-heading {
   display: flex;
   align-items: center;
