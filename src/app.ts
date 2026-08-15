@@ -31,28 +31,36 @@ import publicRoutes from "./modules/public/public.routes";
 const app = express();
 
 app.use(helmet());
-const allowedOrigins: string[] = [
-    "http://localhost:5173",
-    env.FRONTEND_URL
-].filter((origin): origin is string => origin.length > 0);
+
 app.use(
     cors({
         origin: (requestOrigin, callback) => {
             if (!requestOrigin) return callback(null, true);
 
-            const isAllowed =
-                requestOrigin === "http://localhost:5173" ||
-                requestOrigin === env.FRONTEND_URL?.replace(/\/$/, "") ||
-                /\.vercel\.app$/.test(new URL(requestOrigin).hostname);
+            let isAllowed = false;
+            try {
+                const url = new URL(requestOrigin);
+                const normalizedFrontend = env.FRONTEND_URL?.replace(/\/$/, "");
+
+                isAllowed =
+                    requestOrigin === "http://localhost:5173" ||
+                    requestOrigin === normalizedFrontend ||
+                    url.hostname.endsWith(".vercel.app");
+            } catch {
+                isAllowed = false;
+            }
 
             if (isAllowed) {
                 return callback(null, true);
             }
-            return callback(new Error(`Origin ${requestOrigin} is not allowed by CORS`));
+            return callback(
+                new Error(`Origin ${requestOrigin} is not allowed by CORS`)
+            );
         },
         credentials: true
     })
 );
+
 app.use(express.json());
 
 app.use((req: Request, _res: Response, next: NextFunction) => {
