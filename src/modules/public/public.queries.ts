@@ -51,10 +51,6 @@ export interface PublicOrderDetailsRow {
   checkout_request_id: string | null;
 }
 
-/**
- * Retrieves a published store record by its custom slug.
- * Returns null if the store is draft or suspended.
- */
 export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow | null> {
   const result = await query<PublicStoreRow>(
     `SELECT id, org_id, slug, name, description, logo_url, cover_image_url,
@@ -68,13 +64,10 @@ export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow
   return result.rows[0] ?? null;
 }
 
-/**
- * Retrieves all published products belonging to a store.
- */
 export async function getProductsByStoreOrgIdPublic(orgId: string): Promise<PublicProductRow[]> {
   const result = await query<PublicProductRow>(
     `SELECT p.id, p.name, p.slug, p.description, p.price::text AS price,
-            c.name AS category_name, i.stock,
+            COALESCE(c.name, 'General') AS category_name, COALESCE(i.stock, 0) AS stock,
             COALESCE(
               (
                 SELECT json_agg(pi.image_url ORDER BY pi.sort_order ASC)
@@ -84,8 +77,8 @@ export async function getProductsByStoreOrgIdPublic(orgId: string): Promise<Publ
               '[]'::json
             ) AS images
      FROM   products p
-     INNER  JOIN categories c ON c.id = p.category_id
-     INNER  JOIN inventory i  ON i.product_id = p.id
+     LEFT JOIN categories c ON c.id = p.category_id
+     LEFT JOIN inventory i  ON i.product_id = p.id
      WHERE  p.org_id     = $1
        AND  p.status     = 'published'
        AND  p.deleted_at IS NULL
@@ -95,16 +88,13 @@ export async function getProductsByStoreOrgIdPublic(orgId: string): Promise<Publ
   return result.rows;
 }
 
-/**
- * Retrieves a single published product record from a store.
- */
 export async function getProductBySlugPublic(
   orgId: string,
   productSlug: string
 ): Promise<PublicProductRow | null> {
   const result = await query<PublicProductRow>(
     `SELECT p.id, p.name, p.slug, p.description, p.price::text AS price,
-            c.name AS category_name, i.stock,
+            COALESCE(c.name, 'General') AS category_name, COALESCE(i.stock, 0) AS stock,
             COALESCE(
               (
                 SELECT json_agg(pi.image_url ORDER BY pi.sort_order ASC)
@@ -114,8 +104,8 @@ export async function getProductBySlugPublic(
               '[]'::json
             ) AS images
      FROM   products p
-     INNER  JOIN categories c ON c.id = p.category_id
-     INNER  JOIN inventory i  ON i.product_id = p.id
+     LEFT JOIN categories c ON c.id = p.category_id
+     LEFT JOIN inventory i  ON i.product_id = p.id
      WHERE  p.org_id     = $1
        AND  p.slug       = $2
        AND  p.status     = 'published'
@@ -125,9 +115,6 @@ export async function getProductBySlugPublic(
   return result.rows[0] ?? null;
 }
 
-/**
- * Retrieves public order confirmation details and joins with M-Pesa receipts if available.
- */
 export async function getPublicOrderDetailsRow(
   orgId: string,
   orderId: string
@@ -148,9 +135,6 @@ export async function getPublicOrderDetailsRow(
   return result.rows[0] ?? null;
 }
 
-/**
- * Retrieves purchased order items for the public receipt.
- */
 export async function getPublicOrderItems(orderId: string): Promise<PublicOrderItemRow[]> {
   const result = await query<PublicOrderItemRow>(
     `SELECT product_name, unit_price::text AS unit_price, quantity, subtotal::text AS subtotal

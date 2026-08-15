@@ -3,7 +3,7 @@
 // soko-frontend/src/views/storefront/StoreHomeView.vue
 // =============================================================================
 
-import { onMounted, ref, computed } from 'vue';
+import { onMounted, ref, computed, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useStoreSettingsStore } from '@/stores/store';
 import { useCartStore } from '@/stores/cart';
@@ -40,10 +40,10 @@ const loadingStore = ref(true);
 const loadingProducts = ref(true);
 const loadError = ref(false);
 
-const storeSlug = computed(() => route.params.storeSlug as string);
+const storeSlug = computed(() => (route.params.storeSlug as string) || '');
 
 const categories = computed(() => {
-  const list = products.value.map(p => p.category.name);
+  const list = products.value.map(p => p.category?.name).filter(Boolean);
   return ['All', ...Array.from(new Set(list))];
 });
 
@@ -51,7 +51,7 @@ const productsByCategory = computed(() => {
   let result = [...products.value];
 
   if (selectedCategory.value && selectedCategory.value !== 'All') {
-    result = result.filter(p => p.category.name === selectedCategory.value);
+    result = result.filter(p => p.category?.name === selectedCategory.value);
   }
 
   if (inStockOnly.value) {
@@ -66,7 +66,7 @@ const productsByCategory = computed(() => {
 
   const map: Record<string, PublicProduct[]> = {};
   for (const prod of result) {
-    const catName = prod.category.name || 'General';
+    const catName = prod.category?.name || 'General';
     if (!map[catName]) {
       map[catName] = [];
     }
@@ -76,6 +76,8 @@ const productsByCategory = computed(() => {
 });
 
 async function loadStoreData(): Promise<void> {
+  if (!storeSlug.value) return;
+
   loadError.value = false;
   loadingStore.value = true;
   loadingProducts.value = true;
@@ -99,6 +101,13 @@ onMounted(() => {
   loadStoreData();
 });
 
+watch(() => route.params.storeSlug, (newSlug) => {
+  if (newSlug) {
+    cartStore.initForStore(newSlug as string);
+    loadStoreData();
+  }
+});
+
 function formatCurrency(value: number): string {
   return `KES ${value.toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
 }
@@ -109,7 +118,7 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
 
   if (prod.availability === 'out_of_stock') return;
 
-  const firstImage = prod.images.length > 0 ? prod.images[0] : null;
+  const firstImage = prod.images && prod.images.length > 0 ? prod.images[0] : null;
 
   cartStore.addItem(
     storeSlug.value,
@@ -195,7 +204,14 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
         </div>
 
         <template v-else>
-          <div v-if="Object.keys(productsByCategory).length === 0" class="empty-catalog card">
+          <div v-if="products.length === 0" class="empty-catalog card">
+            <EmptyState
+              title="Welcome to our new store"
+              description="Check back soon! Products are currently being prepared for catalog publication."
+            />
+          </div>
+
+          <div v-else-if="Object.keys(productsByCategory).length === 0" class="empty-catalog card">
             <EmptyState
               title="No products match your filters"
               description="Try adjusting your category selection or stock filters to view available inventory."
@@ -219,7 +235,7 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
                   class="product-card"
                 >
                   <div class="product-card__media">
-                    <img v-if="prod.images.length > 0" :src="prod.images[0]" :alt="prod.name" class="product-card__img" />
+                    <img v-if="prod.images && prod.images.length > 0" :src="prod.images[0]" :alt="prod.name" class="product-card__img" />
                     <div v-else class="product-card__img-placeholder">
                       <ShoppingBag :size="32" />
                     </div>
@@ -240,7 +256,7 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
                   </div>
 
                   <div class="product-card__info">
-                    <p class="product-category">{{ prod.category.name }}</p>
+                    <p class="product-category">{{ prod.category?.name || 'General' }}</p>
                     <h3 class="product-name">{{ prod.name }}</h3>
                     <p class="product-price tabular-figure">{{ formatCurrency(prod.price) }}</p>
                   </div>

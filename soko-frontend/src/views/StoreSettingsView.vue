@@ -3,10 +3,11 @@
 // soko-frontend/src/views/StoreSettingsView.vue
 // =============================================================================
 
-import { onMounted, ref, computed, reactive } from 'vue';
+import { onMounted, ref, computed, reactive, watch } from 'vue';
 import { useStoreSettingsStore, type StoreSettings } from '@/stores/store';
 import { useProductsStore } from '@/stores/products';
 import { useMpesaCredentialsStore } from '@/stores/mpesaCredentials';
+import { useAuthStore } from '@/stores/auth';
 import { useToast } from '@/composables/useToast';
 import Button from '@/components/ui/Button.vue';
 import StoreHero from '@/components/storefront/StoreHero.vue';
@@ -26,6 +27,7 @@ import {
 const storeSettingsStore = useStoreSettingsStore();
 const productsStore = useProductsStore();
 const mpesaStore = useMpesaCredentialsStore();
+const authStore = useAuthStore();
 const { push: pushToast } = useToast();
 
 const form = reactive<StoreSettings>({
@@ -51,6 +53,15 @@ const logoUploading = ref(false);
 const coverUploading = ref(false);
 const showPublishCelebration = ref(false);
 
+function sanitizeSlug(val: string): string {
+  return val
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
 onMounted(async () => {
   await Promise.all([
     storeSettingsStore.fetchSettings(),
@@ -73,17 +84,27 @@ onMounted(async () => {
     form.hero_headline = s.hero_headline ?? '';
     form.hero_subheadline = s.hero_subheadline ?? '';
     form.hero_cta_label = s.hero_cta_label ?? 'Shop Now';
+  } else {
+    form.name = authStore.org?.name || '';
+    form.slug = sanitizeSlug(authStore.org?.slug || authStore.org?.name || 'my-shop');
+  }
+});
+
+watch(() => form.name, (newName) => {
+  if (!form.slug && newName) {
+    form.slug = sanitizeSlug(newName);
   }
 });
 
 const isNewStore = computed(() => !storeSettingsStore.settings?.id);
 const wasPreviouslyDraft = computed(() => storeSettingsStore.settings?.status !== 'published');
 const isMpesaVerified = computed(() => mpesaStore.credentials?.status === 'verified');
-const isStorePublished = computed(() => form.status === 'published');
+const isStorePublished = computed(() => storeSettingsStore.settings?.status === 'published');
 
 const publicStorefrontUrl = computed(() => {
-  if (!form.slug) return '#';
-  return `/store/${form.slug.trim().toLowerCase()}`;
+  const targetSlug = storeSettingsStore.settings?.slug || form.slug;
+  if (!targetSlug) return '#';
+  return `/store/${sanitizeSlug(targetSlug)}`;
 });
 
 async function uploadImage(event: Event, targetType: 'logo' | 'cover'): Promise<void> {
@@ -137,18 +158,22 @@ async function uploadImage(event: Event, targetType: 'logo' | 'cover'): Promise<
 }
 
 async function handleSave(): Promise<void> {
-  if (!form.name.trim() || !form.slug.trim()) {
-    pushToast({ message: 'Store Name and address Slug are required', variant: 'error' });
+  const cleanSlug = sanitizeSlug(form.slug || form.name);
+  if (!form.name.trim() || !cleanSlug) {
+    pushToast({ message: 'Store Name and a valid address Slug are required', variant: 'error' });
     return;
   }
 
+  form.slug = cleanSlug;
   isSaving.value = true;
+
   try {
-    const isTransitioningToLive = form.status === 'published' && wasPreviouslyDraft.value;
+    const willBePublished = form.status === 'published';
+    const isTransitioningToLive = willBePublished && wasPreviouslyDraft.value;
 
     await storeSettingsStore.saveSettings({
       name: form.name.trim(),
-      slug: form.slug.trim().toLowerCase(),
+      slug: cleanSlug,
       description: form.description?.trim() || null,
       logo_url: form.logo_url || null,
       cover_image_url: form.cover_image_url || null,
@@ -166,7 +191,12 @@ async function handleSave(): Promise<void> {
     if (isTransitioningToLive) {
       showPublishCelebration.value = true;
     } else {
-      pushToast({ message: 'Store configurations saved successfully', variant: 'success' });
+      pushToast({
+        message: willBePublished
+          ? 'Store settings updated & live!'
+          : 'Draft settings saved successfully',
+        variant: 'success'
+      });
     }
   } catch (err) {
     pushToast({ message: err instanceof Error ? err.message : 'Save failed', variant: 'error' });
@@ -265,7 +295,7 @@ async function handleSave(): Promise<void> {
             </div>
             <div class="form-group flex-1">
               <label class="form-label">Store URL Slug * (soko.app/store/...)</label>
-              <input v-model="form.slug" type="text" placeholder="joys-boutique" class="form-input" />
+              <input v-model="form.slug" type="text" placeholder="joys-boutique" class="form-input" @blur="form.slug = sanitizeSlug(form.slug)" />
             </div>
           </div>
 
@@ -333,7 +363,6 @@ async function handleSave(): Promise<void> {
             <h2>Publishing Status</h2>
           </div>
 
-          <!-- Informational M-Pesa Readiness Card -->
           <div v-if="!isMpesaVerified" class="payment-info-card">
             <div class="info-left">
               <Info :size="18" class="text-muted" />
@@ -351,7 +380,6 @@ async function handleSave(): Promise<void> {
             <p>Direct M-Pesa STK Push active. Shoppers can pay instantly to your Till/Paybill.</p>
           </div>
 
-          <!-- Interactive Status Buttons with explicit active styles -->
           <div class="toggle-row">
             <button
               type="button"
@@ -516,7 +544,6 @@ async function handleSave(): Promise<void> {
   gap: var(--space-4);
 }
 
-
 .publishing-card { transition: border-color var(--duration-base) var(--ease-standard); }
 .card-published-active { border-color: var(--color-ledger-green); }
 .card-heading {
@@ -530,7 +557,6 @@ async function handleSave(): Promise<void> {
 }
 .card-icon { color: var(--color-ink); }
 
-/* Informational Non-Blocking Payment Cards */
 .payment-info-card {
   display: flex;
   align-items: center;
@@ -600,7 +626,6 @@ async function handleSave(): Promise<void> {
 .logo-box { width: 110px; }
 .logo-preview, .cover-preview { width: 100%; height: 100%; object-fit: cover; }
 .hidden-input { display: none; }
-
 .upload-overlay-btn {
   position: absolute; bottom: 0; left: 0; right: 0;
   background: color-mix(in srgb, var(--color-ink) 85%, black);
@@ -698,7 +723,6 @@ async function handleSave(): Promise<void> {
 .preview-mini-name { font-size: var(--text-sm); font-weight: 600; }
 .preview-mini-cart { font-size: 14px; }
 
-/* In-Pane Preview Hero Wrapper Scalability */
 .preview-hero-wrapper {
   overflow: hidden;
   border-bottom: 1px solid var(--color-border);

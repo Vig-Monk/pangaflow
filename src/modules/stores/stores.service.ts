@@ -35,15 +35,28 @@ export const SaveStoreSchema = z.object({
         .string()
         .min(1, "Store address url is required")
         .max(100)
-        .regex(
-            /^[a-z0-9-]+$/,
-            "Slug must only contain lowercase alphanumeric characters and hyphens"
+        .transform(s =>
+            s
+                .toLowerCase()
+                .trim()
+                .replace(/[^a-z0-9-]/g, "-")
+                .replace(/-+/g, "-")
+                .replace(/^-|-$/g, "")
         )
-        .refine(slug => !RESERVED_SLUGS.includes(slug.toLowerCase().trim()), {
+        .refine(slug => slug.length > 0, {
+            message: "Store address url is required"
+        })
+        .refine(slug => !RESERVED_SLUGS.includes(slug), {
             message:
                 "This store address URL is a reserved system name. Please choose another."
         }),
-    description: z.string().max(1000).nullable().optional(),
+    description: z
+        .string()
+        .max(1000)
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
     logo_url: z
         .string()
         .url("Logo link must be a valid URL")
@@ -58,7 +71,13 @@ export const SaveStoreSchema = z.object({
         .optional()
         .or(z.literal(""))
         .transform(v => (v === "" ? null : v)),
-    contact_phone: z.string().max(20).nullable().optional(),
+    contact_phone: z
+        .string()
+        .max(20)
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
     contact_email: z
         .string()
         .email("Contact email must be valid")
@@ -66,15 +85,45 @@ export const SaveStoreSchema = z.object({
         .optional()
         .or(z.literal(""))
         .transform(v => (v === "" ? null : v)),
-    location: z.string().max(300).nullable().optional(),
-    delivery_info: z.string().max(1000).nullable().optional(),
+    location: z
+        .string()
+        .max(300)
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
+    delivery_info: z
+        .string()
+        .max(1000)
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
     status: z.enum(["draft", "published", "suspended"]).default("draft"),
     hero_layout: z
         .enum(["editorial", "split", "minimal", "promotional"])
         .default("editorial"),
-    hero_headline: z.string().max(300).nullable().optional(),
-    hero_subheadline: z.string().max(500).nullable().optional(),
-    hero_cta_label: z.string().max(50).nullable().optional()
+    hero_headline: z
+        .string()
+        .max(300)
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
+    hero_subheadline: z
+        .string()
+        .max(500)
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
+    hero_cta_label: z
+        .string()
+        .max(50)
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v))
 });
 
 export async function fetchStoreSettings(orgId: string) {
@@ -101,7 +150,5 @@ export async function saveStoreSettings(orgId: string, rawBody: unknown) {
         );
     }
 
-    // Merchants can publish anytime. Storefront will use Cash on Delivery
-    // until Daraja M-Pesa credentials are optionally connected.
     return storesQueries.upsertStore(orgId, parsed.data);
 }
