@@ -1,233 +1,88 @@
 /* =============================================================================
    src/styles/theme.css
    SOKO CONSOLE DESIGN SYSTEM
-
-   Brand:
-   - Primary Soko Red
-   - Crimson / Rose supporting accent family
-   - Deep Espresso
-   - Soft White
-   - Emerald for positive states
-
-   Typography:
-   - IBM Plex Sans
-   - IBM Plex Mono
-
-   Design direction:
-   Premium commerce, restrained surfaces, strong hierarchy,
-   boxier geometry, soft elevation and controlled color semantics.
+   Premium commerce palette — Soko red, deep espresso, soft white.
    ========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
-
-
-/* =============================================================================
-   LIGHT THEME
-   ========================================================================== */
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
 :root {
+  /* ---------- Brand palette ---------- */
 
-  /* ===========================================================================
-     PRIMARY BRAND
-     ========================================================================== */
-
+  /* Soko signature red — primary actions and brand moments */
   --color-ink: #D91E4E;
   --color-ink-hover: #B91843;
 
+  /* Deep espresso — neutral strong actions and dark surfaces */
   --color-dark: #0D0907;
   --color-dark-hover: #211915;
 
-
-  /* ===========================================================================
-     SOKO ACCENT FAMILY
-     ---------------------------------------------------------------------------
-     Same visual family, different purposes.
-     ========================================================================== */
-
   /*
-   * Primary brand/action.
-   *
-   * Buttons, links, active navigation, primary controls.
-   */
-  --color-accent: #D91E4E;
-  --color-accent-hover: #B91843;
-
-  /*
-   * Strong crimson.
-   *
-   * Destructive actions, serious negative states and
-   * high-priority warnings.
-   */
-  --color-accent-strong: #A9143B;
-  --color-accent-strong-hover: #8F1032;
-
-  /*
-   * Softer rose.
-   *
-   * Secondary emphasis, attention states and dashboard
-   * indicators where the primary red would be too aggressive.
-   */
-  --color-accent-rose: #C94B68;
-  --color-accent-rose-hover: #B63E5A;
-
-  /*
-   * Soft background for red/rose states.
-   */
-  --color-accent-soft: #FCE9EE;
-
-  /*
-   * Extremely subtle brand tint.
-   */
-  --color-accent-faint: #FFF5F7;
-
-
-  /* ===========================================================================
-     LEGACY COMPATIBILITY
-     ---------------------------------------------------------------------------
-     Existing components still using these names continue to work.
-     ========================================================================== */
-
-  /*
-   * Former "clay" now becomes the darker rose/crimson semantic.
-   * It is intentionally NOT identical to the primary accent.
-   */
-  --color-market-clay: #B5445C;
-  --color-market-clay-hover: #963749;
-  --color-market-clay-soft: #F9E7EB;
-
-  /*
-   * Former gold token now points to the primary Soko accent.
+   * Legacy alias.
+   * Existing components using --color-gold now inherit Soko red.
+   * No gold remains in the visual system.
    */
   --color-gold: #D91E4E;
   --color-gold-hover: #B91843;
 
+  /* ---------- Functional colors ---------- */
 
-  /* ===========================================================================
-     POSITIVE / INVENTORY
-     ========================================================================== */
+  --color-ledger-green: #3F7658;
+  --color-market-clay: #A95543;
+  --color-info: #5E7187;
 
-  /*
-   * Strong emerald.
-   *
-   * Success, in-stock states, positive financial movement,
-   * completed operations.
-   */
-  --color-ledger-green: #16845B;
-  --color-ledger-green-hover: #116C4A;
+  /* ---------- Surfaces ---------- */
 
-  /*
-   * Soft green background.
-   */
-  --color-ledger-green-soft: #E8F5EF;
-
-  /*
-   * Slightly stronger green surface for dashboard emphasis.
-   */
-  --color-ledger-green-faint: #F2FAF6;
-
-
-  /* ===========================================================================
-     INFORMATION
-     ========================================================================== */
-
-  --color-info: #58718A;
-  --color-info-soft: #EDF2F6;
-
-
-  /* ===========================================================================
-     SURFACES
-     ========================================================================== */
-
+  /* Soft white — easier on the eyes than pure white */
   --color-bg: #FAFAF8;
 
+  /* Cards and panels */
   --color-surface: #FFFFFF;
-
   --color-surface-raised: #FFFFFF;
 
   /*
-   * Almost invisible.
-   *
-   * The interface should feel lifted through shadow rather than
-   * being covered in visible outlines.
+   * Extremely soft border.
+   * Designed to feel like the edge of elevation rather than
+   * a visible line around the component.
    */
   --color-border: #ECEBE8;
 
-
-  /* ===========================================================================
-     TEXT
-     ========================================================================== */
+  /* ---------- Text ---------- */
 
   --color-text: #0D0907;
-
   --color-text-muted: #77716D;
 
   /*
    * Always white.
-   *
-   * Primary and accent buttons therefore maintain the same
-   * high-contrast treatment in both themes.
+   * Primary colored buttons therefore use white text
+   * consistently in both light and dark themes.
    */
   --color-text-inverse: #FFFFFF;
 
-
-  /* ===========================================================================
-     FOCUS
-     ========================================================================== */
+  /* ---------- Focus / interaction ---------- */
 
   --color-focus-ring: #D91E4E;
 
+  /* ---------- Typography ---------- */
 
-  /* ===========================================================================
-     TYPOGRAPHY
-     ========================================================================== */
-
-  --font-display:
-    'IBM Plex Sans',
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    sans-serif;
-
-  --font-body:
-    'IBM Plex Sans',
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    sans-serif;
-
-  --font-mono:
-    'IBM Plex Mono',
-    'SF Mono',
-    Consolas,
-    monospace;
-
-
-  /* ---------------------------------------------------------------------------
-     TYPE SCALE
-     --------------------------------------------------------------------------- */
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-body: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SF Mono', Consolas, monospace;
 
   --text-xs: 0.75rem;
   --text-sm: 0.8125rem;
-  --text-base: 0.9375rem;
-  --text-lg: 1.0625rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
   --text-xl: 1.25rem;
   --text-2xl: 1.5rem;
   --text-3xl: 2rem;
   --text-4xl: 2.5rem;
 
-
-  /* ---------------------------------------------------------------------------
-     LINE HEIGHT
-     --------------------------------------------------------------------------- */
-
   --leading-tight: 1.2;
-  --leading-normal: 1.55;
+  --leading-normal: 1.5;
   --leading-relaxed: 1.7;
 
-
-  /* ===========================================================================
-     SPACING
-     ========================================================================== */
+  /* ---------- Spacing (4px base grid) ---------- */
 
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -240,20 +95,24 @@
   --space-12: 3rem;
   --space-16: 4rem;
 
+  /* ---------- Radius ---------- */
 
-  /* ===========================================================================
-     RADIUS
-     ========================================================================== */
-
+  /*
+   * Boxier, more architectural treatment.
+   * Full is reserved for pills and circular controls.
+   */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-full: 999px;
 
+  /* ---------- Shadows ---------- */
 
-  /* ===========================================================================
-     SHADOWS
-     ========================================================================== */
+  /*
+   * Soft neutral shadows.
+   * Combined with the subtle border, surfaces should feel lifted
+   * rather than outlined.
+   */
 
   --shadow-sm:
     0 1px 2px rgba(13, 9, 7, 0.035),
@@ -267,10 +126,7 @@
     0 12px 32px rgba(13, 9, 7, 0.075),
     0 4px 8px rgba(13, 9, 7, 0.035);
 
-
-  /* ===========================================================================
-     MOTION
-     ========================================================================== */
+  /* ---------- Motion ---------- */
 
   --duration-fast: 120ms;
   --duration-base: 200ms;
@@ -281,14 +137,12 @@
 
 
 /* =============================================================================
-   DARK THEME
+   DARK MODE
+   Deep espresso rather than blue-black or green-black.
    ========================================================================== */
 
 [data-theme='dark'] {
-
-  /* ===========================================================================
-     PRIMARY BRAND
-     ========================================================================== */
+  /* ---------- Brand ---------- */
 
   --color-ink: #D91E4E;
   --color-ink-hover: #EF3A67;
@@ -296,60 +150,172 @@
   --color-dark: #0D0907;
   --color-dark-hover: #211915;
 
-
-  /* ===========================================================================
-     SOKO ACCENT FAMILY
-     ========================================================================== */
-
-  --color-accent: #D91E4E;
-  --color-accent-hover: #EF3A67;
-
-  /*
-   * Brighter crimson for visibility against dark surfaces.
-   */
-  --color-accent-strong: #F04A72;
-  --color-accent-strong-hover: #FF6387;
-
-  /*
-   * Rose remains softer than the primary accent.
-   */
-  --color-accent-rose: #E06A83;
-  --color-accent-rose-hover: #EC8096;
-
-  /*
-   * Dark tinted surfaces.
-   */
-  --color-accent-soft: #3D1722;
-
-  --color-accent-faint: #241116;
-
-
-  /* ===========================================================================
-     LEGACY COMPATIBILITY
-     ========================================================================== */
-
-  --color-market-clay: #D95A73;
-  --color-market-clay-hover: #E96E85;
-  --color-market-clay-soft: #3D1722;
-
+  /* Legacy alias — remains Soko red */
   --color-gold: #D91E4E;
   --color-gold-hover: #EF3A67;
 
+  /* ---------- Functional colors ---------- */
 
-  /* ===========================================================================
-     POSITIVE / INVENTORY
-     ========================================================================== */
+  --color-ledger-green: #6FA27F;
+  --color-market-clay: #C87563;
+  --color-info: #8FA5BC;
+
+  /* ---------- Surfaces ---------- */
 
   /*
-   * More luminous emerald for dark surfaces.
+   * Layered warm-charcoal surfaces.
+   *
+   * Background:
+   * #0D0907
+   *
+   * Card:
+   * #171311
+   *
+   * Raised:
+   * #211C19
    */
-  --color-ledger-green: #35B77D;
-  --color-ledger-green-hover: #50CC94;
+  --color-bg: #0D0907;
+  --color-surface: #171311;
+  --color-surface-raised: #211C19;
 
-  --color-ledger-green-soft: #12382A;
+  /* Quiet dark border */
+  --color-border: #2B2522;
 
-  --color-ledger-green-faint: #10271E;
+  /* ---------- Text ---------- */
+
+  --color-text: #F4F1EE;
+  --color-text-muted: #A69F9A;
+
+  /*
+   * Always white.
+   * Primary red buttons therefore have identical text treatment
+   * across both themes.
+   */
+  --color-text-inverse: #FFFFFF;
+
+  /* ---------- Focus ---------- */
+
+  --color-focus-ring: #D91E4E;
+
+  /* ---------- Shadows ---------- */
+
+  --shadow-sm:
+    0 1px 2px rgba(0, 0, 0, 0.22);
+
+  --shadow-md:
+    0 4px 12px rgba(0, 0, 0, 0.30),
+    0 2px 4px rgba(0, 0, 0, 0.16);
+
+  --shadow-lg:
+    0 12px 32px rgba(0, 0, 0, 0.40),
+    0 4px 8px rgba(0, 0, 0, 0.20);
+}
 
 
-  /* ===========================================================================
-    
+/* =============================================================================
+   RESPECT SYSTEM COLOR PREFERENCE
+   ========================================================================== */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+  }
+}
+
+
+/* =============================================================================
+   BASE
+   ========================================================================== */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--color-bg);
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  transition:
+    background var(--duration-base) var(--ease-standard),
+    color var(--duration-base) var(--ease-standard);
+}
+
+h1,
+h2,
+.page-title {
+  font-family: var(--font-display);
+  font-weight: 500;
+  line-height: var(--leading-tight);
+}
+
+
+/* =============================================================================
+   NUMERICAL / MONETARY FIGURES
+   ========================================================================== */
+
+.tabular-figure {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+
+/* =============================================================================
+   ACCESSIBILITY
+   ========================================================================== */
+
+:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+
+/* =============================================================================
+   REDUCED MOTION
+   ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+    animation-delay: 0s !important;
+  }
+}
+
+
+/* =============================================================================
+   SIGNATURE: STITCHED-MARGIN ACCENT BAR
+   ========================================================================== */
+
+.stitch {
+  border-left: 3px solid var(--stitch-color, var(--color-border));
+  padding-left: var(--space-4);
+}
+
+.stitch--in {
+  --stitch-color: var(--color-ledger-green);
+}
+
+.stitch--out {
+  --stitch-color: var(--color-market-clay);
+}
+
+.stitch--adjust {
+  --stitch-color: var(--color-ink);
+}
