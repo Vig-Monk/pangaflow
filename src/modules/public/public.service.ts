@@ -4,9 +4,13 @@
 
 import { z } from 'zod';
 import { pool } from '../../config/db';
+import { env } from '../../config/env';
 import { AppError } from '../../utils/error';
 import * as publicQueries from './public.queries';
 import * as ordersQueries from '../orders/orders.queries';
+import { getCredentialsRowByOrgId, getDecryptedCredentials } from '../mpesa-credentials/mpesa-credentials.queries';
+import * as darajaService from '../../services/daraja.service';
+import { createPendingMpesaTransaction } from '../payments/payments.queries';
 
 export const CheckoutSchema = z.object({
   customerName: z.string().min(1, 'Name is required').max(200),
@@ -36,6 +40,7 @@ export interface PublicStoreDto {
   hero_headline: string | null;
   hero_subheadline: string | null;
   hero_cta_label: string | null;
+  mpesa_verified: boolean;
 }
 
 export interface PublicProductDto {
@@ -54,7 +59,11 @@ export interface PublicOrderConfirmation {
   orderId: string;
   customerName: string;
   total: number;
-  status: string;
+  status: 'pending' | 'confirmed' | 'fulfilled' | 'cancelled';
+  paymentMethod: string;
+  paymentStatus: 'pending' | 'paid' | 'failed';
+  mpesaReceiptNumber: string | null;
+  checkoutRequestId?: string | null;
   items: Array<{
     productName: string;
     unitPrice: number;
@@ -63,7 +72,7 @@ export interface PublicOrderConfirmation {
   }>;
 }
 
-function toPublicStoreDto(row: publicQueries.PublicStoreRow): PublicStoreDto {
+function toPublicStoreDto(row: publicQueries.PublicStoreRow, mpesaVerified: boolean): PublicStoreDto {
   return {
     name: row.name,
     description: row.description,
@@ -77,6 +86,7 @@ function toPublicStoreDto(row: publicQueries.PublicStoreRow): PublicStoreDto {
     hero_headline: row.hero_headline,
     hero_subheadline: row.hero_subheadline,
     hero_cta_label: row.hero_cta_label,
+    mpesa_verified: mpesaVerified,
   };
 }
 
@@ -97,7 +107,11 @@ function toPublicProductDto(row: publicQueries.PublicProductRow): PublicProductD
 export async function getStoreMetadata(storeSlug: string): Promise<PublicStoreDto> {
   const store = await publicQueries.getStoreBySlugPublic(storeSlug);
   if (!store) throw new AppError('Store not found', 404);
-  return toPublicStoreDto(store);
+
+  const creds = await getCredentialsRowByOrgId(store.org_id);
+  const mpesaVerified = creds?.status === 'verified';
+
+  return toPublicStoreDto(store, mpesaVerified);
 }
 
 export async function listStoreProducts(storeSlug: string): Promise<PublicProductDto[]> {
@@ -115,7 +129,10 @@ export async function getProductDetails(storeSlug: string, productSlug: string):
   return toPublicProductDto(product);
 }
 
-export async function placeOrder(storeSlug: string, rawBody: unknown): Promise<{ orderId: string }> {
+export async function placeOrder(
+  storeSlug: string,
+  rawBody: unknown
+): Promise<{ orderId: string; checkoutRequestId?: string }> {
   const parsed = CheckoutSchema.safeParse(rawBody);
   if (!parsed.success) {
     throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid checkout information', 400);
@@ -126,6 +143,15 @@ export async function placeOrder(storeSlug: string, rawBody: unknown): Promise<{
   const store = await publicQueries.getStoreBySlugPublic(storeSlug);
   if (!store) {
     throw new AppError('Store not found', 404);
+  }
+
+  const isDirectMpesa = customerData.paymentMethod === 'mpesa' || customerData.paymentMethod === 'mpesa_direct';
+
+  if (isDirectMpesa) {
+    const creds = await getCredentialsRowByOrgId(store.org_id);
+    if (!creds || creds.status !== 'verified') {
+      throw new AppError("This store hasn't finished setting up payments yet", 503);
+    }
   }
 
   const client = await pool.connect();
@@ -154,7 +180,6 @@ export async function placeOrder(storeSlug: string, rawBody: unknown): Promise<{
       }
 
       const unitPrice = parseFloat(product.price);
-      // Precision rounding for subtotal calculation
       const subtotal = Math.round(unitPrice * cartItem.quantity * 100) / 100;
       calculatedTotal += subtotal;
 
@@ -183,15 +208,44 @@ export async function placeOrder(storeSlug: string, rawBody: unknown): Promise<{
 
     for (const item of itemsToInsert) {
       await ordersQueries.insertOrderItemTransactional(client, orderId, item);
-      
+
       const success = await ordersQueries.decrementStockTransactional(client, item.productId, item.quantity);
       if (!success) {
         throw new AppError(`Stock was checked out concurrently by another shopper for ${item.productName}.`, 409);
       }
     }
 
+    let checkoutRequestId: string | undefined;
+
+    if (isDirectMpesa) {
+      const decryptedCreds = await getDecryptedCredentials(store.org_id);
+      if (decryptedCreds) {
+        const callbackUrl = `${env.API_PUBLIC_URL.replace(/\/$/, '')}/api/v1/payments/mpesa/callback`;
+        const stkResult = await darajaService.stkPush({
+          credentials: decryptedCreds,
+          phone: customerData.customerPhone,
+          amount: calculatedTotal,
+          accountReference: orderId,
+          transactionDesc: `Order ${orderId.slice(0, 8)}`,
+          callbackUrl,
+        });
+
+        checkoutRequestId = stkResult.checkoutRequestId;
+
+        await createPendingMpesaTransaction(client, {
+          orgId: store.org_id,
+          checkoutRequestId: stkResult.checkoutRequestId,
+          merchantRequestId: stkResult.merchantRequestId,
+          phone: customerData.customerPhone,
+          amount: calculatedTotal,
+          accountReference: orderId,
+          transactionDesc: `Order ${orderId.slice(0, 8)}`,
+        });
+      }
+    }
+
     await client.query('COMMIT');
-    return { orderId };
+    return { orderId, checkoutRequestId };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -200,36 +254,32 @@ export async function placeOrder(storeSlug: string, rawBody: unknown): Promise<{
   }
 }
 
-export async function getPublicOrderDetails(storeSlug: string, orderId: string): Promise<PublicOrderConfirmation> {
+export async function getPublicOrderDetails(
+  storeSlug: string,
+  orderId: string
+): Promise<PublicOrderConfirmation> {
   const store = await publicQueries.getStoreBySlugPublic(storeSlug);
   if (!store) {
     throw new AppError('Store not found', 404);
   }
 
-  const orderRes = await pool.query<any>(
-    `SELECT id, customer_name, total::text AS total, status 
-     FROM   orders 
-     WHERE  id = $1 AND org_id = $2`,
-    [orderId, store.org_id]
-  );
-  const order = orderRes.rows[0];
+  const order = await publicQueries.getPublicOrderDetailsRow(store.org_id, orderId);
   if (!order) {
     throw new AppError('Order confirmation details not found', 404);
   }
 
-  const itemsRes = await pool.query<any>(
-    `SELECT product_name, unit_price::text AS unit_price, quantity, subtotal::text AS subtotal
-     FROM   order_items
-     WHERE  order_id = $1`,
-    [orderId]
-  );
+  const items = await publicQueries.getPublicOrderItems(order.id);
 
   return {
     orderId: order.id,
     customerName: order.customer_name,
     total: parseFloat(order.total),
     status: order.status,
-    items: itemsRes.rows.map(row => ({
+    paymentMethod: order.payment_method,
+    paymentStatus: order.payment_status,
+    mpesaReceiptNumber: order.mpesa_receipt_number,
+    checkoutRequestId: order.checkout_request_id,
+    items: items.map((row) => ({
       productName: row.product_name,
       unitPrice: parseFloat(row.unit_price),
       quantity: row.quantity,

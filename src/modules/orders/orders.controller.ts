@@ -1,6 +1,5 @@
 // =============================================================================
 // src/modules/orders/orders.controller.ts
-// Controller — Merchant Orders.
 // =============================================================================
 
 import { Request, Response, NextFunction } from 'express';
@@ -14,7 +13,7 @@ function requireOrgId(req: Request): string {
   }
   return req.orgId;
 }
-// ===================================================
+
 export async function getOrdersSummaryHandler(
   req: Request,
   res: Response,
@@ -28,6 +27,7 @@ export async function getOrdersSummaryHandler(
     next(err);
   }
 }
+
 export async function listOrdersHandler(
   req: Request,
   res: Response,
@@ -76,6 +76,27 @@ export async function updateOrderStatusHandler(
   try {
     const orgId = requireOrgId(req);
     const order = await ordersQueries.updateOrderStatus(orgId, req.params.id, req.body.status);
+    if (!order) {
+      throw new AppError('Order not found', 404);
+    }
+    success(res, order);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateOrderPaymentStatusHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const order = await ordersQueries.updateOrderPaymentStatus(
+      orgId,
+      req.params.id,
+      req.body.payment_status
+    );
     if (!order) {
       throw new AppError('Order not found', 404);
     }

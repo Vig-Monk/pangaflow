@@ -17,6 +17,8 @@ const envSchema = z.object({
   DARAJA_PASSKEY:              z.string().min(1),
   ADMIN_SECRET:                z.string().min(16, 'ADMIN_SECRET must be at least 16 characters'),
   FRONTEND_URL:                z.string().url().optional().default('http://localhost:5173'),
+  API_PUBLIC_URL:              z.string().url().optional().default('http://localhost:3000'),
+  MPESA_CREDENTIALS_KEY:       z.string().min(16, 'MPESA_CREDENTIALS_KEY must be at least 16 characters').default('soko-super-secret-mpesa-encryption-key-32bytes'),
   CLOUDINARY_CLOUD_NAME:       z.string().min(1),
   CLOUDINARY_API_KEY:          z.string().min(1),
   CLOUDINARY_API_SECRET:       z.string().min(1)

@@ -1,5 +1,5 @@
 // =============================================================================
-// src/modules/public/public.queries.ts (STEP 5 FIX)
+// src/modules/public/public.queries.ts
 // =============================================================================
 
 import { query } from '../../config/db';
@@ -31,6 +31,24 @@ export interface PublicProductRow {
   category_name: string;
   stock: number;
   images: string[];
+}
+
+export interface PublicOrderItemRow {
+  product_name: string;
+  unit_price: string;
+  quantity: number;
+  subtotal: string;
+}
+
+export interface PublicOrderDetailsRow {
+  id: string;
+  customer_name: string;
+  total: string;
+  status: 'pending' | 'confirmed' | 'fulfilled' | 'cancelled';
+  payment_method: string;
+  payment_status: 'pending' | 'paid' | 'failed';
+  mpesa_receipt_number: string | null;
+  checkout_request_id: string | null;
 }
 
 /**
@@ -105,4 +123,40 @@ export async function getProductBySlugPublic(
     [orgId, productSlug.trim().toLowerCase()]
   );
   return result.rows[0] ?? null;
+}
+
+/**
+ * Retrieves public order confirmation details and joins with M-Pesa receipts if available.
+ */
+export async function getPublicOrderDetailsRow(
+  orgId: string,
+  orderId: string
+): Promise<PublicOrderDetailsRow | null> {
+  const result = await query<PublicOrderDetailsRow>(
+    `SELECT o.id, o.customer_name, o.total::text AS total, o.status,
+            o.payment_method, o.payment_status,
+            mt.mpesa_receipt_number, mt.checkout_request_id
+     FROM   orders o
+     LEFT JOIN mpesa_transactions mt 
+            ON mt.account_reference = o.id::text 
+           AND mt.status = 'completed'
+     WHERE  o.id = $1 AND o.org_id = $2
+     ORDER BY mt.created_at DESC
+     LIMIT 1`,
+    [orderId, orgId]
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
+ * Retrieves purchased order items for the public receipt.
+ */
+export async function getPublicOrderItems(orderId: string): Promise<PublicOrderItemRow[]> {
+  const result = await query<PublicOrderItemRow>(
+    `SELECT product_name, unit_price::text AS unit_price, quantity, subtotal::text AS subtotal
+     FROM   order_items
+     WHERE  order_id = $1`,
+    [orderId]
+  );
+  return result.rows;
 }

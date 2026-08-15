@@ -5,6 +5,7 @@
 import { z } from "zod";
 import { AppError } from "../../utils/error";
 import * as storesQueries from "./stores.queries";
+import { getCredentialsRowByOrgId } from "../mpesa-credentials/mpesa-credentials.queries";
 
 const RESERVED_SLUGS = [
     "admin",
@@ -88,6 +89,18 @@ export async function saveStoreSettings(orgId: string, rawBody: unknown) {
             parsed.error.issues[0]?.message ?? "Invalid request body",
             400
         );
+    }
+
+    // STEP 7 GUARD:
+    // Block publishing if merchant M-Pesa credentials are not verified
+    if (parsed.data.status === "published") {
+        const creds = await getCredentialsRowByOrgId(orgId);
+        if (!creds || creds.status !== "verified") {
+            throw new AppError(
+                "Cannot publish store until M-Pesa credentials have been connected and verified. Please complete M-Pesa Setup in Settings.",
+                400
+            );
+        }
     }
 
     const conflict = await storesQueries.checkSlugConflict(
