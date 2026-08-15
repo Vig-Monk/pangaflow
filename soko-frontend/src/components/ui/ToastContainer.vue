@@ -1,10 +1,8 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/components/ui/ToastContainer.vue (PROMPT 18)
-// Non-blocking lightweight feedback toast container.
+// soko-frontend/src/components/ui/ToastContainer.vue
 // =============================================================================
 
-import { TransitionGroup } from 'vue';
 import { useToast } from '@/composables/useToast';
 import Toast from './Toast.vue';
 
@@ -35,11 +33,11 @@ const { toasts, dismiss } = useToast();
   flex-direction: column;
   gap: var(--space-3);
   z-index: 200;
-  pointer-events: none; /* Allows click-through outside toast bounding box */
+  pointer-events: none;
 }
 
 .toast-container :deep(.toast) {
-  pointer-events: auto; /* Re-enables clicking on the individual toast element */
+  pointer-events: auto;
 }
 
 .toast-list-enter-active,
@@ -63,7 +61,6 @@ const { toasts, dismiss } = useToast();
   }
 }
 
-/* ---------- Mobile: bottom-full-width, not bottom-right ---------- */
 @media (max-width: 640px) {
   .toast-container {
     left: var(--space-4);

@@ -1,14 +1,12 @@
 <script setup lang="ts">
 // =============================================================================
-// src/views/CustomersListView.vue
-// Searchable, paginated customer list. Includes an inline "add customer"
-// form (no separate route/modal library needed for the lite version).
+// soko-frontend/src/views/CustomersListView.vue
 // =============================================================================
 
 import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { useCustomersStore } from '@/stores/customers.store';
-import { CreateCustomerPayload } from '@/types';
+import { useCustomersStore } from '@/stores/customers';
+import type { CreateCustomerPayload } from '@/types';
 
 const router = useRouter();
 const customersStore = useCustomersStore();
@@ -24,13 +22,10 @@ const addFormError = ref<string | null>(null);
 let searchDebounceHandle: ReturnType<typeof setTimeout> | undefined;
 
 onMounted(() => {
-  customersStore.fetchCustomers(1);
+  customersStore.fetchList({ page: 1 });
 });
 
 function onSearchInput(): void {
-  // Debounce: avoid firing a request on every keystroke while typing.
-  // 300ms is short enough to feel instant, long enough to skip
-  // intermediate keystrokes during normal typing speed.
   if (searchDebounceHandle) {
     clearTimeout(searchDebounceHandle);
   }
@@ -75,7 +70,7 @@ async function handleAddCustomer(): Promise<void> {
   };
 
   try {
-    await customersStore.createCustomer(payload);
+    await customersStore.create(payload);
     closeAddForm();
   } catch (err) {
     addFormError.value = err instanceof Error ? err.message : 'Failed to add customer';
@@ -85,8 +80,9 @@ async function handleAddCustomer(): Promise<void> {
 }
 
 function loadMore(): void {
-  if (customersStore.meta.page < customersStore.meta.totalPages) {
-    customersStore.fetchCustomers(customersStore.meta.page + 1);
+  const totalPages = Math.max(1, Math.ceil(customersStore.total / 20));
+  if (customersStore.page < totalPages) {
+    customersStore.fetchList({ page: customersStore.page + 1 });
   }
 }
 </script>
@@ -106,7 +102,6 @@ function loadMore(): void {
       @input="onSearchInput"
     />
 
-    <!-- Add customer inline form -->
     <div v-if="showAddForm" class="card add-form">
       <input
         v-model="newCustomerName"
@@ -134,7 +129,7 @@ function loadMore(): void {
       </div>
     </div>
 
-    <div v-if="customersStore.isLoading && !customersStore.hasCustomers" class="state-message text-muted">
+    <div v-if="customersStore.isLoading && customersStore.list.length === 0" class="state-message text-muted">
       Loading customers…
     </div>
 
@@ -142,13 +137,13 @@ function loadMore(): void {
       {{ customersStore.error }}
     </div>
 
-    <div v-else-if="!customersStore.hasCustomers" class="state-message text-muted">
+    <div v-else-if="customersStore.list.length === 0" class="state-message text-muted">
       No customers yet. Tap "+ Add" to create your first one.
     </div>
 
     <ul v-else class="customer-list">
       <li
-        v-for="customer in customersStore.customers"
+        v-for="customer in customersStore.list"
         :key="customer.id"
         class="customer-item card touchable"
         @click="goToCustomer(customer.id)"
@@ -167,7 +162,7 @@ function loadMore(): void {
     </ul>
 
     <button
-      v-if="customersStore.meta.page < customersStore.meta.totalPages"
+      v-if="customersStore.page < Math.max(1, Math.ceil(customersStore.total / 20))"
       class="btn-secondary load-more-btn"
       :disabled="customersStore.isLoading"
       @click="loadMore"
@@ -182,83 +177,68 @@ function loadMore(): void {
   padding: 16px;
   padding-top: 24px;
 }
-
 .view-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 16px;
 }
-
 .page-title {
   font-size: 24px;
   font-weight: 700;
 }
-
 .add-btn {
   padding: 0 16px;
 }
-
 .search-input {
   margin-bottom: 16px;
 }
-
 .add-form {
   display: flex;
   flex-direction: column;
   gap: 12px;
   margin-bottom: 16px;
 }
-
 .add-form-actions {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
 }
-
 .form-error {
   font-size: 14px;
 }
-
 .state-message {
   text-align: center;
   padding: 40px 16px;
 }
-
 .customer-list {
   list-style: none;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-
 .customer-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
   min-height: var(--touch-min);
 }
-
 .customer-info {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
-
 .customer-name {
   font-weight: 600;
 }
-
 .customer-phone {
   font-size: 13px;
 }
-
 .customer-balance {
   font-weight: 700;
   font-size: 15px;
   white-space: nowrap;
 }
-
 .load-more-btn {
   width: 100%;
   margin-top: 16px;

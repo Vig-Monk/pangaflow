@@ -32,7 +32,7 @@ export interface PaginatedResult<T> {
 
 export async function apiGetPaginated<T>(
   url: string,
-  params?: Record<string, unknown>
+  params?: Record<string, any> | object
 ): Promise<PaginatedResult<T>> {
   try {
     const response = await apiClient.get<ApiResponse<T>>(url, { params });
@@ -182,7 +182,7 @@ function unwrap<T>(envelope: ApiResponse<T>): T {
   return envelope.data;
 }
 
-export async function apiGet<T>(url: string, params?: Record<string, unknown>): Promise<T> {
+export async function apiGet<T>(url: string, params?: Record<string, any> | object): Promise<T> {
   try {
     const response = await apiClient.get<ApiResponse<T>>(url, { params });
     return unwrap(response.data);

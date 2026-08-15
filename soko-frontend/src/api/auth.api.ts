@@ -1,9 +1,8 @@
 // =============================================================================
-// src/api/auth.api.ts
-// Typed wrappers around POST /auth/* endpoints.
+// soko-frontend/src/api/auth.api.ts
 // =============================================================================
 
-import { apiClient } from './index';
+import { apiClient } from '@/services/apiClient';
 import {
   ApiResponse,
   AuthResult,
@@ -19,7 +18,7 @@ export async function register(payload: RegisterPayload): Promise<AuthResult> {
   );
 
   if (!response.data.data) {
-    throw new Error(response.data.error ?? 'Registration failed');
+    throw new Error(response.data.error?.message ?? 'Registration failed');
   }
 
   return response.data.data;
@@ -32,7 +31,7 @@ export async function login(payload: LoginPayload): Promise<AuthResult> {
   );
 
   if (!response.data.data) {
-    throw new Error(response.data.error ?? 'Login failed');
+    throw new Error(response.data.error?.message ?? 'Login failed');
   }
 
   return response.data.data;
@@ -44,7 +43,7 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
   });
 
   if (!response.data.data) {
-    throw new Error(response.data.error ?? 'Token refresh failed');
+    throw new Error(response.data.error?.message ?? 'Token refresh failed');
   }
 
   return response.data.data;

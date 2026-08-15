@@ -59,7 +59,7 @@ export interface CloudinarySignature {
 
 export interface CreateProductInput {
     name: string;
-    category_id: string;
+    category_id?: string | null;
     price: number;
     stock: number;
     sku?: string | null;
@@ -201,28 +201,28 @@ export const useProductsStore = defineStore("products", {
         async publishProduct(id: string): Promise<void> {
             await apiPost(`/products/${id}/publish`);
             this.list = this.list
-                .map(p => (p.id === id ? { ...p, status: "published" } : p))
+                .map((p): Product => (p.id === id ? { ...p, status: "published" } : p))
                 .sort(sortProducts);
         },
 
         async unpublishProduct(id: string): Promise<void> {
             await apiPost(`/products/${id}/unpublish`);
             this.list = this.list
-                .map(p => (p.id === id ? { ...p, status: "draft" } : p))
+                .map((p): Product => (p.id === id ? { ...p, status: "draft" } : p))
                 .sort(sortProducts);
         },
 
         async archiveProduct(id: string): Promise<void> {
             await apiPost(`/products/${id}/archive`);
             this.list = this.list
-                .map(p => (p.id === id ? { ...p, status: "archived" } : p))
+                .map((p): Product => (p.id === id ? { ...p, status: "archived" } : p))
                 .sort(sortProducts);
         },
 
         async unarchiveProduct(id: string): Promise<void> {
             await apiPost(`/products/${id}/unarchive`);
             this.list = this.list
-                .map(p => (p.id === id ? { ...p, status: "draft" } : p))
+                .map((p): Product => (p.id === id ? { ...p, status: "draft" } : p))
                 .sort(sortProducts);
         },
 

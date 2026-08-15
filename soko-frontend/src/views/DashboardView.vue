@@ -1,7 +1,9 @@
 <script setup lang="ts">
-// ==================================================
+// =============================================================================
+// soko-frontend/src/views/DashboardView.vue
+// =============================================================================
+
 import { computed, onMounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
 import { useDashboardStore } from '@/stores/dashboard';
 import { useLedgerStore } from '@/stores/ledger';
 import { usePaymentsStore } from '@/stores/payments';
@@ -17,9 +19,8 @@ import Modal from '@/components/ui/Modal.vue';
 import Button from '@/components/ui/Button.vue';
 import CurrencyInput from '@/components/ui/CurrencyInput.vue';
 import PhoneInput from '@/components/ui/PhoneInput.vue';
-import { Store, Inbox, AlertTriangle, Tag, Plus, CreditCard, ArrowUpRight } from 'lucide-vue-next';
+import { Store, Inbox, AlertTriangle, Plus, CreditCard } from 'lucide-vue-next';
 
-const router = useRouter();
 const dashboardStore = useDashboardStore();
 const ledgerStore = useLedgerStore();
 const paymentsStore = usePaymentsStore();
@@ -36,9 +37,8 @@ onMounted(async () => {
   customersStore.fetchList({ limit: 100 });
   storeSettingsStore.fetchSettings();
 
-  // Fetch low stock items count & orders summary metrics in parallel
   try {
-    const [ordersRes, inventoryRes] = await Promise.all([
+    const [ordersRes] = await Promise.all([
       apiGet<any>('/orders/summary'),
       productsStore.fetchInventory({ low_stock: true, limit: 1 })
     ]);
@@ -127,7 +127,6 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
     <div class="dashboard-top-heading">
       <h1 class="page-title">Dashboard</h1>
       
-      <!-- Operational Snapshot Quick Status Badges (Prompt 8 / Bug #8) -->
       <div class="operational-badges-row">
         <router-link :to="{ name: 'store-settings' }" class="op-badge op-badge--store" :class="storeStatus">
           <Store :size="14" />
@@ -248,7 +247,6 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
   font-size: var(--text-2xl);
 }
 
-/* Operational Badges (Prompt 8 / Bug #8) */
 .operational-badges-row {
   display: flex;
   align-items: center;

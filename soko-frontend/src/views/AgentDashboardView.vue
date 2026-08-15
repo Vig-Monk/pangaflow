@@ -1,17 +1,10 @@
 <script setup lang="ts">
 // =============================================================================
-// src/views/AgentDashboardView.vue
-// Standalone Wakulima agent errand page — no nav chrome, mobile-only.
-// Today's orders, quick client add, quick order add, earnings summary.
+// soko-frontend/src/views/AgentDashboardView.vue
 // =============================================================================
 
 import { onMounted, ref } from 'vue';
-import { apiClient } from '@/api';
-
-// ---------------------------------------------------------------------------
-// Types — local to this page, matching the backend's AgentClient/
-// AgentOrder/AgentDashboard interfaces field-for-field.
-// ---------------------------------------------------------------------------
+import { apiClient } from '@/services/apiClient';
 
 interface AgentClient {
   id: string;
@@ -57,10 +50,6 @@ interface ApiEnvelope<T> {
   error: string | null;
 }
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
-
 const clients = ref<AgentClient[]>([]);
 const orders = ref<AgentOrder[]>([]);
 const summary = ref<AgentDashboard | null>(null);
@@ -83,10 +72,6 @@ const isSavingOrder = ref<boolean>(false);
 const orderFormError = ref<string | null>(null);
 
 const statusUpdating = ref<Set<string>>(new Set());
-
-// ---------------------------------------------------------------------------
-// Load
-// ---------------------------------------------------------------------------
 
 async function loadAll(): Promise<void> {
   isLoading.value = true;
@@ -112,10 +97,6 @@ async function loadAll(): Promise<void> {
 onMounted(() => {
   loadAll();
 });
-
-// ---------------------------------------------------------------------------
-// Add client
-// ---------------------------------------------------------------------------
 
 async function handleAddClient(): Promise<void> {
   if (
@@ -150,13 +131,7 @@ async function handleAddClient(): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Add order
-// ---------------------------------------------------------------------------
-
 function parseItemsText(text: string): string[] {
-  // One item per line — simplest possible entry format for a market
-  // agent typing on a phone keyboard between client calls.
   return text
     .split('\n')
     .map((line) => line.trim())
@@ -209,10 +184,6 @@ async function handleAddOrder(): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Status progression
-// ---------------------------------------------------------------------------
-
 const STATUS_FLOW: AgentOrderStatus[] = [
   'pending',
   'confirmed',
@@ -251,8 +222,6 @@ async function advanceStatus(order: AgentOrder): Promise<void> {
     await apiClient.patch(`/agent/orders/${order.id}/status`, { status: next });
     await loadAll();
   } catch {
-    // Best-effort refresh even on failure — loadAll() will show whatever
-    // the server's actual current state is rather than leaving stale data.
     await loadAll();
   } finally {
     statusUpdating.value.delete(order.id);
@@ -284,7 +253,6 @@ function formatCurrency(value: string): string {
     </div>
 
     <template v-else>
-      <!-- Earnings summary -->
       <div v-if="summary" class="summary-grid">
         <div class="summary-card">
           <p class="summary-label">Today</p>
@@ -304,13 +272,11 @@ function formatCurrency(value: string): string {
         </div>
       </div>
 
-      <!-- Action buttons -->
       <div class="action-row">
         <button class="btn-primary" @click="showAddOrder = true">+ New Order</button>
         <button class="btn-secondary" @click="showAddClient = true">+ New Client</button>
       </div>
 
-      <!-- Add client form -->
       <div v-if="showAddClient" class="form-card">
         <h2 class="form-title">New Client</h2>
         <input v-model="newClientName" type="text" placeholder="Client name" class="input-field" :disabled="isSavingClient" />
@@ -325,7 +291,6 @@ function formatCurrency(value: string): string {
         </div>
       </div>
 
-      <!-- Add order form -->
       <div v-if="showAddOrder" class="form-card">
         <h2 class="form-title">New Order</h2>
         <select v-model="newOrderClientId" class="input-field" :disabled="isSavingOrder">
@@ -350,12 +315,9 @@ function formatCurrency(value: string): string {
         </div>
       </div>
 
-      <!-- Today's orders -->
       <section class="orders-section">
         <h2 class="section-title">Today's Orders</h2>
-
         <div v-if="orders.length === 0" class="empty-state">No orders for today yet.</div>
-
         <ul v-else class="order-list">
           <li v-for="order in orders" :key="order.id" class="order-card">
             <div class="order-top">
@@ -387,13 +349,6 @@ function formatCurrency(value: string): string {
 </template>
 
 <style scoped>
-/* Self-contained styles — this page intentionally does not rely on
-   src/styles/main.css's --bg-primary/--color-teal variables, since it's
-   a standalone page that may be reached outside the main app shell
-   (e.g. a direct link an agent bookmarks). Colors are inlined so the
-   page renders correctly with zero dependency on global CSS having
-   loaded first. */
-
 .agent-page {
   min-height: 100vh;
   background: #0F172A;
@@ -402,206 +357,40 @@ function formatCurrency(value: string): string {
   padding: 16px;
   padding-bottom: 40px;
 }
-
-.agent-header {
-  margin-bottom: 20px;
-}
-
-.agent-title {
-  font-size: 22px;
-  font-weight: 700;
-}
-
-.agent-subtitle {
-  font-size: 13px;
-  color: #94A3B8;
-  margin-top: 2px;
-}
-
-.state-message {
-  text-align: center;
-  padding: 40px 16px;
-  color: #94A3B8;
-}
-
-.state-message.error {
-  color: #DC2626;
-}
-
-.summary-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-bottom: 16px;
-}
-
-.summary-card {
-  background: #1E293B;
-  border-radius: 12px;
-  padding: 14px;
-}
-
-.summary-label {
-  font-size: 12px;
-  color: #94A3B8;
-}
-
-.summary-value {
-  font-size: 20px;
-  font-weight: 700;
-  margin-top: 2px;
-}
-
-.action-row {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.action-row button {
-  flex: 1;
-  min-height: 48px;
-  border: none;
-  border-radius: 12px;
-  font-weight: 600;
-}
-
-.btn-primary {
-  background: #0D9488;
-  color: #F8FAFC;
-  min-height: 48px;
-  border: none;
-  border-radius: 12px;
-  font-weight: 600;
-  padding: 0 16px;
-}
-
-.btn-secondary {
-  background: #334155;
-  color: #F8FAFC;
-  min-height: 48px;
-  border: none;
-  border-radius: 12px;
-  font-weight: 500;
-  padding: 0 16px;
-}
-
-.btn-primary:disabled,
-.btn-secondary:disabled {
-  opacity: 0.5;
-}
-
-.form-card {
-  background: #1E293B;
-  border-radius: 12px;
-  padding: 16px;
-  margin-bottom: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.form-title {
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.input-field {
-  background: #334155;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  color: #F8FAFC;
-  padding: 12px;
-  width: 100%;
-  min-height: 48px;
-  font-size: 15px;
-}
-
-.textarea-field {
-  min-height: 90px;
-  resize: vertical;
-  font-family: inherit;
-}
-
-.form-error {
-  color: #DC2626;
-  font-size: 13px;
-}
-
-.form-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-}
-
-.section-title {
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 10px;
-}
-
-.empty-state {
-  text-align: center;
-  padding: 24px;
-  color: #94A3B8;
-}
-
-.order-list {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.order-card {
-  background: #1E293B;
-  border-radius: 12px;
-  padding: 14px;
-}
-
-.order-top {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 4px;
-}
-
-.order-client {
-  font-weight: 600;
-}
-
-.order-status {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 3px 8px;
-  border-radius: 6px;
-}
-
+.agent-header { margin-bottom: 20px; }
+.agent-title { font-size: 22px; font-weight: 700; }
+.agent-subtitle { font-size: 13px; color: #94A3B8; margin-top: 2px; }
+.state-message { text-align: center; padding: 40px 16px; color: #94A3B8; }
+.state-message.error { color: #DC2626; }
+.summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+.summary-card { background: #1E293B; border-radius: 12px; padding: 14px; }
+.summary-label { font-size: 12px; color: #94A3B8; }
+.summary-value { font-size: 20px; font-weight: 700; margin-top: 2px; }
+.action-row { display: flex; gap: 8px; margin-bottom: 16px; }
+.action-row button { flex: 1; min-height: 48px; border: none; border-radius: 12px; font-weight: 600; }
+.btn-primary { background: #0D9488; color: #F8FAFC; min-height: 48px; border: none; border-radius: 12px; font-weight: 600; padding: 0 16px; }
+.btn-secondary { background: #334155; color: #F8FAFC; min-height: 48px; border: none; border-radius: 12px; font-weight: 500; padding: 0 16px; }
+.btn-primary:disabled, .btn-secondary:disabled { opacity: 0.5; }
+.form-card { background: #1E293B; border-radius: 12px; padding: 16px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 10px; }
+.form-title { font-size: 16px; font-weight: 600; }
+.input-field { background: #334155; border: 1px solid transparent; border-radius: 10px; color: #F8FAFC; padding: 12px; width: 100%; min-height: 48px; font-size: 15px; }
+.textarea-field { min-height: 90px; resize: vertical; font-family: inherit; }
+.form-error { color: #DC2626; font-size: 13px; }
+.form-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.section-title { font-size: 16px; font-weight: 600; margin-bottom: 10px; }
+.empty-state { text-align: center; padding: 24px; color: #94A3B8; }
+.order-list { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.order-card { background: #1E293B; border-radius: 12px; padding: 14px; }
+.order-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.order-client { font-weight: 600; }
+.order-status { font-size: 12px; font-weight: 600; padding: 3px 8px; border-radius: 6px; }
 .status-pending { background: rgba(148, 163, 184, 0.2); color: #94A3B8; }
 .status-confirmed { background: rgba(13, 148, 136, 0.2); color: #0D9488; }
 .status-buying { background: rgba(217, 119, 6, 0.2); color: #D97706; }
 .status-delivering { background: rgba(217, 119, 6, 0.2); color: #D97706; }
 .status-done { background: rgba(13, 148, 136, 0.2); color: #0D9488; }
 .status-cancelled { background: rgba(220, 38, 38, 0.2); color: #DC2626; }
-
-.order-address {
-  font-size: 13px;
-  color: #94A3B8;
-  margin-bottom: 6px;
-}
-
-.order-financials {
-  display: flex;
-  gap: 12px;
-  font-size: 13px;
-  margin-bottom: 10px;
-}
-
-.advance-btn {
-  width: 100%;
-  min-height: 44px;
-  border: none;
-  border-radius: 10px;
-  font-weight: 600;
-}
+.order-address { font-size: 13px; color: #94A3B8; margin-bottom: 6px; }
+.order-financials { display: flex; gap: 12px; font-size: 13px; margin-bottom: 10px; }
+.advance-btn { width: 100%; min-height: 44px; border: none; border-radius: 10px; font-weight: 600; }
 </style>

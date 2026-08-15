@@ -1,7 +1,6 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/views/ProductsAddView.vue (STEP 2 BUGFIX)
-// Streamlined multi-product fast-draft workflow with reentrancy lock.
+// soko-frontend/src/views/ProductsAddView.vue
 // =============================================================================
 
 import { onMounted, ref, computed } from 'vue';
@@ -144,7 +143,6 @@ function removeDraft(index: number): void {
 }
 
 async function submitDrafts(publish: boolean): Promise<void> {
-  // Synchronous reentrancy block: ignores duplicate clicks immediately without waiting on Vue DOM render loops
   if (!canSave.value || isSaving.value) return;
 
   isSaving.value = true;
@@ -163,7 +161,6 @@ async function submitDrafts(publish: boolean): Promise<void> {
     await productsStore.createBulk(productsPayload);
     pushToast({ message: `Successfully saved ${drafts.value.length} products`, variant: 'success' });
     
-    // Reset state back to batch staging instead of forcing router navigation away
     drafts.value = [];
     globalCategoryId.value = '';
   } catch (err) {
@@ -184,7 +181,6 @@ async function submitDrafts(publish: boolean): Promise<void> {
       <Button variant="ghost" @click="router.push({ name: 'products' })">Back to Catalog</Button>
     </header>
 
-    <!-- Category Setup Area (Visible when no items are staged) -->
     <div class="category-pre-setup card" v-if="drafts.length === 0">
       <div class="card-heading">
         <Layers :size="20" class="card-icon" />
@@ -211,7 +207,6 @@ async function submitDrafts(publish: boolean): Promise<void> {
       </div>
     </div>
 
-    <!-- Main File Picker Entry Area -->
     <div class="upload-trigger-area" v-if="drafts.length === 0">
       <input
         ref="fileInputRef"
@@ -230,7 +225,6 @@ async function submitDrafts(publish: boolean): Promise<void> {
     </div>
 
     <template v-else>
-      <!-- Staged Batch Control Bar -->
       <div class="global-bulk-card card">
         <div class="batch-status-info">
           <span class="batch-count-badge tabular-figure">{{ drafts.length }} products staged</span>
@@ -268,7 +262,6 @@ async function submitDrafts(publish: boolean): Promise<void> {
         </div>
       </div>
 
-      <!-- Draft Entry Cards Stack -->
       <div class="draft-stack">
         <div v-for="(draft, idx) in drafts" :key="idx" class="draft-card card">
           <button class="draft-card__remove" type="button" title="Remove draft" @click="removeDraft(idx)">
@@ -276,7 +269,6 @@ async function submitDrafts(publish: boolean): Promise<void> {
           </button>
           
           <div class="draft-card__layout">
-            <!-- Media Preview Section -->
             <div class="draft-card__media">
               <div v-if="draft.uploading" class="draft-card__loader">
                 <span class="spinner"></span>
@@ -289,7 +281,6 @@ async function submitDrafts(publish: boolean): Promise<void> {
               <img v-else :src="draft.image_url" class="draft-card__img" alt="Product thumbnail" />
             </div>
 
-            <!-- Form Content Fields -->
             <div class="draft-card__form">
               <div class="form-row">
                 <div class="form-group flex-2">
@@ -326,7 +317,6 @@ async function submitDrafts(publish: boolean): Promise<void> {
         </div>
       </div>
 
-      <!-- Action Panel Footer -->
       <footer class="form-actions-panel">
         <Button variant="ghost" @click="drafts = []">Clear Batch</Button>
         <div class="form-actions-panel__rights">
@@ -364,7 +354,6 @@ async function submitDrafts(publish: boolean): Promise<void> {
 
 .hidden-file-input { display: none; }
 
-/* Category Pre-Setup Widget */
 .category-pre-setup {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -405,7 +394,6 @@ async function submitDrafts(publish: boolean): Promise<void> {
   color: var(--color-text);
 }
 
-/* Upload Area Stylings */
 .upload-trigger-area {
   border: 2px dashed var(--color-border);
   border-radius: var(--radius-lg);
@@ -430,7 +418,6 @@ async function submitDrafts(publish: boolean): Promise<void> {
 .picker-text { font-weight: 600; color: var(--color-text); font-size: var(--text-lg); }
 .picker-subtext { font-size: var(--text-xs); color: var(--color-text-muted); }
 
-/* Global Helpers Block */
 .global-bulk-card {
   background: var(--color-surface);
   border-radius: var(--radius-lg);
@@ -483,7 +470,6 @@ async function submitDrafts(publish: boolean): Promise<void> {
 }
 .add-more-label--disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* Draft Cards Stack */
 .draft-stack { display: flex; flex-direction: column; gap: var(--space-4); }
 
 .draft-card {

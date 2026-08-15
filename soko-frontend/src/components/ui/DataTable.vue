@@ -1,12 +1,12 @@
-<script setup lang="ts">
+<script setup lang="ts" generic="T extends object">
 // =============================================================================
-// src/components/ui/DataTable.vue
+// soko-frontend/src/components/ui/DataTable.vue
 // =============================================================================
 
 import Skeleton from './Skeleton.vue';
 import EmptyState from './EmptyState.vue';
 
-export interface DataTableColumn<T> {
+export interface DataTableColumn<T = any> {
   key: string;
   label: string;
   align?: 'left' | 'right';
@@ -14,7 +14,7 @@ export interface DataTableColumn<T> {
   cellClass?: (row: T) => string;
 }
 
-interface Props<T> {
+interface Props<T = any> {
   columns: DataTableColumn<T>[];
   rows: T[];
   loading?: boolean;
@@ -24,16 +24,16 @@ interface Props<T> {
   emptyDescription?: string;
 }
 
-withDefaults(defineProps<Props<Record<string, unknown>>>(), {
+withDefaults(defineProps<Props<T>>(), {
   loading: false,
   onRowClick: undefined,
   emptyTitle: 'No data',
   emptyDescription: undefined,
 });
 
-function cellValue(row: Record<string, unknown>, column: DataTableColumn<Record<string, unknown>>): string {
+function cellValue(row: T, column: DataTableColumn<T>): string {
   if (column.render) return column.render(row);
-  const value = row[column.key];
+  const value = (row as Record<string, unknown>)[column.key];
   return value === null || value === undefined ? '—' : String(value);
 }
 </script>

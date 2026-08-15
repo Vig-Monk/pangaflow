@@ -1,11 +1,10 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/views/storefront/StoreHomeView.vue (FIXED HERO INTEGRATION)
-// Public storefront catalog using the dynamic StoreHero component.
+// soko-frontend/src/views/storefront/StoreHomeView.vue
 // =============================================================================
 
 import { onMounted, ref, computed } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { useRoute } from 'vue-router';
 import { useStoreSettingsStore } from '@/stores/store';
 import { useCartStore } from '@/stores/cart';
 import { useToast } from '@/composables/useToast';
@@ -21,13 +20,13 @@ interface PublicProduct {
   slug: string;
   description: string | null;
   price: number;
+  stock?: number;
   images: string[];
   category: { name: string };
   availability: 'in_stock' | 'out_of_stock';
 }
 
 const route = useRoute();
-const router = useRouter();
 const storeSettingsStore = useStoreSettingsStore();
 const cartStore = useCartStore();
 const { push: pushToast } = useToast();
@@ -48,7 +47,6 @@ const categories = computed(() => {
   return ['All', ...Array.from(new Set(list))];
 });
 
-// Chained pipeline: Category Filtering -> In-Stock Filtering -> Price Sorting -> Grouping by Category
 const productsByCategory = computed(() => {
   let result = [...products.value];
 
@@ -97,6 +95,7 @@ async function loadStoreData(): Promise<void> {
 }
 
 onMounted(() => {
+  cartStore.initForStore(storeSlug.value);
   loadStoreData();
 });
 
@@ -113,11 +112,13 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
   const firstImage = prod.images.length > 0 ? prod.images[0] : null;
 
   cartStore.addItem(
+    storeSlug.value,
     prod.id,
     prod.name,
     firstImage,
     prod.price,
-    1
+    1,
+    prod.stock
   );
 
   pushToast({ message: `Added ${prod.name} to cart`, variant: 'success' });
@@ -126,7 +127,6 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
 
 <template>
   <div class="store-homepage">
-    <!-- Handle Errors via EmptyState component -->
     <div v-if="loadError" class="error-container card">
       <EmptyState
         title="Storefront Offline"
@@ -137,7 +137,6 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
     </div>
 
     <template v-else>
-      <!-- Hero Header Section utilizing real dynamic StoreHero component -->
       <section class="store-hero-section">
         <div v-if="loadingStore" class="hero-skeleton">
           <Skeleton height="320px" radius="0" />
@@ -145,7 +144,6 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
         <StoreHero v-else :settings="storeSettingsStore.settings" />
       </section>
 
-      <!-- Promoted Category Header & Filter Toolbar Bar -->
       <div class="promoted-categories-bar" v-if="!loadingProducts && products.length > 0">
         <div class="categories-bar-inner">
           <div class="categories-label">
@@ -187,7 +185,6 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
         </div>
       </div>
 
-      <!-- Store Products Grouped Catalog Sections -->
       <div class="catalog-container">
         <div v-if="loadingProducts" class="products-grid-skeleton">
           <div v-for="n in 4" :key="n" class="skeleton-card">
@@ -207,7 +204,6 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
             />
           </div>
 
-          <!-- Grouped Category Sections Loop -->
           <div v-else class="catalog-sections-stack">
             <div v-for="(catProducts, categoryName) in productsByCategory" :key="categoryName" class="category-section-group">
               <div class="category-section-header">

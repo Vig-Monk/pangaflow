@@ -1,9 +1,8 @@
 // =============================================================================
-// src/api/customers.api.ts
-// Typed wrappers around /customers/* endpoints.
+// soko-frontend/src/api/customers.api.ts
 // =============================================================================
 
-import { apiClient } from './index';
+import { apiClient } from '@/services/apiClient';
 import {
   ApiResponse,
   CreateCustomerPayload,
@@ -34,7 +33,7 @@ export async function listCustomers(
   );
 
   if (!response.data.data) {
-    throw new Error(response.data.error ?? 'Failed to load customers');
+    throw new Error(response.data.error?.message ?? 'Failed to load customers');
   }
 
   return {
@@ -57,7 +56,7 @@ export async function getCustomer(id: string): Promise<CustomerDetail> {
   );
 
   if (!response.data.data) {
-    throw new Error(response.data.error ?? 'Customer not found');
+    throw new Error(response.data.error?.message ?? 'Customer not found');
   }
 
   return response.data.data;
@@ -72,7 +71,7 @@ export async function createCustomer(
   );
 
   if (!response.data.data) {
-    throw new Error(response.data.error ?? 'Failed to create customer');
+    throw new Error(response.data.error?.message ?? 'Failed to create customer');
   }
 
   return response.data.data;
@@ -88,7 +87,7 @@ export async function updateCustomer(
   );
 
   if (!response.data.data) {
-    throw new Error(response.data.error ?? 'Failed to update customer');
+    throw new Error(response.data.error?.message ?? 'Failed to update customer');
   }
 
   return response.data.data;

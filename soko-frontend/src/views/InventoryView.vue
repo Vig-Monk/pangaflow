@@ -1,7 +1,6 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/views/InventoryView.vue (PROMPT 16)
-// Clean visual hierarchy for inventory stock audits.
+// soko-frontend/src/views/InventoryView.vue
 // =============================================================================
 
 import { onMounted, ref } from 'vue';
@@ -11,7 +10,6 @@ import DataTable, { type DataTableColumn } from '@/components/ui/DataTable.vue';
 import Button from '@/components/ui/Button.vue';
 import Modal from '@/components/ui/Modal.vue';
 import Pagination from '@/components/ui/Pagination.vue';
-import { PackageCheck } from 'lucide-vue-next';
 
 const productsStore = useProductsStore();
 const { push: pushToast } = useToast();

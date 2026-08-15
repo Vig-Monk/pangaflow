@@ -1,9 +1,8 @@
 // =============================================================================
-// src/api/transactions.api.ts
-// Typed wrappers around /transactions/* and /dashboard/* endpoints.
+// soko-frontend/src/api/transactions.api.ts
 // =============================================================================
 
-import { apiClient } from './index';
+import { apiClient } from '@/services/apiClient';
 import {
   ApiResponse,
   CustomerLedgerResult,
@@ -32,7 +31,7 @@ export async function recordTransaction(
   );
 
   if (!response.data.data) {
-    throw new Error(response.data.error ?? 'Failed to record transaction');
+    throw new Error(response.data.error?.message ?? 'Failed to record transaction');
   }
 
   return response.data.data;
@@ -48,7 +47,7 @@ export async function getCustomerLedger(
   );
 
   if (!response.data.data) {
-    throw new Error(response.data.error ?? 'Failed to load ledger');
+    throw new Error(response.data.error?.message ?? 'Failed to load ledger');
   }
 
   return {
@@ -63,7 +62,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
   );
 
   if (!response.data.data) {
-    throw new Error(response.data.error ?? 'Failed to load dashboard summary');
+    throw new Error(response.data.error?.message ?? 'Failed to load dashboard summary');
   }
 
   return response.data.data;
