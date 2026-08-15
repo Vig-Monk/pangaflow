@@ -3,10 +3,11 @@
    SOKO CONSOLE DESIGN SYSTEM
 
    Brand:
-   - Soko Red      #D91E4E
-   - Deep Espresso #0D0907
-   - Soft White    #FAFAF8
-   - Emerald       semantic success/inventory
+   - Primary Soko Red
+   - Crimson / Rose supporting accent family
+   - Deep Espresso
+   - Soft White
+   - Emerald for positive states
 
    Typography:
    - IBM Plex Sans
@@ -14,7 +15,7 @@
 
    Design direction:
    Premium commerce, restrained surfaces, strong hierarchy,
-   boxier geometry and soft elevation.
+   boxier geometry, soft elevation and controlled color semantics.
    ========================================================================== */
 
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
@@ -26,75 +27,116 @@
 
 :root {
 
-  /* --------------------------------------------------------------------------
-     BRAND
-     -------------------------------------------------------------------------- */
+  /* ===========================================================================
+     PRIMARY BRAND
+     ========================================================================== */
 
-  /* Primary Soko accent */
   --color-ink: #D91E4E;
   --color-ink-hover: #B91843;
 
-  /* Deep neutral */
   --color-dark: #0D0907;
   --color-dark-hover: #211915;
 
+
+  /* ===========================================================================
+     SOKO ACCENT FAMILY
+     ---------------------------------------------------------------------------
+     Same visual family, different purposes.
+     ========================================================================== */
+
   /*
-   * Legacy aliases.
+   * Primary brand/action.
    *
-   * Existing components using these names inherit the Soko accent family.
-   * No gold or clay remains in the system.
+   * Buttons, links, active navigation, primary controls.
+   */
+  --color-accent: #D91E4E;
+  --color-accent-hover: #B91843;
+
+  /*
+   * Strong crimson.
+   *
+   * Destructive actions, serious negative states and
+   * high-priority warnings.
+   */
+  --color-accent-strong: #A9143B;
+  --color-accent-strong-hover: #8F1032;
+
+  /*
+   * Softer rose.
+   *
+   * Secondary emphasis, attention states and dashboard
+   * indicators where the primary red would be too aggressive.
+   */
+  --color-accent-rose: #C94B68;
+  --color-accent-rose-hover: #B63E5A;
+
+  /*
+   * Soft background for red/rose states.
+   */
+  --color-accent-soft: #FCE9EE;
+
+  /*
+   * Extremely subtle brand tint.
+   */
+  --color-accent-faint: #FFF5F7;
+
+
+  /* ===========================================================================
+     LEGACY COMPATIBILITY
+     ---------------------------------------------------------------------------
+     Existing components still using these names continue to work.
+     ========================================================================== */
+
+  /*
+   * Former "clay" now becomes the darker rose/crimson semantic.
+   * It is intentionally NOT identical to the primary accent.
+   */
+  --color-market-clay: #B5445C;
+  --color-market-clay-hover: #963749;
+  --color-market-clay-soft: #F9E7EB;
+
+  /*
+   * Former gold token now points to the primary Soko accent.
    */
   --color-gold: #D91E4E;
   --color-gold-hover: #B91843;
 
 
-  /* --------------------------------------------------------------------------
-     SOKO RED FAMILY
-     -------------------------------------------------------------------------- */
+  /* ===========================================================================
+     POSITIVE / INVENTORY
+     ========================================================================== */
 
   /*
-   * Everything brand-related that previously used pink/clay now
-   * belongs to this single visual family.
-   */
-
-  --color-accent: #D91E4E;
-  --color-accent-hover: #B91843;
-
-  /* Softer red/pink for backgrounds and subtle states */
-  --color-accent-soft: #FCE9EE;
-
-  /* Very subtle tint for selected/hovered surfaces */
-  --color-accent-faint: #FFF5F7;
-
-  /* Stronger shade for destructive/emphasis situations */
-  --color-accent-strong: #A9143B;
-
-
-  /* --------------------------------------------------------------------------
-     SEMANTIC GREEN
-     -------------------------------------------------------------------------- */
-
-  /*
-   * Green is intentionally separate from the brand system.
-   * It communicates success, stock availability and positive movement.
+   * Strong emerald.
+   *
+   * Success, in-stock states, positive financial movement,
+   * completed operations.
    */
   --color-ledger-green: #16845B;
   --color-ledger-green-hover: #116C4A;
 
+  /*
+   * Soft green background.
+   */
   --color-ledger-green-soft: #E8F5EF;
 
+  /*
+   * Slightly stronger green surface for dashboard emphasis.
+   */
+  --color-ledger-green-faint: #F2FAF6;
 
-  /* --------------------------------------------------------------------------
+
+  /* ===========================================================================
      INFORMATION
-     -------------------------------------------------------------------------- */
+     ========================================================================== */
 
   --color-info: #58718A;
   --color-info-soft: #EDF2F6;
 
 
-  /* --------------------------------------------------------------------------
+  /* ===========================================================================
      SURFACES
-     -------------------------------------------------------------------------- */
+     ========================================================================== */
 
   --color-bg: #FAFAF8;
 
@@ -103,15 +145,17 @@
   --color-surface-raised: #FFFFFF;
 
   /*
-   * Almost invisible border.
-   * Intended to feel like a soft edge rather than an outline.
+   * Almost invisible.
+   *
+   * The interface should feel lifted through shadow rather than
+   * being covered in visible outlines.
    */
   --color-border: #ECEBE8;
 
 
-  /* --------------------------------------------------------------------------
+  /* ===========================================================================
      TEXT
-     -------------------------------------------------------------------------- */
+     ========================================================================== */
 
   --color-text: #0D0907;
 
@@ -119,64 +163,69 @@
 
   /*
    * Always white.
-   * Primary red buttons therefore have white text in both themes.
+   *
+   * Primary and accent buttons therefore maintain the same
+   * high-contrast treatment in both themes.
    */
   --color-text-inverse: #FFFFFF;
 
 
-  /* --------------------------------------------------------------------------
+  /* ===========================================================================
      FOCUS
-     -------------------------------------------------------------------------- */
+     ========================================================================== */
 
   --color-focus-ring: #D91E4E;
 
 
-  /* =============================================================================
+  /* ===========================================================================
      TYPOGRAPHY
      ========================================================================== */
 
-  /*
-   * IBM Plex Sans is used throughout the interface.
-   *
-   * Hierarchy comes from:
-   * - weight
-   * - size
-   * - spacing
-   *
-   * rather than mixing unrelated font families.
-   */
+  --font-display:
+    'IBM Plex Sans',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
 
-  --font-display: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-body:
+    'IBM Plex Sans',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
 
-  --font-body: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-
-  --font-mono: 'IBM Plex Mono', 'SF Mono', Consolas, monospace;
-
-
-  /* --------------------------------------------------------------------------
-     DESKTOP TYPE SCALE
-     -------------------------------------------------------------------------- */
-
-  --text-xs: 0.75rem;       /* 12px */
-  --text-sm: 0.8125rem;     /* 13px */
-  --text-base: 0.9375rem;   /* 15px */
-  --text-lg: 1.0625rem;     /* 17px */
-  --text-xl: 1.25rem;       /* 20px */
-  --text-2xl: 1.5rem;       /* 24px */
-  --text-3xl: 2rem;         /* 32px */
-  --text-4xl: 2.5rem;       /* 40px */
+  --font-mono:
+    'IBM Plex Mono',
+    'SF Mono',
+    Consolas,
+    monospace;
 
 
-  /* --------------------------------------------------------------------------
+  /* ---------------------------------------------------------------------------
+     TYPE SCALE
+     --------------------------------------------------------------------------- */
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.0625rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+  --text-3xl: 2rem;
+  --text-4xl: 2.5rem;
+
+
+  /* ---------------------------------------------------------------------------
      LINE HEIGHT
-     -------------------------------------------------------------------------- */
+     --------------------------------------------------------------------------- */
 
   --leading-tight: 1.2;
   --leading-normal: 1.55;
   --leading-relaxed: 1.7;
 
 
-  /* =============================================================================
+  /* ===========================================================================
      SPACING
      ========================================================================== */
 
@@ -192,7 +241,7 @@
   --space-16: 4rem;
 
 
-  /* =============================================================================
+  /* ===========================================================================
      RADIUS
      ========================================================================== */
 
@@ -202,7 +251,7 @@
   --radius-full: 999px;
 
 
-  /* =============================================================================
+  /* ===========================================================================
      SHADOWS
      ========================================================================== */
 
@@ -219,7 +268,7 @@
     0 4px 8px rgba(13, 9, 7, 0.035);
 
 
-  /* =============================================================================
+  /* ===========================================================================
      MOTION
      ========================================================================== */
 
@@ -237,9 +286,9 @@
 
 [data-theme='dark'] {
 
-  /* --------------------------------------------------------------------------
-     BRAND
-     -------------------------------------------------------------------------- */
+  /* ===========================================================================
+     PRIMARY BRAND
+     ========================================================================== */
 
   --color-ink: #D91E4E;
   --color-ink-hover: #EF3A67;
@@ -247,261 +296,60 @@
   --color-dark: #0D0907;
   --color-dark-hover: #211915;
 
-  --color-gold: #D91E4E;
-  --color-gold-hover: #EF3A67;
 
-
-  /* --------------------------------------------------------------------------
-     SOKO RED FAMILY
-     -------------------------------------------------------------------------- */
-
-  /*
-   * Same hue family, brighter shades where necessary for dark surfaces.
-   */
+  /* ===========================================================================
+     SOKO ACCENT FAMILY
+     ========================================================================== */
 
   --color-accent: #D91E4E;
   --color-accent-hover: #EF3A67;
 
+  /*
+   * Brighter crimson for visibility against dark surfaces.
+   */
+  --color-accent-strong: #F04A72;
+  --color-accent-strong-hover: #FF6387;
+
+  /*
+   * Rose remains softer than the primary accent.
+   */
+  --color-accent-rose: #E06A83;
+  --color-accent-rose-hover: #EC8096;
+
+  /*
+   * Dark tinted surfaces.
+   */
   --color-accent-soft: #3D1722;
 
   --color-accent-faint: #241116;
 
-  --color-accent-strong: #F04A72;
+
+  /* ===========================================================================
+     LEGACY COMPATIBILITY
+     ========================================================================== */
+
+  --color-market-clay: #D95A73;
+  --color-market-clay-hover: #E96E85;
+  --color-market-clay-soft: #3D1722;
+
+  --color-gold: #D91E4E;
+  --color-gold-hover: #EF3A67;
 
 
-  /* --------------------------------------------------------------------------
-     SEMANTIC GREEN
-     -------------------------------------------------------------------------- */
+  /* ===========================================================================
+     POSITIVE / INVENTORY
+     ========================================================================== */
 
+  /*
+   * More luminous emerald for dark surfaces.
+   */
   --color-ledger-green: #35B77D;
   --color-ledger-green-hover: #50CC94;
 
   --color-ledger-green-soft: #12382A;
 
-
-  /* --------------------------------------------------------------------------
-     INFORMATION
-     -------------------------------------------------------------------------- */
-
-  --color-info: #8FA8BF;
-  --color-info-soft: #1B2730;
+  --color-ledger-green-faint: #10271E;
 
 
-  /* --------------------------------------------------------------------------
-     SURFACES
-     -------------------------------------------------------------------------- */
-
-  --color-bg: #0D0907;
-
-  --color-surface: #171311;
-
-  --color-surface-raised: #211C19;
-
-  --color-border: #2B2522;
-
-
-  /* --------------------------------------------------------------------------
-     TEXT
-     -------------------------------------------------------------------------- */
-
-  --color-text: #F4F1EE;
-
-  --color-text-muted: #A69F9A;
-
-  --color-text-inverse: #FFFFFF;
-
-
-  /* --------------------------------------------------------------------------
-     FOCUS
-     -------------------------------------------------------------------------- */
-
-  --color-focus-ring: #D91E4E;
-
-
-  /* --------------------------------------------------------------------------
-     SHADOWS
-     -------------------------------------------------------------------------- */
-
-  --shadow-sm:
-    0 1px 2px rgba(0, 0, 0, 0.22);
-
-  --shadow-md:
-    0 4px 12px rgba(0, 0, 0, 0.30),
-    0 2px 4px rgba(0, 0, 0, 0.16);
-
-  --shadow-lg:
-    0 12px 32px rgba(0, 0, 0, 0.40),
-    0 4px 8px rgba(0, 0, 0, 0.20);
-}
-
-
-/* =============================================================================
-   SYSTEM DARK MODE
-   ========================================================================== */
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    color-scheme: dark;
-  }
-}
-
-
-/* =============================================================================
-   BASE
-   ========================================================================== */
-
-* {
-  box-sizing: border-box;
-}
-
-html {
-  background: var(--color-bg);
-}
-
-body {
-  margin: 0;
-
-  background: var(--color-bg);
-  color: var(--color-text);
-
-  font-family: var(--font-body);
-  font-size: var(--text-base);
-  line-height: var(--leading-normal);
-
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-
-  transition:
-    background var(--duration-base) var(--ease-standard),
-    color var(--duration-base) var(--ease-standard);
-}
-
-
-/* =============================================================================
-   TYPOGRAPHIC HIERARCHY
-   ========================================================================== */
-
-h1,
-h2,
-h3,
-h4,
-h5,
-h6,
-.page-title {
-  font-family: var(--font-display);
-  color: var(--color-text);
-  line-height: var(--leading-tight);
-  letter-spacing: -0.015em;
-}
-
-h1,
-.page-title {
-  font-size: var(--text-3xl);
-  font-weight: 600;
-}
-
-h2 {
-  font-size: var(--text-2xl);
-  font-weight: 600;
-}
-
-h3 {
-  font-size: var(--text-xl);
-  font-weight: 600;
-}
-
-h4,
-h5,
-h6 {
-  font-weight: 600;
-}
-
-
-/* =============================================================================
-   NUMERICAL / MONETARY FIGURES
-   ========================================================================== */
-
-.tabular-figure {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-weight: 500;
-}
-
-
-/* =============================================================================
-   ACCESSIBILITY
-   ========================================================================== */
-
-:focus-visible {
-  outline: 2px solid var(--color-focus-ring);
-  outline-offset: 2px;
-  border-radius: var(--radius-sm);
-}
-
-
-/* =============================================================================
-   REDUCED MOTION
-   ========================================================================== */
-
-@media (prefers-reduced-motion: reduce) {
-
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-    animation-delay: 0s !important;
-  }
-}
-
-
-/* =============================================================================
-   MOBILE TYPOGRAPHY
-   Slightly smaller, not dramatically smaller.
-   The goal is breathing room rather than density.
-   ========================================================================== */
-
-@media (max-width: 640px) {
-
-  :root {
-    --text-xs: 0.6875rem;      /* 11px */
-    --text-sm: 0.75rem;        /* 12px */
-    --text-base: 0.875rem;     /* 14px */
-    --text-lg: 1rem;            /* 16px */
-    --text-xl: 1.125rem;        /* 18px */
-    --text-2xl: 1.375rem;       /* 22px */
-    --text-3xl: 1.75rem;        /* 28px */
-    --text-4xl: 2.125rem;       /* 34px */
-
-    --leading-normal: 1.6;
-  }
-
-  h1,
-  .page-title {
-    letter-spacing: -0.02em;
-  }
-}
-
-
-/* =============================================================================
-   SIGNATURE: STITCHED-MARGIN ACCENT BAR
-   ========================================================================== */
-
-.stitch {
-  border-left: 3px solid var(--stitch-color, var(--color-border));
-  padding-left: var(--space-4);
-}
-
-.stitch--in {
-  --stitch-color: var(--color-ledger-green);
-}
-
-.stitch--out {
-  --stitch-color: var(--color-accent);
-}
-
-.stitch--adjust {
-  --stitch-color: var(--color-accent);
-}
+  /* ===========================================================================
+    
