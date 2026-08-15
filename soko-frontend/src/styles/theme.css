@@ -6,14 +6,18 @@
    - Soko Red      #D91E4E
    - Deep Espresso #0D0907
    - Soft White    #FAFAF8
-   - Emerald       #16845B / #35B77D
+   - Emerald       semantic success/inventory
+
+   Typography:
+   - IBM Plex Sans
+   - IBM Plex Mono
 
    Design direction:
-   Premium commerce, strong hierarchy, restrained surfaces,
-   architectural corners and soft elevation.
+   Premium commerce, restrained surfaces, strong hierarchy,
+   boxier geometry and soft elevation.
    ========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&family=Manrope:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
 
 /* =============================================================================
@@ -26,7 +30,7 @@
      BRAND
      -------------------------------------------------------------------------- */
 
-  /* Soko signature red */
+  /* Primary Soko accent */
   --color-ink: #D91E4E;
   --color-ink-hover: #B91843;
 
@@ -35,48 +39,55 @@
   --color-dark-hover: #211915;
 
   /*
-   * Legacy compatibility.
-   * Existing components using --color-gold automatically receive
-   * the current Soko accent rather than the old gold.
+   * Legacy aliases.
+   *
+   * Existing components using these names inherit the Soko accent family.
+   * No gold or clay remains in the system.
    */
   --color-gold: #D91E4E;
   --color-gold-hover: #B91843;
 
 
   /* --------------------------------------------------------------------------
-     SEMANTIC COLORS
+     SOKO RED FAMILY
      -------------------------------------------------------------------------- */
 
   /*
-   * Strong emerald.
-   *
-   * This replaces the previous teal/green system.
-   * It is intentionally more saturated so it remains visible
-   * without becoming neon.
+   * Everything brand-related that previously used pink/clay now
+   * belongs to this single visual family.
+   */
+
+  --color-accent: #D91E4E;
+  --color-accent-hover: #B91843;
+
+  /* Softer red/pink for backgrounds and subtle states */
+  --color-accent-soft: #FCE9EE;
+
+  /* Very subtle tint for selected/hovered surfaces */
+  --color-accent-faint: #FFF5F7;
+
+  /* Stronger shade for destructive/emphasis situations */
+  --color-accent-strong: #A9143B;
+
+
+  /* --------------------------------------------------------------------------
+     SEMANTIC GREEN
+     -------------------------------------------------------------------------- */
+
+  /*
+   * Green is intentionally separate from the brand system.
+   * It communicates success, stock availability and positive movement.
    */
   --color-ledger-green: #16845B;
   --color-ledger-green-hover: #116C4A;
 
-  /*
-   * Dashboard positive-state surface.
-   * Derived from the same green family.
-   */
   --color-ledger-green-soft: #E8F5EF;
 
-  /*
-   * Strong red for negative/destructive states.
-   * Same family as the Soko brand accent.
-   */
-  --color-market-clay: #B5443A;
-  --color-market-clay-hover: #96372F;
 
-  /*
-   * Red-tinted surface.
-   * Replaces the old faded pink.
-   */
-  --color-market-clay-soft: #FCE9EE;
+  /* --------------------------------------------------------------------------
+     INFORMATION
+     -------------------------------------------------------------------------- */
 
-  /* Informational blue — deliberately neutral and restrained */
   --color-info: #58718A;
   --color-info-soft: #EDF2F6;
 
@@ -92,8 +103,8 @@
   --color-surface-raised: #FFFFFF;
 
   /*
-   * Extremely soft border.
-   * Intended to read almost like the edge of a shadow.
+   * Almost invisible border.
+   * Intended to feel like a soft edge rather than an outline.
    */
   --color-border: #ECEBE8;
 
@@ -108,8 +119,7 @@
 
   /*
    * Always white.
-   * Primary Soko-red buttons therefore have white text
-   * in both themes.
+   * Primary red buttons therefore have white text in both themes.
    */
   --color-text-inverse: #FFFFFF;
 
@@ -126,26 +136,25 @@
      ========================================================================== */
 
   /*
-   * Inter:
-   * Clean, neutral interface typography.
+   * IBM Plex Sans is used throughout the interface.
    *
-   * Manrope:
-   * Stronger display hierarchy without the playful/editorial feeling
-   * of the previous Fraunces-heavy system.
+   * Hierarchy comes from:
+   * - weight
+   * - size
+   * - spacing
    *
-   * IBM Plex Mono:
-   * Prices, quantities, IDs and financial figures.
+   * rather than mixing unrelated font families.
    */
 
-  --font-display: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
-  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-body: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
   --font-mono: 'IBM Plex Mono', 'SF Mono', Consolas, monospace;
 
 
   /* --------------------------------------------------------------------------
-     TYPE SCALE
+     DESKTOP TYPE SCALE
      -------------------------------------------------------------------------- */
 
   --text-xs: 0.75rem;       /* 12px */
@@ -163,7 +172,7 @@
      -------------------------------------------------------------------------- */
 
   --leading-tight: 1.2;
-  --leading-normal: 1.5;
+  --leading-normal: 1.55;
   --leading-relaxed: 1.7;
 
 
@@ -187,11 +196,6 @@
      RADIUS
      ========================================================================== */
 
-  /*
-   * Boxier, architectural system.
-   * Full remains reserved for pills and circular controls.
-   */
-
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
@@ -201,20 +205,6 @@
   /* =============================================================================
      SHADOWS
      ========================================================================== */
-
-  /*
-   * Neutral, extremely soft shadows.
-   *
-   * The goal is:
-   *
-   * surface
-   *    ↓
-   * subtle edge
-   *    ↓
-   * soft elevation
-   *
-   * rather than heavy outlined cards.
-   */
 
   --shadow-sm:
     0 1px 2px rgba(13, 9, 7, 0.035),
@@ -257,32 +247,41 @@
   --color-dark: #0D0907;
   --color-dark-hover: #211915;
 
-  /* Legacy compatibility */
   --color-gold: #D91E4E;
   --color-gold-hover: #EF3A67;
 
 
   /* --------------------------------------------------------------------------
-     SEMANTIC COLORS
+     SOKO RED FAMILY
      -------------------------------------------------------------------------- */
 
   /*
-   * Brighter emerald for dark surfaces.
-   *
-   * It remains clearly green without becoming fluorescent.
+   * Same hue family, brighter shades where necessary for dark surfaces.
    */
+
+  --color-accent: #D91E4E;
+  --color-accent-hover: #EF3A67;
+
+  --color-accent-soft: #3D1722;
+
+  --color-accent-faint: #241116;
+
+  --color-accent-strong: #F04A72;
+
+
+  /* --------------------------------------------------------------------------
+     SEMANTIC GREEN
+     -------------------------------------------------------------------------- */
+
   --color-ledger-green: #35B77D;
   --color-ledger-green-hover: #50CC94;
 
   --color-ledger-green-soft: #12382A;
 
-  /*
-   * Same Soko red family.
-   */
-  --color-market-clay: #E06A59;
-  --color-market-clay-hover: #ED806F;
 
-  --color-market-clay-soft: #3D171F;
+  /* --------------------------------------------------------------------------
+     INFORMATION
+     -------------------------------------------------------------------------- */
 
   --color-info: #8FA8BF;
   --color-info-soft: #1B2730;
@@ -298,9 +297,6 @@
 
   --color-surface-raised: #211C19;
 
-  /*
-   * Quiet dark border.
-   */
   --color-border: #2B2522;
 
 
@@ -312,7 +308,6 @@
 
   --color-text-muted: #A69F9A;
 
-  /* Always white for buttons */
   --color-text-inverse: #FFFFFF;
 
 
@@ -345,7 +340,6 @@
    ========================================================================== */
 
 @media (prefers-color-scheme: dark) {
-
   :root:not([data-theme='light']) {
     color-scheme: dark;
   }
@@ -387,11 +381,6 @@ body {
    TYPOGRAPHIC HIERARCHY
    ========================================================================== */
 
-/*
- * Display typography is now reserved for actual hierarchy.
- * Normal UI headings remain clean and modern.
- */
-
 h1,
 h2,
 h3,
@@ -402,15 +391,22 @@ h6,
   font-family: var(--font-display);
   color: var(--color-text);
   line-height: var(--leading-tight);
+  letter-spacing: -0.015em;
 }
 
 h1,
 .page-title {
-  font-weight: 700;
+  font-size: var(--text-3xl);
+  font-weight: 600;
 }
 
-h2,
+h2 {
+  font-size: var(--text-2xl);
+  font-weight: 600;
+}
+
 h3 {
+  font-size: var(--text-xl);
   font-weight: 600;
 }
 
@@ -454,12 +450,37 @@ h6 {
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-
     transition-duration: 0.01ms !important;
-
     scroll-behavior: auto !important;
-
     animation-delay: 0s !important;
+  }
+}
+
+
+/* =============================================================================
+   MOBILE TYPOGRAPHY
+   Slightly smaller, not dramatically smaller.
+   The goal is breathing room rather than density.
+   ========================================================================== */
+
+@media (max-width: 640px) {
+
+  :root {
+    --text-xs: 0.6875rem;      /* 11px */
+    --text-sm: 0.75rem;        /* 12px */
+    --text-base: 0.875rem;     /* 14px */
+    --text-lg: 1rem;            /* 16px */
+    --text-xl: 1.125rem;        /* 18px */
+    --text-2xl: 1.375rem;       /* 22px */
+    --text-3xl: 1.75rem;        /* 28px */
+    --text-4xl: 2.125rem;       /* 34px */
+
+    --leading-normal: 1.6;
+  }
+
+  h1,
+  .page-title {
+    letter-spacing: -0.02em;
   }
 }
 
@@ -478,10 +499,9 @@ h6 {
 }
 
 .stitch--out {
-  --stitch-color: var(--color-market-clay);
+  --stitch-color: var(--color-accent);
 }
 
 .stitch--adjust {
-  --stitch-color: var(--color-ink);
+  --stitch-color: var(--color-accent);
 }
-``
