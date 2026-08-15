@@ -1,7 +1,6 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/components/layout/AppShell.vue
-// Clean unified layout shell with safe-area spacing & responsive navigation.
 // =============================================================================
 
 import { computed, ref, onMounted } from 'vue';
@@ -125,7 +124,7 @@ function closeMobileMenu(): void {
       </div>
     </aside>
 
-    <!-- Main view content wrapper -->
+    <!-- Main view content wrapper: min-width: 0 prevents flex overflow -->
     <main class="main-content">
       <slot />
     </main>
@@ -200,6 +199,9 @@ function closeMobileMenu(): void {
 .app-shell {
   display: flex;
   min-height: 100vh;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0; /* Prevents flex-child blowout */
   background: var(--color-bg);
 }
 
@@ -226,7 +228,7 @@ function closeMobileMenu(): void {
   font-family: var(--font-display);
   font-size: var(--text-lg);
   color: var(--color-ink);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .sidebar__nav {
@@ -319,13 +321,13 @@ function closeMobileMenu(): void {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: var(--color-ink);
-  color: var(--color-text-inverse);
+  background: var(--brand-primary);
+  color: #FFFFFF;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: var(--text-sm);
-  font-weight: 600;
+  font-weight: 700;
   flex-shrink: 0;
 }
 
@@ -339,8 +341,12 @@ function closeMobileMenu(): void {
 }
 .user-menu__logout:hover { color: var(--color-market-clay); }
 
+/* Main content container with min-width: 0 ensuring horizontal containment */
 .main-content {
   flex: 1;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
   margin-left: 240px;
   background: var(--color-bg);
   min-height: 100vh;
@@ -388,7 +394,7 @@ function closeMobileMenu(): void {
   }
 
   .bottom-bar__item.router-link-active {
-    color: var(--color-ink);
+    color: var(--brand-primary);
     font-weight: 700;
   }
 }

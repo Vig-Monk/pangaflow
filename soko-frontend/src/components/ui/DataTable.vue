@@ -1,7 +1,7 @@
 <script setup lang="ts" generic="T extends object">
 // =============================================================================
 // soko-frontend/src/components/ui/DataTable.vue
-// Layout-safe responsive data table with smooth horizontal scroll container.
+// In-place responsive scroll box with zero page-level width blowout.
 // =============================================================================
 
 import Skeleton from './Skeleton.vue';
@@ -99,10 +99,12 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
 </template>
 
 <style scoped>
-/* Outer box: locks to parent width and prevents page-level horizontal blowout */
+/* Outer container: completely locks horizontal expansion */
 .data-table-wrapper {
+  display: block;
   width: 100%;
   max-width: 100%;
+  min-width: 0;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -110,10 +112,12 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
   position: relative;
 }
 
-/* Inner scroll viewport: smooth touch swipe on mobile screens */
+/* Scroll Viewport: forces horizontal scrolling strictly IN PLACE */
 .data-table-scroll-container {
+  display: block;
   width: 100%;
   max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
@@ -121,7 +125,7 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
 /* Table: maintains clean proportions on all screens without crunching */
 .data-table__table {
   width: 100%;
-  min-width: 620px;
+  min-width: 600px;
   border-collapse: collapse;
   text-align: left;
 }
@@ -168,7 +172,7 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
   white-space: nowrap;
 }
 
-/* Custom scrollbar for horizontal swipe */
+/* Subtle, custom horizontal scrollbar */
 .data-table-scroll-container::-webkit-scrollbar {
   height: 5px;
 }
@@ -183,7 +187,7 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
   background: var(--color-text-muted);
 }
 
-/* Smooth FLIP Transitions */
+/* Smooth FLIP & Row Transitions */
 .table-row-move,
 .table-row-enter-active,
 .table-row-leave-active {

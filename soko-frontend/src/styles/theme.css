@@ -1,8 +1,8 @@
 /* =============================================================================
    soko-frontend/src/styles/theme.css
-   SOKO RESPONSIVE DESIGN SYSTEM
+   SOKO COMPACT RESPONSIVE DESIGN SYSTEM
    Palette: Vibrant Crimson (#D91E4E), Rich Emerald, True Charcoals & Soft Whites.
-   Features: Fluid responsive spacing, clamped typography, ambient soft depth.
+   Typography: High-density sans-serif scale (14px base).
    ========================================================================== */
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
@@ -15,11 +15,16 @@
   --brand-primary-hover: color-mix(in srgb, var(--brand-primary) 85%, #000000);
   --brand-primary-light: color-mix(in srgb, var(--brand-primary) 10%, transparent);
 
+  /* Primary Button Tokens (White text in both light and dark modes) */
+  --btn-primary-bg: var(--brand-primary);
+  --btn-primary-hover: var(--brand-primary-hover);
+  --btn-primary-text: #FFFFFF;
+
   /* =========================================================================
      2. BRAND TOKENS (Preserving legacy names for seamless compatibility)
      ========================================================================= */
 
-  /* Deep charcoal ink for high-contrast text, solid buttons, headings */
+  /* Deep charcoal ink for headings, secondary borders, dark badges */
   --color-ink: #18181B;
   --color-ink-hover: #27272A;
 
@@ -37,53 +42,48 @@
      3. LIGHT MODE SURFACES & TEXT
      ========================================================================= */
 
-  /* Soft, eye-friendly off-white canvas (eliminates harsh pure-white glare) */
   --color-bg: #F8F9FA;
   --color-surface: #FFFFFF;
   --color-surface-raised: #FFFFFF;
-  
-  /* Softened border: prevents "grid-cage" visual clutter on small screens */
   --color-border: #EBECEF;
 
-  /* Typography Colors */
   --color-text: #18181B;
   --color-text-muted: #64748B;
   --color-text-inverse: #FFFFFF;
 
-  /* Focus Ring */
   --color-focus-ring: var(--brand-primary);
 
   /* =========================================================================
-     4. UNIFIED SANS-SERIF TYPOGRAPHY & FLUID CLAMPED SCALES
+     4. COMPACT SANS-SERIF TYPOGRAPHY & FLUID SCALES
      ========================================================================= */
   --font-display: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
 
-  /* Fluid typography: scales naturally between 360px mobile and 1200px desktop */
-  --text-xs: 0.75rem;                                    /* 12px */
-  --text-sm: 0.8125rem;                                  /* 13px */
-  --text-base: 0.9375rem;                                /* 15px - optimal mobile baseline */
-  --text-lg: clamp(1.0625rem, 1.5vw + 0.8rem, 1.1875rem);/* 17px - 19px */
-  --text-xl: clamp(1.1875rem, 2vw + 0.8rem, 1.375rem);   /* 19px - 22px */
-  --text-2xl: clamp(1.375rem, 2.5vw + 0.8rem, 1.625rem); /* 22px - 26px */
-  --text-3xl: clamp(1.625rem, 3.5vw + 0.8rem, 2.125rem); /* 26px - 34px */
-  --text-4xl: clamp(1.875rem, 5vw + 0.8rem, 2.625rem);   /* 30px - 42px */
+  /* Subtly scaled down for high-density SaaS readability */
+  --text-xs: 0.6875rem;                                  /* 11px - micro labels, pills, tags */
+  --text-sm: 0.78125rem;                                 /* 12.5px - secondary metadata, th headers */
+  --text-base: 0.875rem;                                 /* 14px - crisp UI body baseline */
+  --text-lg: clamp(0.9375rem, 1.2vw + 0.75rem, 1.0625rem); /* 15px - 17px section headers */
+  --text-xl: clamp(1.0625rem, 1.5vw + 0.75rem, 1.25rem);   /* 17px - 20px card titles */
+  --text-2xl: clamp(1.25rem, 2vw + 0.75rem, 1.45rem);      /* 20px - 23px page titles */
+  --text-3xl: clamp(1.45rem, 2.8vw + 0.75rem, 1.85rem);    /* 23px - 29.5px stats */
+  --text-4xl: clamp(1.65rem, 4vw + 0.75rem, 2.25rem);      /* 26px - 36px hero headlines */
 
   --leading-tight: 1.22;
-  --leading-normal: 1.6;
-  --leading-relaxed: 1.75;
+  --leading-normal: 1.55;
+  --leading-relaxed: 1.7;
 
   /* =========================================================================
-     5. RESPONSIVE FLUID SPACING (Mobile-first airy spacing)
+     5. RESPONSIVE FLUID SPACING
      ========================================================================= */
   --space-1: 0.25rem;   /* 4px */
   --space-2: 0.5rem;    /* 8px */
   --space-3: 0.75rem;   /* 12px */
   --space-4: 1rem;      /* 16px */
   --space-5: 1.25rem;   /* 20px */
-  --space-6: 1.5rem;    /* 24px (desktop) -> dynamically relaxed on mobile */
-  --space-8: 2rem;      /* 32px (desktop) */
+  --space-6: 1.5rem;    /* 24px */
+  --space-8: 2rem;      /* 32px */
   --space-10: 2.5rem;   /* 40px */
   --space-12: 3rem;     /* 48px */
   --space-16: 4rem;     /* 64px */
@@ -96,12 +96,10 @@
   --radius-lg: 16px;
   --radius-full: 9999px;
 
-  /* Soft, ambient shadows (replaces heavy visual border borders) */
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
   --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.05), 0 2px 6px rgba(0, 0, 0, 0.02);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.07), 0 4px 10px rgba(0, 0, 0, 0.03);
 
-  /* Motion Standards */
   --duration-fast: 120ms;
   --duration-base: 200ms;
   --duration-slow: 320ms;
@@ -110,20 +108,15 @@
 
 /* =============================================================================
    MOBILE OVERRIDES (<= 640px)
-   Reclaims valuable screen real estate and prevents cramming on mobile phones.
    ========================================================================== */
-
 @media (max-width: 640px) {
   :root {
-    /* Compress large desktop padding down on mobile */
     --space-5: 1rem;       /* 16px */
-    --space-6: 1.125rem;   /* 18px (saves 12px of margin width) */
-    --space-8: 1.375rem;   /* 22px (saves 20px of margin width) */
+    --space-6: 1.125rem;   /* 18px */
+    --space-8: 1.375rem;   /* 22px */
     --space-10: 1.75rem;   /* 28px */
     --space-12: 2rem;      /* 32px */
     --space-16: 2.5rem;    /* 40px */
-
-    /* Softer radius on small viewports */
     --radius-lg: 12px;
   }
 }
@@ -131,13 +124,15 @@
 /* =============================================================================
    DARK MODE (True Warm Charcoal & Luminous Accents)
    ========================================================================== */
-
 [data-theme='dark'] {
   --brand-primary: #E83D69;
   --brand-primary-hover: color-mix(in srgb, var(--brand-primary) 85%, #FFFFFF);
   --brand-primary-light: color-mix(in srgb, var(--brand-primary) 18%, transparent);
 
-  /* Deep Warm Charcoal Surfaces */
+  --btn-primary-bg: var(--brand-primary);
+  --btn-primary-hover: var(--brand-primary-hover);
+  --btn-primary-text: #FFFFFF;
+
   --color-bg: #111113;
   --color-surface: #18181B;
   --color-surface-raised: #222226;
@@ -165,15 +160,16 @@
 }
 
 /* =============================================================================
-   GLOBAL RESET & ACCESSIBILITY
+   GLOBAL RESET & OVERFLOW DEFENSE
    ========================================================================== */
-
 * {
   box-sizing: border-box;
 }
 
-html {
-  background: var(--color-bg);
+html, body {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 body {
@@ -189,7 +185,6 @@ body {
               color var(--duration-base) var(--ease-standard);
 }
 
-/* Fluid Headings with tight, modern tracking */
 h1, h2, h3, .page-title {
   font-family: var(--font-display);
   font-weight: 700;
@@ -197,7 +192,6 @@ h1, h2, h3, .page-title {
   line-height: var(--leading-tight);
 }
 
-/* Numerical & currency figures */
 .tabular-figure {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -205,7 +199,6 @@ h1, h2, h3, .page-title {
   letter-spacing: -0.01em;
 }
 
-/* Card utility: ambient shadow + clean background */
 .card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -213,14 +206,12 @@ h1, h2, h3, .page-title {
   box-shadow: var(--shadow-sm);
 }
 
-/* Visible Accessibility Focus */
 :focus-visible {
   outline: 2px solid var(--color-focus-ring);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
 
-/* Reduced Motion Override */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
@@ -229,10 +220,6 @@ h1, h2, h3, .page-title {
     scroll-behavior: auto !important;
   }
 }
-
-/* =============================================================================
-   SIGNATURE STITCHED ACCENTS
-   ========================================================================== */
 
 .stitch {
   border-left: 3px solid var(--stitch-color, var(--color-border));

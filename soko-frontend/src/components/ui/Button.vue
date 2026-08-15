@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/components/ui/Button.vue (PROMPT 19 - MOTION ALIGNED)
+// soko-frontend/src/components/ui/Button.vue
 // =============================================================================
 
 interface Props {
@@ -63,33 +63,45 @@ withDefaults(defineProps<Props>(), {
 }
 
 .btn--sm   { min-height: 36px; padding: 0 var(--space-3); font-size: var(--text-sm); }
-.btn--md   { min-height: 44px; padding: 0 var(--space-5); font-size: var(--text-base); }
-.btn--lg   { min-height: 52px; padding: 0 var(--space-6); font-size: var(--text-lg); }
+.btn--md   { min-height: 42px; padding: 0 var(--space-4); font-size: var(--text-base); }
+.btn--lg   { min-height: 48px; padding: 0 var(--space-6); font-size: var(--text-lg); }
 
+/* Primary Button: Brand Crimson with Crisp White Text in BOTH Themes */
 .btn--primary {
-  background: var(--color-ink);
-  color: var(--color-text-inverse);
+  background: var(--btn-primary-bg, var(--brand-primary));
+  color: var(--btn-primary-text, #FFFFFF) !important;
+  border-color: transparent;
 }
-.btn--primary:hover:not(:disabled) { background: var(--color-ink-hover); }
+.btn--primary:hover:not(:disabled) {
+  background: var(--btn-primary-hover, var(--brand-primary-hover));
+  color: #FFFFFF !important;
+}
 
 .btn--secondary {
   background: var(--color-surface);
-  color: var(--color-ink);
+  color: var(--color-text);
   border-color: var(--color-border);
 }
-.btn--secondary:hover:not(:disabled) { background: var(--color-bg); }
+.btn--secondary:hover:not(:disabled) {
+  background: var(--color-bg);
+  border-color: var(--color-text-muted);
+}
 
 .btn--ghost {
   background: transparent;
   color: var(--color-text);
 }
-.btn--ghost:hover:not(:disabled) { background: var(--color-bg); }
+.btn--ghost:hover:not(:disabled) {
+  background: var(--color-bg);
+}
 
 .btn--danger {
   background: var(--color-market-clay);
-  color: var(--color-text-inverse);
+  color: #FFFFFF !important;
 }
-.btn--danger:hover:not(:disabled) { filter: brightness(0.92); }
+.btn--danger:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
 
 .btn__label--hidden {
   visibility: hidden;
