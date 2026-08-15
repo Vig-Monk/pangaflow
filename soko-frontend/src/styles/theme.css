@@ -1,7 +1,7 @@
 /* =============================================================================
    src/styles/theme.css
    SOKO CONSOLE DESIGN SYSTEM
-   Premium commerce palette — deep espresso, Soko red, soft white.
+   Premium commerce palette — Soko red, deep espresso, soft white.
    ========================================================================== */
 
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
@@ -9,23 +9,18 @@
 :root {
   /* ---------- Brand palette ---------- */
 
-  /*
-   * Soko signature red.
-   * Use deliberately — primarily for important actions,
-   * active states and brand moments.
-   */
+  /* Soko signature red — primary actions and brand moments */
   --color-ink: #D91E4E;
   --color-ink-hover: #B91843;
 
-  /*
-   * Deep espresso / near-black.
-   * Used for text, dark surfaces and strong neutral actions.
-   */
+  /* Deep espresso — neutral strong actions and dark surfaces */
   --color-dark: #0D0907;
   --color-dark-hover: #211915;
 
   /*
-   * Soko red replaces the previous gold system completely.
+   * Legacy alias.
+   * Existing components using --color-gold now inherit Soko red.
+   * No gold remains in the visual system.
    */
   --color-gold: #D91E4E;
   --color-gold-hover: #B91843;
@@ -38,19 +33,17 @@
 
   /* ---------- Surfaces ---------- */
 
-  /*
-   * Soft white.
-   * Easier on the eyes than #FFFFFF while remaining bright and clean.
-   */
+  /* Soft white — easier on the eyes than pure white */
   --color-bg: #FAFAF8;
 
+  /* Cards and panels */
   --color-surface: #FFFFFF;
   --color-surface-raised: #FFFFFF;
 
   /*
    * Extremely soft border.
-   * Intended to feel like the edge of elevation rather than
-   * a visible line drawn around the component.
+   * Designed to feel like the edge of elevation rather than
+   * a visible line around the component.
    */
   --color-border: #ECEBE8;
 
@@ -58,6 +51,12 @@
 
   --color-text: #0D0907;
   --color-text-muted: #77716D;
+
+  /*
+   * Always white.
+   * Primary colored buttons therefore use white text
+   * consistently in both light and dark themes.
+   */
   --color-text-inverse: #FFFFFF;
 
   /* ---------- Focus / interaction ---------- */
@@ -99,8 +98,8 @@
   /* ---------- Radius ---------- */
 
   /*
-   * Architectural rather than pillowy.
-   * Full remains reserved for pills and circular controls.
+   * Boxier, more architectural treatment.
+   * Full is reserved for pills and circular controls.
    */
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -110,13 +109,9 @@
   /* ---------- Shadows ---------- */
 
   /*
-   * Very soft neutral shadows.
-   *
-   * The border + shadow combination should read as:
-   * "this surface is lifted"
-   *
-   * rather than:
-   * "this component has an outline".
+   * Soft neutral shadows.
+   * Combined with the subtle border, surfaces should feel lifted
+   * rather than outlined.
    */
 
   --shadow-sm:
@@ -155,6 +150,7 @@
   --color-dark: #0D0907;
   --color-dark-hover: #211915;
 
+  /* Legacy alias — remains Soko red */
   --color-gold: #D91E4E;
   --color-gold-hover: #EF3A67;
 
@@ -167,23 +163,35 @@
   /* ---------- Surfaces ---------- */
 
   /*
-   * The darkest surface is the brand's #0D0907.
-   * The other surfaces rise gently from it.
+   * Layered warm-charcoal surfaces.
+   *
+   * Background:
+   * #0D0907
+   *
+   * Card:
+   * #171311
+   *
+   * Raised:
+   * #211C19
    */
   --color-bg: #0D0907;
   --color-surface: #171311;
   --color-surface-raised: #211C19;
 
-  /*
-   * Dark borders are deliberately quiet.
-   */
+  /* Quiet dark border */
   --color-border: #2B2522;
 
   /* ---------- Text ---------- */
 
   --color-text: #F4F1EE;
   --color-text-muted: #A69F9A;
-  --color-text-inverse: #0D0907;
+
+  /*
+   * Always white.
+   * Primary red buttons therefore have identical text treatment
+   * across both themes.
+   */
+  --color-text-inverse: #FFFFFF;
 
   /* ---------- Focus ---------- */
 
