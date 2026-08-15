@@ -60,6 +60,12 @@ const routes: RouteRecordRaw[] = [
         meta: { requiresAuth: true, layout: "merchant" }
     },
     {
+        path: "/settings/mpesa",
+        name: "mpesa-setup",
+        component: () => import("@/views/MpesaSetupView.vue"),
+        meta: { requiresAuth: true, layout: "merchant" }
+    },
+    {
         path: "/products",
         name: "products",
         component: () => import("@/views/ProductsView.vue"),

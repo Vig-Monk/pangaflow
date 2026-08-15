@@ -1,7 +1,6 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/components/layout/AppShell.vue (PROMPTS 09, 14, & 15)
-// Grouped sidebar nav + Persistent storefront quick-link access.
+// soko-frontend/src/components/layout/AppShell.vue
 // =============================================================================
 
 import { computed, ref, onMounted } from 'vue';
@@ -17,6 +16,7 @@ import {
   Package,
   Inbox,
   CreditCard,
+  Key,
   Store,
   Settings,
   Moon,
@@ -78,9 +78,10 @@ function closeMobileMenu(): void {
         <div class="sidebar__group">
           <span class="sidebar__group-label">Finance</span>
           <NavItem :to="{ name: 'expenses' }" label="Expenses" :icon="CreditCard" />
+          <NavItem :to="{ name: 'mpesa-setup' }" label="M-Pesa Setup" :icon="Key" />
         </div>
 
-        <!-- GROUP 3: STOREFRONT (Prompt 15: Persistent View Store Link) -->
+        <!-- GROUP 3: STOREFRONT -->
         <div class="sidebar__group">
           <span class="sidebar__group-label">Storefront</span>
           <NavItem :to="{ name: 'store-settings' }" label="Customize Store" :icon="Store" />
@@ -170,6 +171,9 @@ function closeMobileMenu(): void {
             <RouterLink :to="{ name: 'expenses' }" class="sheet__item" @click="closeMobileMenu">
               <CreditCard :size="18" /> Expenses
             </RouterLink>
+            <RouterLink :to="{ name: 'mpesa-setup' }" class="sheet__item" @click="closeMobileMenu">
+              <Key :size="18" /> M-Pesa Setup
+            </RouterLink>
             <RouterLink :to="{ name: 'store-settings' }" class="sheet__item" @click="closeMobileMenu">
               <Store :size="18" /> Customize Store
             </RouterLink>
@@ -251,7 +255,6 @@ function closeMobileMenu(): void {
   padding: 0 var(--space-4) var(--space-1);
 }
 
-/* Persistent View Store Link Style (Prompt 15) */
 .persistent-view-store-link {
   display: flex;
   align-items: center;

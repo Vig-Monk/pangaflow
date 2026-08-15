@@ -1,20 +1,21 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/views/storefront/CheckoutView.vue (PROMPT 07)
-// Simplified 4-step transaction checkout view.
+// soko-frontend/src/views/storefront/CheckoutView.vue
 // =============================================================================
 
 import { computed, ref, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useCartStore } from '@/stores/cart';
-import { apiPost } from '@/services/apiClient';
+import { useStoreSettingsStore } from '@/stores/store';
+import { apiGet, apiPost } from '@/services/apiClient';
 import { useToast } from '@/composables/useToast';
 import Button from '@/components/ui/Button.vue';
-import { User, Phone, Mail, MapPin, FileText, CreditCard, ShieldCheck } from 'lucide-vue-next';
+import { User, Phone, Mail, MapPin, FileText, CreditCard, ShieldCheck, Zap } from 'lucide-vue-next';
 
 const route = useRoute();
 const router = useRouter();
 const cartStore = useCartStore();
+const storeSettingsStore = useStoreSettingsStore();
 const { push: pushToast } = useToast();
 
 const customerName = ref('');
@@ -25,12 +26,26 @@ const notes = ref('');
 const paymentMethod = ref('mpesa_cash');
 
 const isSubmitting = ref(false);
-const storeSlug = computed(() => route.params.storeSlug as string);
+const storeSlug = computed(() => (route.params.storeSlug as string) ?? '');
+const isMpesaVerified = computed(() => (storeSettingsStore.settings as any)?.mpesa_verified ?? false);
 
-onMounted(() => {
+onMounted(async () => {
+  cartStore.initForStore(storeSlug.value);
+
   if (cartStore.isEmpty) {
     pushToast({ message: 'Cannot checkout with an empty cart', variant: 'error' });
     router.push({ name: 'storefront-home', params: { storeSlug: storeSlug.value } });
+    return;
+  }
+
+  try {
+    const storeData = await apiGet<any>(`/public/stores/${storeSlug.value}`);
+    storeSettingsStore.settings = storeData;
+    if (storeData.mpesa_verified) {
+      paymentMethod.value = 'mpesa_direct';
+    }
+  } catch {
+    // Non-blocking fallback
   }
 });
 
@@ -59,11 +74,18 @@ async function handleCheckout(): Promise<void> {
       })),
     };
 
-    const result = await apiPost<{ orderId: string }>(`/public/stores/${storeSlug.value}/orders`, payload);
-    
+    const result = await apiPost<{ orderId: string; checkoutRequestId?: string }>(
+      `/public/stores/${storeSlug.value}/orders`,
+      payload
+    );
+
     cartStore.clearCart();
     pushToast({ message: 'Order placed successfully!', variant: 'success' });
-    router.push({ name: 'storefront-order-confirmation', params: { storeSlug: storeSlug.value, orderId: result.orderId } });
+
+    router.push({
+      name: 'storefront-order-confirmation',
+      params: { storeSlug: storeSlug.value, orderId: result.orderId },
+    });
   } catch (err) {
     pushToast({ message: err instanceof Error ? err.message : 'Checkout failed', variant: 'error' });
   } finally {
@@ -143,14 +165,27 @@ async function handleCheckout(): Promise<void> {
               <h2>Payment Method</h2>
             </div>
 
-            <div class="payment-selection-row">
+            <div class="payment-selection-column">
+              <!-- Online STK Push (Only available if merchant Till is verified) -->
+              <label v-if="isMpesaVerified" class="payment-choice">
+                <input type="radio" value="mpesa_direct" v-model="paymentMethod" />
+                <span class="payment-choice-box" :class="{ active: paymentMethod === 'mpesa_direct' }">
+                  <Zap :size="20" class="text-teal" />
+                  <div>
+                    <span class="choice-title">Direct M-Pesa (Online STK Push)</span>
+                    <span class="choice-desc">You will receive an instant M-Pesa PIN prompt on your phone to complete payment.</span>
+                  </div>
+                </span>
+              </label>
+
+              <!-- Cash / Manual Coordination -->
               <label class="payment-choice">
                 <input type="radio" value="mpesa_cash" v-model="paymentMethod" />
-                <span class="payment-choice-box">
+                <span class="payment-choice-box" :class="{ active: paymentMethod === 'mpesa_cash' }">
                   <CreditCard :size="20" class="text-ink" />
                   <div>
-                    <span class="choice-title">M-Pesa / Cash on Delivery</span>
-                    <span class="choice-desc">Pay securely when items arrive or via merchant coordination.</span>
+                    <span class="choice-title">Cash on Delivery / Manual M-Pesa</span>
+                    <span class="choice-desc">Pay upon delivery or coordinate payment directly with the merchant.</span>
                   </div>
                 </span>
               </label>
@@ -176,12 +211,12 @@ async function handleCheckout(): Promise<void> {
 
             <div class="review-totals">
               <div class="review-total-row">
-                <span>Subtotal</span>
+                <span>Total</span>
                 <span class="tabular-figure bold text-ink">{{ formatCurrency(cartStore.subtotal) }}</span>
               </div>
               <div class="secure-trust-badge">
                 <ShieldCheck :size="16" class="text-teal" />
-                <span>Encrypted merchant checkout transaction</span>
+                <span>Encrypted direct-to-merchant transaction</span>
               </div>
             </div>
 
@@ -223,7 +258,6 @@ async function handleCheckout(): Promise<void> {
   margin-top: var(--space-1);
 }
 
-/* Layout Split */
 .checkout-layout {
   display: flex;
   gap: var(--space-6);
@@ -357,9 +391,10 @@ async function handleCheckout(): Promise<void> {
   border-color: var(--color-ink);
 }
 
-/* Payment Choice Box */
-.payment-selection-row {
+.payment-selection-column {
   display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
 .payment-choice {
@@ -371,12 +406,16 @@ async function handleCheckout(): Promise<void> {
 
 .payment-choice-box {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-3);
   padding: var(--space-4);
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+
+.payment-choice-box.active {
   border-color: var(--color-ink);
   background: color-mix(in srgb, var(--color-ink) 5%, transparent);
 }
@@ -395,7 +434,6 @@ async function handleCheckout(): Promise<void> {
   margin-top: 2px;
 }
 
-/* Review Subtotals Panel */
 .review-items {
   display: flex;
   flex-direction: column;

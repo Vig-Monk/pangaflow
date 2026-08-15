@@ -6,13 +6,25 @@
 import { onMounted, ref, computed, reactive } from 'vue';
 import { useStoreSettingsStore, type StoreSettings } from '@/stores/store';
 import { useProductsStore } from '@/stores/products';
+import { useMpesaCredentialsStore } from '@/stores/mpesaCredentials';
 import { useToast } from '@/composables/useToast';
 import Button from '@/components/ui/Button.vue';
 import StoreHero from '@/components/storefront/StoreHero.vue';
-import { Store, Eye, Edit3, Image as ImageIcon, Sparkles, CheckCircle2, Globe } from 'lucide-vue-next';
+import {
+  Store,
+  Eye,
+  Edit3,
+  Image as ImageIcon,
+  Sparkles,
+  CheckCircle2,
+  AlertTriangle,
+  Globe,
+  Key,
+} from 'lucide-vue-next';
 
 const storeSettingsStore = useStoreSettingsStore();
 const productsStore = useProductsStore();
+const mpesaStore = useMpesaCredentialsStore();
 const { push: pushToast } = useToast();
 
 const form = reactive<StoreSettings>({
@@ -39,7 +51,11 @@ const coverUploading = ref(false);
 const showPublishCelebration = ref(false);
 
 onMounted(async () => {
-  await storeSettingsStore.fetchSettings();
+  await Promise.all([
+    storeSettingsStore.fetchSettings(),
+    mpesaStore.fetchCredentials(),
+  ]);
+
   if (storeSettingsStore.settings) {
     const s = storeSettingsStore.settings;
     form.name = s.name || '';
@@ -61,6 +77,7 @@ onMounted(async () => {
 
 const isNewStore = computed(() => !storeSettingsStore.settings?.id);
 const wasPreviouslyDraft = computed(() => storeSettingsStore.settings?.status !== 'published');
+const isMpesaVerified = computed(() => mpesaStore.credentials?.status === 'verified');
 
 const publicStorefrontUrl = computed(() => {
   if (!form.slug) return '#';
@@ -87,7 +104,7 @@ async function uploadImage(event: Event, targetType: 'logo' | 'cover'): Promise<
 
     const cloudinaryUrl = `https://api.cloudinary.com/v1_1/${sigResult.cloudName}/image/upload`;
     const response = await fetch(cloudinaryUrl, { method: 'POST', body: formData });
-    
+
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
       throw new Error(errData.error?.message || 'Cloudinary image upload failed');
@@ -104,7 +121,10 @@ async function uploadImage(event: Event, targetType: 'logo' | 'cover'): Promise<
       form.cover_image_url = data.secure_url;
     }
 
-    pushToast({ message: `${targetType === 'logo' ? 'Logo' : 'Cover image'} uploaded successfully`, variant: 'success' });
+    pushToast({
+      message: `${targetType === 'logo' ? 'Logo' : 'Cover image'} uploaded successfully`,
+      variant: 'success',
+    });
   } catch (err) {
     pushToast({ message: err instanceof Error ? err.message : 'Failed to upload image', variant: 'error' });
   } finally {
@@ -117,6 +137,14 @@ async function uploadImage(event: Event, targetType: 'logo' | 'cover'): Promise<
 async function handleSave(): Promise<void> {
   if (!form.name.trim() || !form.slug.trim()) {
     pushToast({ message: 'Store Name and address Slug are required', variant: 'error' });
+    return;
+  }
+
+  if (form.status === 'published' && !isMpesaVerified.value) {
+    pushToast({
+      message: 'M-Pesa credentials must be verified before publishing your store live.',
+      variant: 'error',
+    });
     return;
   }
 
@@ -299,11 +327,29 @@ async function handleSave(): Promise<void> {
           </div>
         </section>
 
-        <!-- CARD 3: PUBLISHING -->
+        <!-- CARD 3: PUBLISHING STATUS & M-PESA GATE -->
         <section class="section-card card publishing-card" :class="{ 'card-published-active': form.status === 'published' }">
           <div class="card-heading">
             <Globe :size="20" class="card-icon" />
             <h2>Publishing Status</h2>
+          </div>
+
+          <!-- M-Pesa Gateway Readiness Alert -->
+          <div v-if="!isMpesaVerified" class="mpesa-warning-card">
+            <div class="warning-left">
+              <AlertTriangle :size="20" class="text-clay" />
+              <div>
+                <p class="warning-title">M-Pesa Account Not Verified</p>
+                <p class="warning-desc">You must connect and verify your Till or Paybill number before publishing your storefront live.</p>
+              </div>
+            </div>
+            <RouterLink :to="{ name: 'mpesa-setup' }">
+              <Button variant="secondary" size="sm"><Key :size="14" /> Setup M-Pesa</Button>
+            </RouterLink>
+          </div>
+          <div v-else class="mpesa-ready-card">
+            <CheckCircle2 :size="18" class="text-teal" />
+            <p>M-Pesa account verified. Storefront is ready to accept live online payments.</p>
           </div>
 
           <div class="toggle-row">
@@ -313,17 +359,17 @@ async function handleSave(): Promise<void> {
                 <span class="choice-indicator"></span>
                 <div>
                   <p class="choice-title">Draft Mode</p>
-                  <p class="choice-desc">Storefront is hidden and offline from public catalogs.</p>
+                  <p class="choice-desc">Storefront is offline and hidden from public shoppers.</p>
                 </div>
               </div>
             </label>
-            <label class="toggle-choice">
-              <input type="radio" value="published" v-model="form.status" />
+            <label class="toggle-choice" :class="{ 'toggle-choice--disabled': !isMpesaVerified }">
+              <input type="radio" value="published" v-model="form.status" :disabled="!isMpesaVerified" />
               <div class="choice-box">
                 <span class="choice-indicator"></span>
                 <div>
                   <p class="choice-title">Published &amp; Live</p>
-                  <p class="choice-desc">Storefront catalog is live, active, and accessible to shoppers.</p>
+                  <p class="choice-desc">Storefront is live, active, and accessible to shoppers.</p>
                 </div>
               </div>
             </label>
@@ -352,7 +398,6 @@ async function handleSave(): Promise<void> {
             <div class="preview-mini-cart">🛒</div>
           </div>
 
-          <!-- Real StoreHero component bound to reactive local preview form state -->
           <div class="preview-hero-wrapper">
             <StoreHero :settings="form" />
           </div>
@@ -478,6 +523,51 @@ async function handleSave(): Promise<void> {
 }
 .card-icon { color: var(--color-ink); }
 
+/* M-Pesa Alerts in Publishing Card */
+.mpesa-warning-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  background: color-mix(in srgb, var(--color-market-clay) 10%, transparent);
+  border: 1px solid var(--color-market-clay);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
+
+.warning-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1;
+}
+
+.warning-title {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--color-market-clay);
+}
+
+.warning-desc {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  margin-top: 1px;
+}
+
+.mpesa-ready-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: color-mix(in srgb, var(--color-ledger-green) 10%, transparent);
+  border: 1px solid var(--color-ledger-green);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-ledger-green);
+}
+
 .form-group { display: flex; flex-direction: column; gap: var(--space-1); }
 .form-group-row { display: flex; gap: var(--space-4); flex-direction: column; }
 @media (min-width: 640px) { .form-group-row { flex-direction: row; } }
@@ -536,6 +626,7 @@ async function handleSave(): Promise<void> {
 }
 .choice-title { font-size: var(--text-sm); font-weight: 600; color: var(--color-text); }
 .choice-desc { font-size: var(--text-xs); color: var(--color-text-muted); margin-top: 2px; }
+.toggle-choice--disabled { opacity: 0.55; cursor: not-allowed; }
 
 .submit-action-row { display: flex; justify-content: flex-end; }
 
@@ -555,7 +646,7 @@ async function handleSave(): Promise<void> {
   overflow: hidden;
   border-bottom: 1px solid var(--color-border);
 }
-
 .preview-mini-catalog-hint { padding: var(--space-4); text-align: center; font-size: var(--text-xs); color: var(--color-text-muted); }
-.text-teal { color: var(--color-ledger-green);}
+.text-teal { color: var(--color-ledger-green); }
+.text-clay { color: var(--color-market-clay); }
 </style>
