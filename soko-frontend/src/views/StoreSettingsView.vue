@@ -516,7 +516,6 @@ async function handleSave(): Promise<void> {
 .card-icon { color: var(--color-ink); }
 
 /* Informational Non-Blocking Payment Cards */
-Informational Non-Blocking Payment Cards */
 .payment-info-card {
   display: flex;
   align-items: center;
