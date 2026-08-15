@@ -40,7 +40,7 @@ const loadingStore = ref(true);
 const loadingProducts = ref(true);
 const loadError = ref(false);
 
-const storeSlug = computed(() => (route.params.storeSlug as string) || '');
+const storeSlug = computed(() => (route.params.storeSlug as string || '').toLowerCase().trim());
 
 const categories = computed(() => {
   const list = products.value.map(p => p.category?.name).filter(Boolean);
@@ -89,7 +89,7 @@ async function loadStoreData(): Promise<void> {
 
     products.value = await apiGet<PublicProduct[]>(`/public/stores/${storeSlug.value}/products`);
     loadingProducts.value = false;
-  } catch {
+  } catch (err) {
     loadError.value = true;
     loadingStore.value = false;
     loadingProducts.value = false;
@@ -103,7 +103,7 @@ onMounted(() => {
 
 watch(() => route.params.storeSlug, (newSlug) => {
   if (newSlug) {
-    cartStore.initForStore(newSlug as string);
+    cartStore.initForStore(String(newSlug).toLowerCase().trim());
     loadStoreData();
   }
 });

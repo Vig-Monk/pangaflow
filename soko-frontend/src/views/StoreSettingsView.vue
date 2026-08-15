@@ -518,7 +518,7 @@ async function handleSave(): Promise<void> {
 .workspace-grid { display: flex; gap: var(--space-6); align-items: flex-start; }
 .workspace-controls { flex: 1.2; display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
 .workspace-preview-pane {
-  flex: 1;
+ flex: 1;
   position: sticky;
   top: var(--space-6);
   background: var(--color-surface);
@@ -600,7 +600,6 @@ async function handleSave(): Promise<void> {
   font-weight: 600;
   color: var(--color-ledger-green);
 }
-
 .form-group { display: flex; flex-direction: column; gap: var(--space-1); }
 .form-group-row { display: flex; gap: var(--space-4); flex-direction: column; }
 @media (min-width: 640px) { .form-group-row { flex-direction: row; } }
@@ -626,6 +625,7 @@ async function handleSave(): Promise<void> {
 .logo-box { width: 110px; }
 .logo-preview, .cover-preview { width: 100%; height: 100%; object-fit: cover; }
 .hidden-input { display: none; }
+
 .upload-overlay-btn {
   position: absolute; bottom: 0; left: 0; right: 0;
   background: color-mix(in srgb, var(--color-ink) 85%, black);
@@ -635,7 +635,6 @@ async function handleSave(): Promise<void> {
 }
 .upload-overlay-btn.disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* Interactive Toggle Options */
 .toggle-row { display: flex; flex-direction: column; gap: var(--space-3); }
 @media (min-width: 640px) { .toggle-row { flex-direction: row; } }
 

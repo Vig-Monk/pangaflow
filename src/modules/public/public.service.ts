@@ -98,31 +98,39 @@ function toPublicProductDto(row: publicQueries.PublicProductRow): PublicProductD
     description: row.description,
     price: parseFloat(row.price),
     stock: row.stock,
-    images: row.images,
-    category: { name: row.category_name },
+    images: Array.isArray(row.images) ? row.images : [],
+    category: { name: row.category_name || 'General' },
     availability: row.stock > 0 ? 'in_stock' : 'out_of_stock',
   };
 }
 
 export async function getStoreMetadata(storeSlug: string): Promise<PublicStoreDto> {
-  const store = await publicQueries.getStoreBySlugPublic(storeSlug);
+  const normalizedSlug = (storeSlug || '').trim().toLowerCase();
+  const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
   if (!store) throw new AppError('Store not found', 404);
 
-  const creds = await getCredentialsRowByOrgId(store.org_id);
-  const mpesaVerified = creds?.status === 'verified';
+  let mpesaVerified = false;
+  try {
+    const creds = await getCredentialsRowByOrgId(store.org_id);
+    mpesaVerified = creds?.status === 'verified';
+  } catch {
+    mpesaVerified = false;
+  }
 
   return toPublicStoreDto(store, mpesaVerified);
 }
 
 export async function listStoreProducts(storeSlug: string): Promise<PublicProductDto[]> {
-  const store = await publicQueries.getStoreBySlugPublic(storeSlug);
+  const normalizedSlug = (storeSlug || '').trim().toLowerCase();
+  const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
   if (!store) throw new AppError('Store not found', 404);
   const products = await publicQueries.getProductsByStoreOrgIdPublic(store.org_id);
   return products.map(toPublicProductDto);
 }
 
 export async function getProductDetails(storeSlug: string, productSlug: string): Promise<PublicProductDto> {
-  const store = await publicQueries.getStoreBySlugPublic(storeSlug);
+  const normalizedSlug = (storeSlug || '').trim().toLowerCase();
+  const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
   if (!store) throw new AppError('Store not found', 404);
   const product = await publicQueries.getProductBySlugPublic(store.org_id, productSlug);
   if (!product) throw new AppError('Product not found', 404);
@@ -140,7 +148,8 @@ export async function placeOrder(
 
   const { items, ...customerData } = parsed.data;
 
-  const store = await publicQueries.getStoreBySlugPublic(storeSlug);
+  const normalizedSlug = (storeSlug || '').trim().toLowerCase();
+  const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
   if (!store) {
     throw new AppError('Store not found', 404);
   }
@@ -258,7 +267,8 @@ export async function getPublicOrderDetails(
   storeSlug: string,
   orderId: string
 ): Promise<PublicOrderConfirmation> {
-  const store = await publicQueries.getStoreBySlugPublic(storeSlug);
+  const normalizedSlug = (storeSlug || '').trim().toLowerCase();
+  const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
   if (!store) {
     throw new AppError('Store not found', 404);
   }
