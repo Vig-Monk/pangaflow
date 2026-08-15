@@ -107,7 +107,7 @@ async function executePermanentDelete(): Promise<void> {
 </script>
 
 <template>
-  <div class="products-page">
+  <div class="page-container">
     <div class="page-header">
       <div>
         <h1 class="page-title">Products</h1>
@@ -119,73 +119,69 @@ async function executePermanentDelete(): Promise<void> {
       </div>
     </div>
 
-    <div class="table-container-clean">
-      <DataTable
-        :columns="columns"
-        :rows="productsStore.list"
-        :loading="productsStore.isLoading"
-        :row-key="(row) => row.id"
-        empty-title="No products yet"
-        empty-description="Create some products to publish on your online storefront."
-      >
-        <template #cell-status="{ row }">
-          <span class="status-badge" :class="`status-badge--${(row as Product).status}`">
-            {{ (row as Product).status.toUpperCase() }}
-          </span>
-        </template>
+    <DataTable
+      :columns="columns"
+      :rows="productsStore.list"
+      :loading="productsStore.isLoading"
+      :row-key="(row) => row.id"
+      empty-title="No products yet"
+      empty-description="Create some products to publish on your online storefront."
+    >
+      <template #cell-status="{ row }">
+        <span class="status-badge" :class="`status-badge--${(row as Product).status}`">
+          {{ (row as Product).status.toUpperCase() }}
+        </span>
+      </template>
 
-        <template #cell-actions="{ row }">
-          <div class="table-actions">
-            <!-- Edit Button -->
-            <button
-              class="action-icon-btn"
-              title="Edit product"
-              type="button"
-              @click.stop="handleEdit(row as Product)"
-            >
-              <Edit2 :size="15" />
-            </button>
+      <template #cell-actions="{ row }">
+        <div class="table-actions">
+          <button
+            class="action-icon-btn"
+            title="Edit product"
+            type="button"
+            @click.stop="handleEdit(row as Product)"
+          >
+            <Edit2 :size="15" />
+          </button>
 
-            <!-- Archive / Unarchive Button -->
-            <button
-              v-if="(row as Product).status !== 'archived'"
-              class="action-icon-btn"
-              title="Archive product"
-              type="button"
-              @click.stop="handleArchive(row as Product)"
-            >
-              <Archive :size="15" />
-            </button>
-            <button
-              v-else
-              class="action-icon-btn action-icon-btn--restore"
-              title="Unarchive product"
-              type="button"
-              @click.stop="handleUnarchive(row as Product)"
-            >
-              <ArchiveRestore :size="15" />
-            </button>
+          <button
+            v-if="(row as Product).status !== 'archived'"
+            class="action-icon-btn"
+            title="Archive product"
+            type="button"
+            @click.stop="handleArchive(row as Product)"
+          >
+            <Archive :size="15" />
+          </button>
+          <button
+            v-else
+            class="action-icon-btn action-icon-btn--restore"
+            title="Unarchive product"
+            type="button"
+            @click.stop="handleUnarchive(row as Product)"
+          >
+            <ArchiveRestore :size="15" />
+          </button>
 
-            <!-- Permanent Delete Button -->
-            <button
-              class="action-icon-btn action-icon-btn--danger"
-              title="Delete product permanently"
-              type="button"
-              @click.stop="confirmDelete(row as Product)"
-            >
-              <Trash2 :size="15" />
-            </button>
-          </div>
-        </template>
-      </DataTable>
+          <button
+            class="action-icon-btn action-icon-btn--danger"
+            title="Delete product permanently"
+            type="button"
+            @click.stop="confirmDelete(row as Product)"
+          >
+            <Trash2 :size="15" />
+          </button>
+        </div>
+      </template>
+    </DataTable>
+
+    <div class="pagination-wrap" v-if="productsStore.list.length > 0">
+      <Pagination
+        :page="productsStore.page"
+        :total-pages="Math.max(1, Math.ceil(productsStore.total / 20))"
+        :on-change="(p) => productsStore.fetchList({ page: p, q: searchQuery })"
+      />
     </div>
-
-    <Pagination
-      v-if="productsStore.list.length > 0"
-      :page="productsStore.page"
-      :total-pages="Math.max(1, Math.ceil(productsStore.total / 20))"
-      :on-change="(p) => productsStore.fetchList({ page: p, q: searchQuery })"
-    />
 
     <ConfirmDialog
       :open="showConfirmDelete"
@@ -200,10 +196,11 @@ async function executePermanentDelete(): Promise<void> {
 </template>
 
 <style scoped>
-.products-page {
-  padding: var(--space-6);
-  max-width: 960px;
+.page-container {
+  max-width: 1040px;
+  width: 100%;
   margin: 0 auto;
+  padding: var(--space-6);
 }
 
 .page-header {
@@ -223,14 +220,6 @@ async function executePermanentDelete(): Promise<void> {
   gap: var(--space-3);
   align-items: center;
   flex-wrap: wrap;
-}
-
-.table-container-clean {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  margin-bottom: var(--space-6);
 }
 
 .status-badge {
@@ -284,5 +273,9 @@ async function executePermanentDelete(): Promise<void> {
 .action-icon-btn--danger:hover {
   color: var(--color-market-clay);
   border-color: var(--color-market-clay);
+}
+
+.pagination-wrap {
+  margin-top: var(--space-6);
 }
 </style>

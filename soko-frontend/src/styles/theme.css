@@ -1,230 +1,171 @@
 /* =============================================================================
-   src/styles/theme.css
-   SOKO CONSOLE DESIGN SYSTEM
-   Premium commerce palette — Soko red, deep espresso, soft white.
+   soko-frontend/src/styles/theme.css
+   SOKO RESPONSIVE DESIGN SYSTEM
+   Palette: Vibrant Crimson (#D91E4E), Rich Emerald, True Charcoals & Soft Whites.
+   Features: Fluid responsive spacing, clamped typography, ambient soft depth.
    ========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
 
 :root {
-  /* ---------- Brand palette ---------- */
+  /* =========================================================================
+     1. MASTER BRAND ANCHOR (Change this single token to re-theme the app/store)
+     ========================================================================= */
+  --brand-primary: #D91E4E;
+  --brand-primary-hover: color-mix(in srgb, var(--brand-primary) 85%, #000000);
+  --brand-primary-light: color-mix(in srgb, var(--brand-primary) 10%, transparent);
 
-  /* Soko signature red — primary actions and brand moments */
-  --color-ink: #D91E4E;
-  --color-ink-hover: #B91843;
+  /* =========================================================================
+     2. BRAND TOKENS (Preserving legacy names for seamless compatibility)
+     ========================================================================= */
 
-  /* Deep espresso — neutral strong actions and dark surfaces */
-  --color-dark: #0D0907;
-  --color-dark-hover: #211915;
+  /* Deep charcoal ink for high-contrast text, solid buttons, headings */
+  --color-ink: #18181B;
+  --color-ink-hover: #27272A;
 
-  /*
-   * Legacy alias.
-   * Existing components using --color-gold now inherit Soko red.
-   * No gold remains in the visual system.
-   */
-  --color-gold: #D91E4E;
-  --color-gold-hover: #B91843;
+  /* Accent & Highlight (Driven directly by master brand anchor) */
+  --color-gold: var(--brand-primary);
+  --color-gold-hover: var(--brand-primary-hover);
 
-  /* ---------- Functional colors ---------- */
+  /* Functional Status Colors */
+  --color-ledger-green: #1F7A4D;       /* Rich Botanical Emerald */
+  --color-ledger-green-hover: #166534;
+  --color-market-clay: #C2410C;        /* Warm Terracotta / Destructive */
+  --color-info: #3B82F6;               /* Balanced Info Blue */
 
-  --color-ledger-green: #3F7658;
-  --color-market-clay: #A95543;
-  --color-info: #5E7187;
+  /* =========================================================================
+     3. LIGHT MODE SURFACES & TEXT
+     ========================================================================= */
 
-  /* ---------- Surfaces ---------- */
-
-  /* Soft white — easier on the eyes than pure white */
-  --color-bg: #FAFAF8;
-
-  /* Cards and panels */
+  /* Soft, eye-friendly off-white canvas (eliminates harsh pure-white glare) */
+  --color-bg: #F8F9FA;
   --color-surface: #FFFFFF;
   --color-surface-raised: #FFFFFF;
+  
+  /* Softened border: prevents "grid-cage" visual clutter on small screens */
+  --color-border: #EBECEF;
 
-  /*
-   * Extremely soft border.
-   * Designed to feel like the edge of elevation rather than
-   * a visible line around the component.
-   */
-  --color-border: #ECEBE8;
-
-  /* ---------- Text ---------- */
-
-  --color-text: #0D0907;
-  --color-text-muted: #77716D;
-
-  /*
-   * Always white.
-   * Primary colored buttons therefore use white text
-   * consistently in both light and dark themes.
-   */
+  /* Typography Colors */
+  --color-text: #18181B;
+  --color-text-muted: #64748B;
   --color-text-inverse: #FFFFFF;
 
-  /* ---------- Focus / interaction ---------- */
+  /* Focus Ring */
+  --color-focus-ring: var(--brand-primary);
 
-  --color-focus-ring: #D91E4E;
+  /* =========================================================================
+     4. UNIFIED SANS-SERIF TYPOGRAPHY & FLUID CLAMPED SCALES
+     ========================================================================= */
+  --font-display: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
 
-  /* ---------- Typography ---------- */
+  /* Fluid typography: scales naturally between 360px mobile and 1200px desktop */
+  --text-xs: 0.75rem;                                    /* 12px */
+  --text-sm: 0.8125rem;                                  /* 13px */
+  --text-base: 0.9375rem;                                /* 15px - optimal mobile baseline */
+  --text-lg: clamp(1.0625rem, 1.5vw + 0.8rem, 1.1875rem);/* 17px - 19px */
+  --text-xl: clamp(1.1875rem, 2vw + 0.8rem, 1.375rem);   /* 19px - 22px */
+  --text-2xl: clamp(1.375rem, 2.5vw + 0.8rem, 1.625rem); /* 22px - 26px */
+  --text-3xl: clamp(1.625rem, 3.5vw + 0.8rem, 2.125rem); /* 26px - 34px */
+  --text-4xl: clamp(1.875rem, 5vw + 0.8rem, 2.625rem);   /* 30px - 42px */
 
-  --font-display: 'Fraunces', Georgia, serif;
-  --font-body: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: 'IBM Plex Mono', 'SF Mono', Consolas, monospace;
+  --leading-tight: 1.22;
+  --leading-normal: 1.6;
+  --leading-relaxed: 1.75;
 
-  --text-xs: 0.75rem;
-  --text-sm: 0.8125rem;
-  --text-base: 1rem;
-  --text-lg: 1.125rem;
-  --text-xl: 1.25rem;
-  --text-2xl: 1.5rem;
-  --text-3xl: 2rem;
-  --text-4xl: 2.5rem;
+  /* =========================================================================
+     5. RESPONSIVE FLUID SPACING (Mobile-first airy spacing)
+     ========================================================================= */
+  --space-1: 0.25rem;   /* 4px */
+  --space-2: 0.5rem;    /* 8px */
+  --space-3: 0.75rem;   /* 12px */
+  --space-4: 1rem;      /* 16px */
+  --space-5: 1.25rem;   /* 20px */
+  --space-6: 1.5rem;    /* 24px (desktop) -> dynamically relaxed on mobile */
+  --space-8: 2rem;      /* 32px (desktop) */
+  --space-10: 2.5rem;   /* 40px */
+  --space-12: 3rem;     /* 48px */
+  --space-16: 4rem;     /* 64px */
 
-  --leading-tight: 1.2;
-  --leading-normal: 1.5;
-  --leading-relaxed: 1.7;
+  /* =========================================================================
+     6. RADII & SHADOWS
+     ========================================================================= */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-full: 9999px;
 
-  /* ---------- Spacing (4px base grid) ---------- */
+  /* Soft, ambient shadows (replaces heavy visual border borders) */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.05), 0 2px 6px rgba(0, 0, 0, 0.02);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.07), 0 4px 10px rgba(0, 0, 0, 0.03);
 
-  --space-1: 0.25rem;
-  --space-2: 0.5rem;
-  --space-3: 0.75rem;
-  --space-4: 1rem;
-  --space-5: 1.25rem;
-  --space-6: 1.5rem;
-  --space-8: 2rem;
-  --space-10: 2.5rem;
-  --space-12: 3rem;
-  --space-16: 4rem;
-
-  /* ---------- Radius ---------- */
-
-  /*
-   * Boxier, more architectural treatment.
-   * Full is reserved for pills and circular controls.
-   */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-full: 999px;
-
-  /* ---------- Shadows ---------- */
-
-  /*
-   * Soft neutral shadows.
-   * Combined with the subtle border, surfaces should feel lifted
-   * rather than outlined.
-   */
-
-  --shadow-sm:
-    0 1px 2px rgba(13, 9, 7, 0.035),
-    0 1px 1px rgba(13, 9, 7, 0.02);
-
-  --shadow-md:
-    0 4px 12px rgba(13, 9, 7, 0.055),
-    0 2px 4px rgba(13, 9, 7, 0.025);
-
-  --shadow-lg:
-    0 12px 32px rgba(13, 9, 7, 0.075),
-    0 4px 8px rgba(13, 9, 7, 0.035);
-
-  /* ---------- Motion ---------- */
-
+  /* Motion Standards */
   --duration-fast: 120ms;
   --duration-base: 200ms;
   --duration-slow: 320ms;
-
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-
 /* =============================================================================
-   DARK MODE
-   Deep espresso rather than blue-black or green-black.
+   MOBILE OVERRIDES (<= 640px)
+   Reclaims valuable screen real estate and prevents cramming on mobile phones.
    ========================================================================== */
 
-[data-theme='dark'] {
-  /* ---------- Brand ---------- */
+@media (max-width: 640px) {
+  :root {
+    /* Compress large desktop padding down on mobile */
+    --space-5: 1rem;       /* 16px */
+    --space-6: 1.125rem;   /* 18px (saves 12px of margin width) */
+    --space-8: 1.375rem;   /* 22px (saves 20px of margin width) */
+    --space-10: 1.75rem;   /* 28px */
+    --space-12: 2rem;      /* 32px */
+    --space-16: 2.5rem;    /* 40px */
 
-  --color-ink: #D91E4E;
-  --color-ink-hover: #EF3A67;
-
-  --color-dark: #0D0907;
-  --color-dark-hover: #211915;
-
-  /* Legacy alias — remains Soko red */
-  --color-gold: #D91E4E;
-  --color-gold-hover: #EF3A67;
-
-  /* ---------- Functional colors ---------- */
-
-  --color-ledger-green: #6FA27F;
-  --color-market-clay: #C87563;
-  --color-info: #8FA5BC;
-
-  /* ---------- Surfaces ---------- */
-
-  /*
-   * Layered warm-charcoal surfaces.
-   *
-   * Background:
-   * #0D0907
-   *
-   * Card:
-   * #171311
-   *
-   * Raised:
-   * #211C19
-   */
-  --color-bg: #0D0907;
-  --color-surface: #171311;
-  --color-surface-raised: #211C19;
-
-  /* Quiet dark border */
-  --color-border: #2B2522;
-
-  /* ---------- Text ---------- */
-
-  --color-text: #F4F1EE;
-  --color-text-muted: #A69F9A;
-
-  /*
-   * Always white.
-   * Primary red buttons therefore have identical text treatment
-   * across both themes.
-   */
-  --color-text-inverse: #FFFFFF;
-
-  /* ---------- Focus ---------- */
-
-  --color-focus-ring: #D91E4E;
-
-  /* ---------- Shadows ---------- */
-
-  --shadow-sm:
-    0 1px 2px rgba(0, 0, 0, 0.22);
-
-  --shadow-md:
-    0 4px 12px rgba(0, 0, 0, 0.30),
-    0 2px 4px rgba(0, 0, 0, 0.16);
-
-  --shadow-lg:
-    0 12px 32px rgba(0, 0, 0, 0.40),
-    0 4px 8px rgba(0, 0, 0, 0.20);
-}
-
-
-/* =============================================================================
-   RESPECT SYSTEM COLOR PREFERENCE
-   ========================================================================== */
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    color-scheme: dark;
+    /* Softer radius on small viewports */
+    --radius-lg: 12px;
   }
 }
 
+/* =============================================================================
+   DARK MODE (True Warm Charcoal & Luminous Accents)
+   ========================================================================== */
+
+[data-theme='dark'] {
+  --brand-primary: #E83D69;
+  --brand-primary-hover: color-mix(in srgb, var(--brand-primary) 85%, #FFFFFF);
+  --brand-primary-light: color-mix(in srgb, var(--brand-primary) 18%, transparent);
+
+  /* Deep Warm Charcoal Surfaces */
+  --color-bg: #111113;
+  --color-surface: #18181B;
+  --color-surface-raised: #222226;
+  --color-border: #27272A;
+
+  --color-ink: #F4F4F5;
+  --color-ink-hover: #FFFFFF;
+
+  --color-gold: var(--brand-primary);
+  --color-gold-hover: var(--brand-primary-hover);
+
+  --color-ledger-green: #34D399;
+  --color-market-clay: #FB7185;
+  --color-info: #60A5FA;
+
+  --color-text: #F4F4F5;
+  --color-text-muted: #94A3B8;
+  --color-text-inverse: #111113;
+
+  --color-focus-ring: var(--brand-primary);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.44);
+}
 
 /* =============================================================================
-   BASE
+   GLOBAL RESET & ACCESSIBILITY
    ========================================================================== */
 
 * {
@@ -242,80 +183,61 @@ body {
   font-family: var(--font-body);
   font-size: var(--text-base);
   line-height: var(--leading-normal);
-
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
-  transition:
-    background var(--duration-base) var(--ease-standard),
-    color var(--duration-base) var(--ease-standard);
+  transition: background var(--duration-base) var(--ease-standard),
+              color var(--duration-base) var(--ease-standard);
 }
 
-h1,
-h2,
-.page-title {
+/* Fluid Headings with tight, modern tracking */
+h1, h2, h3, .page-title {
   font-family: var(--font-display);
-  font-weight: 500;
+  font-weight: 700;
+  letter-spacing: -0.025em;
   line-height: var(--leading-tight);
 }
 
-
-/* =============================================================================
-   NUMERICAL / MONETARY FIGURES
-   ========================================================================== */
-
+/* Numerical & currency figures */
 .tabular-figure {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-weight: 500;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
+/* Card utility: ambient shadow + clean background */
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
 
-/* =============================================================================
-   ACCESSIBILITY
-   ========================================================================== */
-
+/* Visible Accessibility Focus */
 :focus-visible {
   outline: 2px solid var(--color-focus-ring);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
 
-
-/* =============================================================================
-   REDUCED MOTION
-   ========================================================================== */
-
+/* Reduced Motion Override */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
-    animation-delay: 0s !important;
   }
 }
 
-
 /* =============================================================================
-   SIGNATURE: STITCHED-MARGIN ACCENT BAR
+   SIGNATURE STITCHED ACCENTS
    ========================================================================== */
 
 .stitch {
   border-left: 3px solid var(--stitch-color, var(--color-border));
   padding-left: var(--space-4);
 }
-
-.stitch--in {
-  --stitch-color: var(--color-ledger-green);
-}
-
-.stitch--out {
-  --stitch-color: var(--color-market-clay);
-}
-
-.stitch--adjust {
-  --stitch-color: var(--color-ink);
-}
+.stitch--in     { --stitch-color: var(--color-ledger-green); }
+.stitch--out    { --stitch-color: var(--color-market-clay); }
+.stitch--adjust { --stitch-color: var(--brand-primary); }

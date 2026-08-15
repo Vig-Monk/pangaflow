@@ -1,7 +1,6 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/views/ExpensesView.vue (PROMPT 16)
-// Clean visual rhythm without unnecessary card containers.
+// soko-frontend/src/views/ExpensesView.vue
 // =============================================================================
 
 import { onMounted, ref } from 'vue';
@@ -11,6 +10,7 @@ import DataTable, { type DataTableColumn } from '@/components/ui/DataTable.vue';
 import Modal from '@/components/ui/Modal.vue';
 import Button from '@/components/ui/Button.vue';
 import CurrencyInput from '@/components/ui/CurrencyInput.vue';
+import Pagination from '@/components/ui/Pagination.vue';
 import { Plus, Filter } from 'lucide-vue-next';
 
 const expensesStore = useExpensesStore();
@@ -95,7 +95,7 @@ async function submitAdd(): Promise<void> {
       isRecurring: newIsRecurring.value,
       recurrenceDay: newIsRecurring.value && newRecurrenceDay.value ? newRecurrenceDay.value : undefined,
     });
-    pushToast({ message: 'Expense added', variant: 'success' });
+    pushToast({ message: 'Expense recorded successfully', variant: 'success' });
     showAddModal.value = false;
   } catch (err) {
     pushToast({ message: err instanceof Error ? err.message : 'Failed to add expense', variant: 'error' });
@@ -106,16 +106,16 @@ async function submitAdd(): Promise<void> {
 </script>
 
 <template>
-  <div class="expenses-page">
+  <div class="page-container">
     <div class="page-header">
       <div>
         <h1 class="page-title">Expenses</h1>
-        <p class="page-subtitle">Track operational spending and overhead.</p>
+        <p class="page-subtitle">Track operational spending and business overhead.</p>
       </div>
       <Button variant="primary" @click="openAddModal"><Plus :size="18" /> Add Expense</Button>
     </div>
 
-    <!-- Filter toolbar without heavy card containers -->
+    <!-- Filter toolbar -->
     <div class="filter-bar">
       <div class="filter-field-group">
         <Filter :size="16" class="text-muted" />
@@ -128,14 +128,20 @@ async function submitAdd(): Promise<void> {
       <input v-model="filterEndDate" type="date" class="filter-bar__input" @change="applyFilters" />
     </div>
 
-    <div class="table-container-clean">
-      <DataTable
-        :columns="columns"
-        :rows="expensesStore.list"
-        :loading="expensesStore.isLoading"
-        :row-key="(row) => row.id"
-        empty-title="No expenses recorded"
-        empty-description="Add your first expense to start tracking spend."
+    <DataTable
+      :columns="columns"
+      :rows="expensesStore.list"
+      :loading="expensesStore.isLoading"
+      :row-key="(row) => row.id"
+      empty-title="No expenses recorded"
+      empty-description="Add your first expense to start tracking spend."
+    />
+
+    <div class="pagination-wrap" v-if="expensesStore.list.length > 0">
+      <Pagination
+        :page="expensesStore.page"
+        :total-pages="Math.max(1, Math.ceil(expensesStore.total / 20))"
+        :on-change="(p) => expensesStore.fetchList({ page: p })"
       />
     </div>
 
@@ -178,10 +184,11 @@ async function submitAdd(): Promise<void> {
 </template>
 
 <style scoped>
-.expenses-page {
-  padding: var(--space-6);
-  max-width: 960px;
+.page-container {
+  max-width: 1040px;
+  width: 100%;
   margin: 0 auto;
+  padding: var(--space-6);
 }
 
 .page-header {
@@ -236,13 +243,6 @@ async function submitAdd(): Promise<void> {
   outline: none;
 }
 
-.table-container-clean {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-}
-
 .modal-form { display: flex; flex-direction: column; gap: var(--space-4); }
 .modal-form__select, .modal-form__input {
   min-height: 44px; padding: 0 var(--space-4);
@@ -256,4 +256,8 @@ async function submitAdd(): Promise<void> {
 .modal-form__checkbox { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); color: var(--color-text); }
 
 :deep(.expense-amount) { color: var(--color-market-clay); font-weight: 600; }
+
+.pagination-wrap {
+  margin-top: var(--space-6);
+}
 </style>

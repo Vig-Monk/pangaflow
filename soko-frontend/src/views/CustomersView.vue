@@ -1,7 +1,6 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/views/CustomersView.vue (PROMPT 16)
-// Clean visual rhythm for customer directory.
+// soko-frontend/src/views/CustomersView.vue
 // =============================================================================
 
 import { computed, onMounted, ref } from 'vue';
@@ -33,7 +32,7 @@ function formatCurrency(value: string): string {
 
 const columns: DataTableColumn<Customer>[] = [
   { key: 'name', label: 'Name' },
-  { key: 'phone', label: 'Phone' },
+  { key: 'phone', label: 'Phone', render: (row) => row.phone ?? '—' },
   {
     key: 'current_balance',
     label: 'Balance',
@@ -101,7 +100,7 @@ async function submitAdd(): Promise<void> {
       return;
     }
 
-    pushToast({ message: 'Customer added', variant: 'success' });
+    pushToast({ message: 'Customer added successfully', variant: 'success' });
     showAddModal.value = false;
   } catch (err) {
     pushToast({ message: err instanceof Error ? err.message : 'Failed to add customer', variant: 'error' });
@@ -112,7 +111,7 @@ async function submitAdd(): Promise<void> {
 </script>
 
 <template>
-  <div class="customers-page">
+  <div class="page-container">
     <div class="page-header">
       <div>
         <h1 class="page-title">Customers</h1>
@@ -124,24 +123,23 @@ async function submitAdd(): Promise<void> {
       </div>
     </div>
 
-    <div class="table-container-clean">
-      <DataTable
-        :columns="columns"
-        :rows="displayedRows"
-        :loading="customersStore.isLoading"
-        :row-key="(row) => row.id"
-        :on-row-click="handleRowClick"
-        empty-title="No customers yet"
-        empty-description="Add your first customer to start tracking credit."
+    <DataTable
+      :columns="columns"
+      :rows="displayedRows"
+      :loading="customersStore.isLoading"
+      :row-key="(row) => row.id"
+      :on-row-click="handleRowClick"
+      empty-title="No customers yet"
+      empty-description="Add your first customer to start tracking credit."
+    />
+
+    <div class="pagination-wrap" v-if="!isSearchMode && customersStore.list.length > 0">
+      <Pagination
+        :page="customersStore.page"
+        :total-pages="Math.max(1, Math.ceil(customersStore.total / 20))"
+        :on-change="(p) => customersStore.fetchList({ page: p })"
       />
     </div>
-
-    <Pagination
-      v-if="!isSearchMode && customersStore.list.length > 0"
-      :page="customersStore.page"
-      :total-pages="Math.max(1, Math.ceil(customersStore.total / 20))"
-      :on-change="(p) => customersStore.fetchList({ page: p })"
-    />
 
     <!-- Add Customer modal -->
     <Modal :open="showAddModal" title="Add Customer" @close="showAddModal = false">
@@ -165,10 +163,11 @@ async function submitAdd(): Promise<void> {
 </template>
 
 <style scoped>
-.customers-page {
-  padding: var(--space-6);
-  max-width: 960px;
+.page-container {
+  max-width: 1040px;
+  width: 100%;
   margin: 0 auto;
+  padding: var(--space-6);
 }
 
 .page-header {
@@ -190,14 +189,6 @@ async function submitAdd(): Promise<void> {
   flex-wrap: wrap;
 }
 
-.table-container-clean {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  margin-bottom: var(--space-6);
-}
-
 .modal-form { display: flex; flex-direction: column; gap: var(--space-4); }
 .modal-form__input {
   min-height: 44px; padding: 0 var(--space-4); background: var(--color-bg);
@@ -206,4 +197,8 @@ async function submitAdd(): Promise<void> {
 
 :deep(.balance-owed) { color: var(--color-market-clay); font-weight: 600; }
 :deep(.balance-credit) { color: var(--color-ledger-green); font-weight: 600; }
+
+.pagination-wrap {
+  margin-top: var(--space-6);
+}
 </style>

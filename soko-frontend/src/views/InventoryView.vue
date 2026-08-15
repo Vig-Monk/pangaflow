@@ -73,7 +73,7 @@ async function saveAdjustment(): Promise<void> {
 </script>
 
 <template>
-  <div class="inventory-page">
+  <div class="page-container">
     <header class="page-header">
       <div>
         <h1 class="page-title">Inventory</h1>
@@ -87,23 +87,22 @@ async function saveAdjustment(): Promise<void> {
       </div>
     </header>
 
-    <div class="table-container-clean">
-      <DataTable
-        :columns="columns"
-        :rows="productsStore.inventoryList"
-        :loading="productsStore.isLoading"
-        :row-key="(row) => row.id"
-        :on-row-click="handleRowClick"
-        empty-title="No inventory records found"
+    <DataTable
+      :columns="columns"
+      :rows="productsStore.inventoryList"
+      :loading="productsStore.isLoading"
+      :row-key="(row) => row.id"
+      :on-row-click="handleRowClick"
+      empty-title="No inventory records found"
+    />
+
+    <div class="pagination-wrap" v-if="productsStore.inventoryList.length > 0">
+      <Pagination
+        :page="productsStore.inventoryPage"
+        :total-pages="Math.max(1, Math.ceil(productsStore.inventoryTotal / 20))"
+        :on-change="(p) => fetchInventoryData(p)"
       />
     </div>
-
-    <Pagination
-      v-if="productsStore.inventoryList.length > 0"
-      :page="productsStore.inventoryPage"
-      :total-pages="Math.max(1, Math.ceil(productsStore.inventoryTotal / 20))"
-      :on-change="(p) => fetchInventoryData(p)"
-    />
 
     <Modal :open="showAdjustModal" title="Update Stock Quantity" @close="showAdjustModal = false">
       <div v-if="activeProduct" class="stock-adjust-form">
@@ -122,10 +121,11 @@ async function saveAdjustment(): Promise<void> {
 </template>
 
 <style scoped>
-.inventory-page {
-  padding: var(--space-6);
-  max-width: 960px;
+.page-container {
+  max-width: 1040px;
+  width: 100%;
   margin: 0 auto;
+  padding: var(--space-6);
 }
 
 .page-header {
@@ -155,14 +155,6 @@ async function saveAdjustment(): Promise<void> {
   cursor: pointer;
 }
 
-.table-container-clean {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  margin-bottom: var(--space-6);
-}
-
 .stock-adjust-form { display: flex; flex-direction: column; gap: var(--space-4); }
 .adjust-label { font-size: var(--text-sm); color: var(--color-text); }
 .form-label { font-size: var(--text-xs); font-weight: 600; color: var(--color-text-muted); margin-bottom: var(--space-1); display: block; }
@@ -173,4 +165,8 @@ async function saveAdjustment(): Promise<void> {
 }
 
 :deep(.low-stock-cell) { color: var(--color-market-clay); font-weight: 600; }
+
+.pagination-wrap {
+  margin-top: var(--space-6);
+}
 </style>

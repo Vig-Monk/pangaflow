@@ -99,7 +99,7 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
 </template>
 
 <style scoped>
-/* Outer box: locks to parent width and prevents any page overflow */
+/* Outer box: locks to parent width and prevents page-level horizontal blowout */
 .data-table-wrapper {
   width: 100%;
   max-width: 100%;
@@ -110,7 +110,7 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
   position: relative;
 }
 
-/* Inner scroll viewport: enables clean swiping on mobile screens */
+/* Inner scroll viewport: smooth touch swipe on mobile screens */
 .data-table-scroll-container {
   width: 100%;
   max-width: 100%;
@@ -118,10 +118,10 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
   -webkit-overflow-scrolling: touch;
 }
 
-/* Table: maintains clean proportions on all screens without collapsing */
+/* Table: maintains clean proportions on all screens without crunching */
 .data-table__table {
   width: 100%;
-  min-width: 620px; /* Prevents columns from crunching on small phones */
+  min-width: 620px;
   border-collapse: collapse;
   text-align: left;
 }
@@ -158,3 +158,54 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
   padding: var(--space-3) var(--space-4);
   font-size: var(--text-sm);
   color: var(--color-text);
+  vertical-align: middle;
+}
+.data-table__td--right { text-align: right; }
+
+:deep(.table-actions),
+:deep(.status-badge),
+:deep(.status-pill) {
+  white-space: nowrap;
+}
+
+/* Custom scrollbar for horizontal swipe */
+.data-table-scroll-container::-webkit-scrollbar {
+  height: 5px;
+}
+.data-table-scroll-container::-webkit-scrollbar-track {
+  background: var(--color-bg);
+}
+.data-table-scroll-container::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: var(--radius-full);
+}
+.data-table-scroll-container::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
+
+/* Smooth FLIP Transitions */
+.table-row-move,
+.table-row-enter-active,
+.table-row-leave-active {
+  transition: transform var(--duration-base) var(--ease-standard),
+              opacity var(--duration-base) var(--ease-standard);
+}
+
+.table-row-enter-from {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+.table-row-leave-to {
+  opacity: 0;
+  transform: scale(0.96);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .table-row-move,
+  .table-row-enter-active,
+  .table-row-leave-active {
+    transition: none;
+  }
+}
+</style>

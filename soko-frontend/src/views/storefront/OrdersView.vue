@@ -75,9 +75,12 @@ function handleRowClick(row: OrderRow): void {
 </script>
 
 <template>
-  <div class="orders-page">
+  <div class="page-container">
     <header class="page-header">
-      <h1 class="page-title">Storefront Orders</h1>
+      <div>
+        <h1 class="page-title">Storefront Orders</h1>
+        <p class="page-subtitle">Monitor incoming customer orders and payment statuses.</p>
+      </div>
     </header>
 
     <DataTable
@@ -90,20 +93,22 @@ function handleRowClick(row: OrderRow): void {
       empty-description="When customers checkout on your storefront, orders will appear here."
     />
 
-    <Pagination
-      v-if="orders.length > 0"
-      :page="pageNum"
-      :total-pages="Math.max(1, Math.ceil(totalItems / 20))"
-      :on-change="(p) => fetchOrders(p)"
-    />
+    <div class="pagination-wrap" v-if="orders.length > 0">
+      <Pagination
+        :page="pageNum"
+        :total-pages="Math.max(1, Math.ceil(totalItems / 20))"
+        :on-change="(p) => fetchOrders(p)"
+      />
+    </div>
   </div>
 </template>
 
 <style scoped>
-.orders-page {
-  padding: var(--space-6);
-  max-width: 960px;
+.page-container {
+  max-width: 1040px;
+  width: 100%;
   margin: 0 auto;
+  padding: var(--space-6);
 }
 
 .page-header {
@@ -112,5 +117,15 @@ function handleRowClick(row: OrderRow): void {
 
 .page-title {
   font-size: var(--text-2xl);
+}
+
+.page-subtitle {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
+.pagination-wrap {
+  margin-top: var(--space-6);
 }
 </style>
