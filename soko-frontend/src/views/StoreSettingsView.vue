@@ -17,9 +17,9 @@ import {
   Image as ImageIcon,
   Sparkles,
   CheckCircle2,
-  AlertTriangle,
   Globe,
   Key,
+  Info,
 } from 'lucide-vue-next';
 
 const storeSettingsStore = useStoreSettingsStore();
@@ -140,14 +140,6 @@ async function handleSave(): Promise<void> {
     return;
   }
 
-  if (form.status === 'published' && !isMpesaVerified.value) {
-    pushToast({
-      message: 'M-Pesa credentials must be verified before publishing your store live.',
-      variant: 'error',
-    });
-    return;
-  }
-
   isSaving.value = true;
   try {
     const isTransitioningToLive = form.status === 'published' && wasPreviouslyDraft.value;
@@ -211,7 +203,7 @@ async function handleSave(): Promise<void> {
           <CheckCircle2 :size="28" class="text-teal" />
           <div>
             <h3>Your store is now live!</h3>
-            <p>Shoppers can now browse your catalog and place orders via your public link.</p>
+            <p>Shoppers can browse your catalog and place orders via your public store link.</p>
           </div>
         </div>
         <div class="celebration-actions">
@@ -327,29 +319,29 @@ async function handleSave(): Promise<void> {
           </div>
         </section>
 
-        <!-- CARD 3: PUBLISHING STATUS & M-PESA GATE -->
+        <!-- CARD 3: PUBLISHING STATUS & PAYMENT READINESS -->
         <section class="section-card card publishing-card" :class="{ 'card-published-active': form.status === 'published' }">
           <div class="card-heading">
             <Globe :size="20" class="card-icon" />
             <h2>Publishing Status</h2>
           </div>
 
-          <!-- M-Pesa Gateway Readiness Alert -->
-          <div v-if="!isMpesaVerified" class="mpesa-warning-card">
-            <div class="warning-left">
-              <AlertTriangle :size="20" class="text-clay" />
+          <!-- Informational M-Pesa Setup Card (Non-blocking) -->
+          <div v-if="!isMpesaVerified" class="payment-info-card">
+            <div class="info-left">
+              <Info :size="18" class="text-muted" />
               <div>
-                <p class="warning-title">M-Pesa Account Not Verified</p>
-                <p class="warning-desc">You must connect and verify your Till or Paybill number before publishing your storefront live.</p>
+                <p class="info-title">Accepting Cash on Delivery / Manual M-Pesa</p>
+                <p class="info-desc">You can publish right away. Connect your Till or Paybill anytime to enable direct STK push payments.</p>
               </div>
             </div>
             <RouterLink :to="{ name: 'mpesa-setup' }">
-              <Button variant="secondary" size="sm"><Key :size="14" /> Setup M-Pesa</Button>
+              <Button variant="secondary" size="sm"><Key :size="14" /> Setup Direct M-Pesa</Button>
             </RouterLink>
           </div>
-          <div v-else class="mpesa-ready-card">
+          <div v-else class="payment-verified-card">
             <CheckCircle2 :size="18" class="text-teal" />
-            <p>M-Pesa account verified. Storefront is ready to accept live online payments.</p>
+            <p>Direct M-Pesa STK Push active. Shoppers can pay instantly to your Till/Paybill.</p>
           </div>
 
           <div class="toggle-row">
@@ -363,13 +355,13 @@ async function handleSave(): Promise<void> {
                 </div>
               </div>
             </label>
-            <label class="toggle-choice" :class="{ 'toggle-choice--disabled': !isMpesaVerified }">
-              <input type="radio" value="published" v-model="form.status" :disabled="!isMpesaVerified" />
+            <label class="toggle-choice">
+              <input type="radio" value="published" v-model="form.status" />
               <div class="choice-box">
                 <span class="choice-indicator"></span>
                 <div>
                   <p class="choice-title">Published &amp; Live</p>
-                  <p class="choice-desc">Storefront is live, active, and accessible to shoppers.</p>
+                  <p class="choice-desc">Storefront is live and accepting customer orders.</p>
                 </div>
               </div>
             </label>
@@ -523,39 +515,40 @@ async function handleSave(): Promise<void> {
 }
 .card-icon { color: var(--color-ink); }
 
-/* M-Pesa Alerts in Publishing Card */
-.mpesa-warning-card {
+/* Informational Non-Blocking Payment Cards */
+Informational Non-Blocking Payment Cards */
+.payment-info-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-3);
-  background: color-mix(in srgb, var(--color-market-clay) 10%, transparent);
-  border: 1px solid var(--color-market-clay);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   padding: var(--space-3) var(--space-4);
 }
 
-.warning-left {
+.info-left {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   flex: 1;
 }
 
-.warning-title {
+.info-title {
   font-size: var(--text-sm);
-  font-weight: 700;
-  color: var(--color-market-clay);
+  font-weight: 600;
+  color: var(--color-text);
 }
 
-.warning-desc {
+.info-desc {
   font-size: var(--text-xs);
   color: var(--color-text-muted);
   margin-top: 1px;
 }
 
-.mpesa-ready-card {
+.payment-verified-card {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -626,7 +619,6 @@ async function handleSave(): Promise<void> {
 }
 .choice-title { font-size: var(--text-sm); font-weight: 600; color: var(--color-text); }
 .choice-desc { font-size: var(--text-xs); color: var(--color-text-muted); margin-top: 2px; }
-.toggle-choice--disabled { opacity: 0.55; cursor: not-allowed; }
 
 .submit-action-row { display: flex; justify-content: flex-end; }
 
@@ -646,7 +638,7 @@ async function handleSave(): Promise<void> {
   overflow: hidden;
   border-bottom: 1px solid var(--color-border);
 }
+
 .preview-mini-catalog-hint { padding: var(--space-4); text-align: center; font-size: var(--text-xs); color: var(--color-text-muted); }
 .text-teal { color: var(--color-ledger-green); }
-.text-clay { color: var(--color-market-clay); }
 </style>
