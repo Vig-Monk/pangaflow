@@ -35,21 +35,24 @@ const allowedOrigins: string[] = [
     "http://localhost:5173",
     env.FRONTEND_URL
 ].filter((origin): origin is string => origin.length > 0);
-
 app.use(
     cors({
         origin: (requestOrigin, callback) => {
-            if (!requestOrigin || allowedOrigins.includes(requestOrigin)) {
-                callback(null, true);
-                return;
+            if (!requestOrigin) return callback(null, true);
+
+            const isAllowed =
+                requestOrigin === "http://localhost:5173" ||
+                requestOrigin === env.FRONTEND_URL?.replace(/\/$/, "") ||
+                /\.vercel\.app$/.test(new URL(requestOrigin).hostname);
+
+            if (isAllowed) {
+                return callback(null, true);
             }
-            callback(
-                new Error(`Origin ${requestOrigin} is not allowed by CORS`)
-            );
-        }
+            return callback(new Error(`Origin ${requestOrigin} is not allowed by CORS`));
+        },
+        credentials: true
     })
 );
-
 app.use(express.json());
 
 app.use((req: Request, _res: Response, next: NextFunction) => {

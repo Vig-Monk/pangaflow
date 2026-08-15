@@ -1,50 +1,68 @@
 /* =============================================================================
    src/styles/theme.css
    SOKO CONSOLE DESIGN SYSTEM
-   Premium commerce palette — clean light mode + warm charcoal dark mode.
+   Premium commerce palette — deep espresso, Soko red, soft white.
    ========================================================================== */
 
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
 :root {
-  /* ---------- Brand palette (light) ---------- */
+  /* ---------- Brand palette ---------- */
 
-  /* Deep neutral — primary actions, headings, active states */
-  --color-ink: #171717;
-  --color-ink-hover: #2D2D2D;
+  /*
+   * Soko signature red.
+   * Use deliberately — primarily for important actions,
+   * active states and brand moments.
+   */
+  --color-ink: #D91E4E;
+  --color-ink-hover: #B91843;
 
-  /* Restrained brass — accent only */
-  --color-gold: #B8893E;
-  --color-gold-hover: #9D7130;
+  /*
+   * Deep espresso / near-black.
+   * Used for text, dark surfaces and strong neutral actions.
+   */
+  --color-dark: #0D0907;
+  --color-dark-hover: #211915;
 
-  /* Functional colors */
+  /*
+   * Soko red replaces the previous gold system completely.
+   */
+  --color-gold: #D91E4E;
+  --color-gold-hover: #B91843;
+
+  /* ---------- Functional colors ---------- */
+
   --color-ledger-green: #3F7658;
   --color-market-clay: #A95543;
   --color-info: #5E7187;
 
   /* ---------- Surfaces ---------- */
 
-  /* Clean cool-neutral page background */
-  --color-bg: #F8F9FA;
+  /*
+   * Soft white.
+   * Easier on the eyes than #FFFFFF while remaining bright and clean.
+   */
+  --color-bg: #FAFAF8;
 
-  /* White cards and panels */
   --color-surface: #FFFFFF;
-
-  /* Elevated surfaces */
   --color-surface-raised: #FFFFFF;
 
-  /* Subtle cool-gray separation */
-  --color-border: #E5E7EB;
+  /*
+   * Extremely soft border.
+   * Intended to feel like the edge of elevation rather than
+   * a visible line drawn around the component.
+   */
+  --color-border: #ECEBE8;
 
   /* ---------- Text ---------- */
 
-  --color-text: #27272A;
-  --color-text-muted: #71717A;
+  --color-text: #0D0907;
+  --color-text-muted: #77716D;
   --color-text-inverse: #FFFFFF;
 
   /* ---------- Focus / interaction ---------- */
 
-  --color-focus-ring: #B8893E;
+  --color-focus-ring: #D91E4E;
 
   /* ---------- Typography ---------- */
 
@@ -78,30 +96,40 @@
   --space-12: 3rem;
   --space-16: 4rem;
 
-  /* ---------- Radius ----------
-     Deliberately boxier than the original system.
-     Full remains reserved for pills and circular controls.
-     -------------------------------------------------------------------------- */
+  /* ---------- Radius ---------- */
 
+  /*
+   * Architectural rather than pillowy.
+   * Full remains reserved for pills and circular controls.
+   */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-full: 999px;
 
-  /* ---------- Shadow ----------
-     Neutral shadows — no teal tint.
-     -------------------------------------------------------------------------- */
+  /* ---------- Shadows ---------- */
+
+  /*
+   * Very soft neutral shadows.
+   *
+   * The border + shadow combination should read as:
+   * "this surface is lifted"
+   *
+   * rather than:
+   * "this component has an outline".
+   */
 
   --shadow-sm:
-    0 1px 2px rgba(0, 0, 0, 0.04);
+    0 1px 2px rgba(13, 9, 7, 0.035),
+    0 1px 1px rgba(13, 9, 7, 0.02);
 
   --shadow-md:
-    0 4px 12px rgba(0, 0, 0, 0.06),
-    0 2px 4px rgba(0, 0, 0, 0.03);
+    0 4px 12px rgba(13, 9, 7, 0.055),
+    0 2px 4px rgba(13, 9, 7, 0.025);
 
   --shadow-lg:
-    0 12px 32px rgba(0, 0, 0, 0.08),
-    0 4px 8px rgba(0, 0, 0, 0.04);
+    0 12px 32px rgba(13, 9, 7, 0.075),
+    0 4px 8px rgba(13, 9, 7, 0.035);
 
   /* ---------- Motion ---------- */
 
@@ -115,52 +143,63 @@
 
 /* =============================================================================
    DARK MODE
-   Warm charcoal.
-   No teal-black, green-black or blue-black surfaces.
+   Deep espresso rather than blue-black or green-black.
    ========================================================================== */
 
 [data-theme='dark'] {
   /* ---------- Brand ---------- */
 
-  --color-ink: #F5F5F5;
-  --color-ink-hover: #FFFFFF;
+  --color-ink: #D91E4E;
+  --color-ink-hover: #EF3A67;
 
-  --color-gold: #C7A15A;
-  --color-gold-hover: #D5B673;
+  --color-dark: #0D0907;
+  --color-dark-hover: #211915;
 
-  /* Functional colors */
+  --color-gold: #D91E4E;
+  --color-gold-hover: #EF3A67;
+
+  /* ---------- Functional colors ---------- */
+
   --color-ledger-green: #6FA27F;
   --color-market-clay: #C87563;
   --color-info: #8FA5BC;
 
   /* ---------- Surfaces ---------- */
 
-  --color-bg: #151515;
-  --color-surface: #1E1E1E;
-  --color-surface-raised: #252525;
-  --color-border: #333333;
+  /*
+   * The darkest surface is the brand's #0D0907.
+   * The other surfaces rise gently from it.
+   */
+  --color-bg: #0D0907;
+  --color-surface: #171311;
+  --color-surface-raised: #211C19;
+
+  /*
+   * Dark borders are deliberately quiet.
+   */
+  --color-border: #2B2522;
 
   /* ---------- Text ---------- */
 
-  --color-text: #E7E7E7;
-  --color-text-muted: #A1A1AA;
-  --color-text-inverse: #151515;
+  --color-text: #F4F1EE;
+  --color-text-muted: #A69F9A;
+  --color-text-inverse: #0D0907;
 
   /* ---------- Focus ---------- */
 
-  --color-focus-ring: #C7A15A;
+  --color-focus-ring: #D91E4E;
 
   /* ---------- Shadows ---------- */
 
   --shadow-sm:
-    0 1px 2px rgba(0, 0, 0, 0.20);
+    0 1px 2px rgba(0, 0, 0, 0.22);
 
   --shadow-md:
-    0 4px 12px rgba(0, 0, 0, 0.28),
+    0 4px 12px rgba(0, 0, 0, 0.30),
     0 2px 4px rgba(0, 0, 0, 0.16);
 
   --shadow-lg:
-    0 12px 32px rgba(0, 0, 0, 0.36),
+    0 12px 32px rgba(0, 0, 0, 0.40),
     0 4px 8px rgba(0, 0, 0, 0.20);
 }
 
@@ -247,6 +286,7 @@ h2,
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+    animation-delay: 0s !important;
   }
 }
 
@@ -269,5 +309,5 @@ h2,
 }
 
 .stitch--adjust {
-  --stitch-color: var(--color-gold);
+  --stitch-color: var(--color-ink);
 }
