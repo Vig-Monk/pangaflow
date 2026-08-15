@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/components/layout/AppShell.vue
+// Clean unified layout shell with safe-area spacing & responsive navigation.
 // =============================================================================
 
 import { computed, ref, onMounted } from 'vue';
@@ -57,7 +58,7 @@ function closeMobileMenu(): void {
 
 <template>
   <div class="app-shell">
-    <!-- ============================= Desktop sidebar ============================= -->
+    <!-- Desktop sidebar -->
     <aside class="sidebar">
       <div class="sidebar__brand">
         <span class="sidebar__brand-text">{{ orgName }}</span>
@@ -102,7 +103,7 @@ function closeMobileMenu(): void {
         <!-- GROUP 4: ACCOUNT -->
         <div class="sidebar__group">
           <span class="sidebar__group-label">Account</span>
-          <NavItem :to="{ name: 'plan' }" label="Plan &amp; Billing" :icon="Settings" />
+          <NavItem :to="{ name: 'plan' }" label="Plan &amp; Settings" :icon="Settings" />
         </div>
       </nav>
 
@@ -124,14 +125,12 @@ function closeMobileMenu(): void {
       </div>
     </aside>
 
-    <!-- ============================== Main content ============================== -->
+    <!-- Main view content wrapper -->
     <main class="main-content">
-      <div class="main-content__inner">
-        <slot />
-      </div>
+      <slot />
     </main>
 
-    <!-- =========================== Mobile bottom bar =========================== -->
+    <!-- Mobile bottom tab bar -->
     <nav class="bottom-bar" aria-label="Primary">
       <RouterLink :to="{ name: 'dashboard' }" class="bottom-bar__item">
         <LayoutDashboard :size="20" />
@@ -151,15 +150,12 @@ function closeMobileMenu(): void {
       </button>
     </nav>
 
-    <!-- Mobile "Menu" sheet Drawer -->
+    <!-- Mobile Menu Drawer -->
     <Teleport to="body">
       <Transition name="sheet-fade">
         <div v-if="showMobileMenu" class="sheet-backdrop" @click.self="closeMobileMenu">
           <div class="sheet" role="dialog" aria-modal="true" aria-label="Menu">
-            <span class="sheet__group-label">Business &amp; Operations</span>
-            <RouterLink :to="{ name: 'merchant-orders' }" class="sheet__item" @click="closeMobileMenu">
-              <Inbox :size="18" /> Orders
-            </RouterLink>
+            <span class="sheet__group-label">Operations</span>
             <RouterLink :to="{ name: 'inventory' }" class="sheet__item" @click="closeMobileMenu">
               <Package :size="18" /> Inventory
             </RouterLink>
@@ -181,9 +177,9 @@ function closeMobileMenu(): void {
               <ExternalLink :size="18" /> View Live Storefront ↗
             </a>
             
-            <span class="sheet__group-label">Preferences</span>
+            <span class="sheet__group-label">Account</span>
             <RouterLink :to="{ name: 'plan' }" class="sheet__item" @click="closeMobileMenu">
-              <Settings :size="18" /> Plan &amp; Billing
+              <Settings :size="18" /> Plan &amp; Settings
             </RouterLink>
             <button class="sheet__item" type="button" @click="() => { toggle(); closeMobileMenu(); }">
               <Sun v-if="theme === 'light'" :size="18" />
@@ -204,6 +200,7 @@ function closeMobileMenu(): void {
 .app-shell {
   display: flex;
   min-height: 100vh;
+  background: var(--color-bg);
 }
 
 .sidebar {
@@ -217,10 +214,11 @@ function closeMobileMenu(): void {
   top: 0;
   left: 0;
   bottom: 0;
+  z-index: 80;
 }
 
 .sidebar__brand {
-  padding: var(--space-6) var(--space-4);
+  padding: var(--space-5) var(--space-5);
   border-bottom: 1px solid var(--color-border);
 }
 
@@ -228,7 +226,7 @@ function closeMobileMenu(): void {
   font-family: var(--font-display);
   font-size: var(--text-lg);
   color: var(--color-ink);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .sidebar__nav {
@@ -236,7 +234,7 @@ function closeMobileMenu(): void {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  padding: var(--space-4);
+  padding: var(--space-4) var(--space-3);
   overflow-y: auto;
 }
 
@@ -252,14 +250,14 @@ function closeMobileMenu(): void {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--color-text-muted);
-  padding: 0 var(--space-4) var(--space-1);
+  padding: 0 var(--space-3) var(--space-1);
 }
 
 .persistent-view-store-link {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   color: var(--color-text-muted);
   text-decoration: none;
@@ -268,7 +266,7 @@ function closeMobileMenu(): void {
   border-left: 3px solid transparent;
   transition: background var(--duration-fast) var(--ease-standard),
               color var(--duration-fast) var(--ease-standard);
-  min-height: 44px;
+  min-height: 40px;
 }
 
 .persistent-view-store-link:hover {
@@ -302,8 +300,8 @@ function closeMobileMenu(): void {
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -346,20 +344,18 @@ function closeMobileMenu(): void {
   margin-left: 240px;
   background: var(--color-bg);
   min-height: 100vh;
-}
-
-.main-content__inner {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: var(--space-8);
+  display: flex;
+  flex-direction: column;
 }
 
 .bottom-bar { display: none; }
 
 @media (max-width: 768px) {
   .sidebar { display: none; }
-  .main-content { margin-left: 0; padding-bottom: 64px; }
-  .main-content__inner { padding: var(--space-4); }
+  .main-content {
+    margin-left: 0;
+    padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  }
 
   .bottom-bar {
     display: flex;
@@ -367,14 +363,16 @@ function closeMobileMenu(): void {
     bottom: 0;
     left: 0;
     right: 0;
+    height: 60px;
     background: var(--color-surface);
     box-shadow: var(--shadow-lg);
-    z-index: 50;
+    border-top: 1px solid var(--color-border);
+    z-index: 90;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
   .bottom-bar__item {
     flex: 1;
-    min-height: 44px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -391,14 +389,14 @@ function closeMobileMenu(): void {
 
   .bottom-bar__item.router-link-active {
     color: var(--color-ink);
-    font-weight: 600;
+    font-weight: 700;
   }
 }
 
 .sheet-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 61, 62, 0.4);
+  background: rgba(0, 0, 0, 0.45);
   display: flex;
   align-items: flex-end;
   z-index: 100;

@@ -45,7 +45,7 @@ onMounted(async () => {
     ordersSummary.value = ordersRes;
     lowStockCount.value = productsStore.inventoryTotal;
   } catch {
-    // Non-blocking operational metric fallback
+    // Non-blocking fallback
   }
 });
 
@@ -58,7 +58,6 @@ function formatTimestamp(iso: string): string {
   return new Date(iso).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
-// Record Sale modal
 const showSaleModal = ref(false);
 const saleCustomerId = ref('');
 const saleAmount = ref(0);
@@ -86,7 +85,6 @@ async function submitSale(): Promise<void> {
   }
 }
 
-// Collect Payment modal
 const showPaymentModal = ref(false);
 const paymentCustomerId = ref('');
 const paymentAmount = ref(0);
@@ -123,10 +121,14 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
 </script>
 
 <template>
-  <div class="dashboard-page">
-    <div class="dashboard-top-heading">
-      <h1 class="page-title">Dashboard</h1>
+  <div class="page-container">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Dashboard</h1>
+        <p class="page-subtitle">Overview of sales, inventory, and storefront performance.</p>
+      </div>
       
+      <!-- Operational Status Badges -->
       <div class="operational-badges-row">
         <router-link :to="{ name: 'store-settings' }" class="op-badge op-badge--store" :class="storeStatus">
           <Store :size="14" />
@@ -145,7 +147,7 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
       </div>
     </div>
 
-    <!-- Financial KPI Stat Cards Row -->
+    <!-- Financial KPI Cards -->
     <div class="stat-row">
       <StatCard
         label="Revenue (this month)"
@@ -165,6 +167,7 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
       />
     </div>
 
+    <!-- Recent Activity -->
     <section class="activity-section">
       <h2 class="section-title">Recent Activity</h2>
 
@@ -186,13 +189,13 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
       </div>
     </section>
 
-    <!-- Floating action buttons -->
+    <!-- Floating Action Buttons: positioned safely above mobile nav -->
     <div class="fab-stack">
-      <Button variant="primary" size="lg" @click="openSaleModal"><Plus :size="18" /> Record Sale</Button>
-      <Button variant="secondary" size="lg" @click="openPaymentModal"><CreditCard :size="18" /> Collect Payment</Button>
+      <Button variant="primary" size="md" @click="openSaleModal"><Plus :size="16" /> Record Sale</Button>
+      <Button variant="secondary" size="md" @click="openPaymentModal"><CreditCard :size="16" /> Collect Payment</Button>
     </div>
 
-    <!-- Record Sale modal -->
+    <!-- Modals -->
     <Modal :open="showSaleModal" title="Record Sale" @close="showSaleModal = false">
       <div class="modal-form">
         <select v-model="saleCustomerId" class="modal-form__select">
@@ -208,7 +211,6 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
       </template>
     </Modal>
 
-    <!-- Collect Payment modal -->
     <Modal :open="showPaymentModal" title="Collect Payment via M-Pesa" @close="showPaymentModal = false">
       <div class="modal-form">
         <select v-model="paymentCustomerId" class="modal-form__select">
@@ -227,14 +229,14 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
 </template>
 
 <style scoped>
-.dashboard-page {
-  padding: var(--space-6);
-  padding-bottom: var(--space-16);
-  max-width: 960px;
+.page-container {
+  max-width: 1040px;
+  width: 100%;
   margin: 0 auto;
+  padding: var(--space-6);
 }
 
-.dashboard-top-heading {
+.page-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -243,9 +245,8 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
   margin-bottom: var(--space-6);
 }
 
-.page-title {
-  font-size: var(--text-2xl);
-}
+.page-title { font-size: var(--text-2xl); }
+.page-subtitle { font-size: var(--text-sm); color: var(--color-text-muted); margin-top: 2px; }
 
 .operational-badges-row {
   display: flex;
@@ -267,30 +268,12 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
   text-decoration: none;
   transition: border-color var(--duration-fast) var(--ease-standard);
 }
-
-.op-badge:hover {
-  border-color: var(--color-ink);
-}
-
-.op-badge strong {
-  color: var(--color-text);
-}
-
-.op-badge--store.published {
-  border-color: var(--color-ledger-green);
-  color: var(--color-ledger-green);
-}
-.op-badge--store.published strong {
-  color: var(--color-ledger-green);
-}
-
-.op-badge--warning {
-  border-color: var(--color-market-clay);
-  color: var(--color-market-clay);
-}
-.op-badge--warning strong {
-  color: var(--color-market-clay);
-}
+.op-badge:hover { border-color: var(--color-ink); }
+.op-badge strong { color: var(--color-text); }
+.op-badge--store.published { border-color: var(--color-ledger-green); color: var(--color-ledger-green); }
+.op-badge--store.published strong { color: var(--color-ledger-green); }
+.op-badge--warning { border-color: var(--color-market-clay); color: var(--color-market-clay); }
+.op-badge--warning strong { color: var(--color-market-clay); }
 
 .stat-row {
   display: grid;
@@ -314,22 +297,25 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
   gap: var(--space-2);
 }
 
+/* Responsive FAB placement: safely positioned above mobile bar */
 .fab-stack {
   position: fixed;
   bottom: var(--space-6);
   right: var(--space-6);
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  z-index: 50;
+  gap: var(--space-2);
+  z-index: 70;
 }
 
-.modal-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
+@media (max-width: 768px) {
+  .fab-stack {
+    bottom: calc(64px + var(--space-4) + env(safe-area-inset-bottom, 0px));
+    right: var(--space-4);
+  }
 }
 
+.modal-form { display: flex; flex-direction: column; gap: var(--space-4); }
 .modal-form__select,
 .modal-form__input {
   min-height: 44px;
