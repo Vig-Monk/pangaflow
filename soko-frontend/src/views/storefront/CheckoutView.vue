@@ -311,7 +311,7 @@ async function handlePlaceOrder(): Promise<void> {
               </div>
 
               <div class="form-group">
-                <label class="form-label">Special Delivery / Order Instructions (Optional)</label>
+                <label class="form-label LLP Special Delivery / Order Instructions (Optional)</label>
                 <div class="input-with-icon input-with-icon--textarea">
                   <FileText :size="18" class="field-icon field-icon--top" />
                   <textarea
@@ -323,7 +323,7 @@ async function handlePlaceOrder(): Promise<void> {
                   />
                 </div>
               </div>
-            </div>
+           
           </div>
 
           <!-- STEP 4: PAYMENT METHOD -->
@@ -359,6 +359,7 @@ async function handlePlaceOrder(): Promise<void> {
                   </div>
                 </span>
               </label>
+            </div>
             </div>
           </div>
         </div>
@@ -790,5 +791,5 @@ async function handlePlaceOrder(): Promise<void> {
   color: var(--color-ledger-green);
 }
 .text-ink {
-  color: var(--color-ink);
+  color: var(--color-ink);}
   </style>
