@@ -311,7 +311,7 @@ async function handlePlaceOrder(): Promise<void> {
               </div>
 
               <div class="form-group">
-                <label class="form-label LLP Special Delivery / Order Instructions (Optional)</label>
+                <label class="form-label LLP Special Delivery / Order Instructions (Optional)"</label>
                 <div class="input-with-icon input-with-icon--textarea">
                   <FileText :size="18" class="field-icon field-icon--top" />
                   <textarea
