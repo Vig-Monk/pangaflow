@@ -1,6 +1,6 @@
 // =============================================================================
 // src/utils/crypto.ts
-// Secure AES-256-GCM authenticated encryption/decryption for credentials.
+// Secure AES-256-GCM encryption and unambiguous verification code generator.
 // =============================================================================
 
 import crypto from 'crypto';
@@ -64,4 +64,27 @@ export function decrypt(ciphertext: string): string {
   decrypted += decipher.final('utf8');
 
   return decrypted;
+}
+
+// Unambiguous alphanumeric alphabet (excludes 0, O, 1, I, 8, B)
+const UNAMBIGUOUS_DELIVERY_CHARS = '2345679ACDEFGHJKLMNPQRSTUVWXYZ';
+
+/**
+ * Generates an unambiguous, human-readable 4-character delivery verification code
+ * designed to be read aloud clearly over telephone calls or noisy delivery environments.
+ */
+export function generateDeliveryConfirmationCode(length = 4): string {
+  let code = '';
+  for (let i = 0; i < length; i++) {
+    const randomIndex = crypto.randomInt(0, UNAMBIGUOUS_DELIVERY_CHARS.length);
+    code += UNAMBIGUOUS_DELIVERY_CHARS[randomIndex];
+  }
+  return code;
+}
+
+/**
+ * Sanitizes and normalizes a confirmation code entered by a rider or merchant.
+ */
+export function normalizeDeliveryConfirmationCode(rawCode: string): string {
+  return (rawCode || '').trim().toUpperCase().replace(/[\s-]/g, '');
 }

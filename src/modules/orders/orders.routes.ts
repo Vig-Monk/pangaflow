@@ -10,6 +10,10 @@ import {
   getOrdersSummaryHandler,
   updateOrderStatusHandler,
   updateOrderPaymentStatusHandler,
+  getNearbyOrdersHandler,
+  assignRiderHandler,
+  completeDeliveryHandler,
+  getCashReconciliationHandler,
 } from './orders.controller';
 
 const router = Router();
@@ -17,6 +21,10 @@ const router = Router();
 router.use(verifyToken);
 
 router.get('/summary', getOrdersSummaryHandler);
+router.get('/reconciliation/cod', getCashReconciliationHandler);
+router.get('/:id/nearby-batch', getNearbyOrdersHandler);
+router.post('/assign-rider', assignRiderHandler);
+router.post('/:id/complete-delivery', completeDeliveryHandler);
 router.get('/', listOrdersHandler);
 router.get('/:id', getOrderHandler);
 router.patch('/:id/status', updateOrderStatusHandler);

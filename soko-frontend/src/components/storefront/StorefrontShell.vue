@@ -1,21 +1,25 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/components/storefront/StorefrontShell.vue
+// Storefront shell with slide-over cart drawer overlay.
 // =============================================================================
 
-import { computed, watchEffect } from 'vue';
+import { computed, watchEffect, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { useStoreSettingsStore } from '@/stores/store';
 import { useCartStore } from '@/stores/cart';
+import CartDrawer from './CartDrawer.vue';
 import { ShoppingBag } from 'lucide-vue-next';
 
 const route = useRoute();
 const storeSettingsStore = useStoreSettingsStore();
 const cartStore = useCartStore();
 
+const isCartDrawerOpen = ref(false);
+
 const storeName = computed(() => storeSettingsStore.settings?.name ?? 'Soko Shop');
 const storeLogo = computed(() => storeSettingsStore.settings?.logo_url);
-const storeSlug = computed(() => (route.params.storeSlug as string) ?? '');
+const storeSlug = computed(() => (route.params.storeSlug as string || '').toLowerCase().trim());
 
 watchEffect(() => {
   if (storeSlug.value) {
@@ -25,13 +29,12 @@ watchEffect(() => {
 
 const storeHomeRoute = computed(() => ({
   name: 'storefront-home',
-  params: { storeSlug: storeSlug.value }
+  params: { storeSlug: storeSlug.value },
 }));
 
-const cartRoute = computed(() => ({
-  name: 'storefront-cart',
-  params: { storeSlug: storeSlug.value }
-}));
+function openCartDrawer(): void {
+  isCartDrawerOpen.value = true;
+}
 </script>
 
 <template>
@@ -42,15 +45,15 @@ const cartRoute = computed(() => ({
           <img v-if="storeLogo" :src="storeLogo" alt="Store logo" class="store-logo" />
           <span class="store-name">{{ storeName }}</span>
         </router-link>
-        
+
         <div class="header-actions">
-          <router-link :to="cartRoute" class="cart-btn">
+          <button type="button" class="cart-btn" @click="openCartDrawer">
             <ShoppingBag :size="18" />
             <span class="cart-text">Cart</span>
             <span v-if="cartStore.totalItems > 0" class="cart-badge tabular-figure">
               {{ cartStore.totalItems }}
             </span>
-          </router-link>
+          </button>
         </div>
       </div>
     </header>
@@ -64,6 +67,12 @@ const cartRoute = computed(() => ({
         <p class="powered-by">Powered by <strong>Soko</strong></p>
       </div>
     </footer>
+
+    <!-- Slide-Over Cart Drawer -->
+    <CartDrawer
+      :open="isCartDrawerOpen"
+      @close="isCartDrawerOpen = false"
+    />
   </div>
 </template>
 
@@ -86,7 +95,7 @@ const cartRoute = computed(() => ({
 .header-content {
   max-width: 1200px;
   margin: 0 auto;
-  padding: var(--space-4);
+  padding: var(--space-3) var(--space-4);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -101,8 +110,8 @@ const cartRoute = computed(() => ({
 }
 
 .store-logo {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border-radius: var(--radius-full);
   object-fit: cover;
   border: 1px solid var(--color-border);
@@ -110,8 +119,8 @@ const cartRoute = computed(() => ({
 
 .store-name {
   font-family: var(--font-display);
-  font-size: var(--text-lg);
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: 700;
 }
 
 .cart-btn {
@@ -119,13 +128,14 @@ const cartRoute = computed(() => ({
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  text-decoration: none;
   background: var(--color-ink);
   color: var(--color-text-inverse);
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-md);
-  font-size: var(--text-sm);
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
   transition: opacity var(--duration-fast) var(--ease-standard);
 }
 
@@ -134,16 +144,16 @@ const cartRoute = computed(() => ({
 }
 
 .cart-badge {
-  background: var(--color-gold);
-  color: var(--color-text);
-  font-size: var(--text-xs);
+  background: var(--brand-primary);
+  color: #FFFFFF;
+  font-size: 10px;
   padding: 0 6px;
   height: 18px;
   border-radius: var(--radius-full);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 700;
+  font-weight: 800;
   margin-left: 2px;
 }
 

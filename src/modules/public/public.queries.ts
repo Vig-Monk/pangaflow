@@ -44,11 +44,42 @@ export interface PublicOrderDetailsRow {
   id: string;
   customer_name: string;
   total: string;
-  status: 'pending' | 'confirmed' | 'fulfilled' | 'cancelled';
+  status: 'pending' | 'confirmed' | 'assigned' | 'out_for_delivery' | 'delivered' | 'cancelled';
   payment_method: string;
   payment_status: 'pending' | 'paid' | 'failed';
   mpesa_receipt_number: string | null;
   checkout_request_id: string | null;
+  delivery_type: 'delivery' | 'pickup';
+  delivery_fee: string;
+  delivery_fee_status: 'known' | 'needs_merchant_confirmation';
+  delivery_confirmation_code: string | null;
+  delivery_location: string;
+}
+
+export interface LocalEstateRow {
+  id: string;
+  name: string;
+  city: string;
+  lat: string;
+  lng: string;
+}
+
+/**
+ * Searches curated reference estates by name or alias.
+ */
+export async function searchEstatesLocal(searchQuery: string): Promise<LocalEstateRow[]> {
+  const result = await query<LocalEstateRow>(
+    `SELECT id, name, city, lat::text AS lat, lng::text AS lng
+     FROM   estates
+     WHERE  name ILIKE $1
+        OR  EXISTS (
+              SELECT 1 FROM unnest(area_alias) alias WHERE alias ILIKE $1
+            )
+     ORDER  BY (CASE WHEN name ILIKE $1 THEN 0 ELSE 1 END), name ASC
+     LIMIT  10`,
+    [`%${searchQuery.trim()}%`]
+  );
+  return result.rows;
 }
 
 export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow | null> {
@@ -67,7 +98,8 @@ export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow
 export async function getProductsByStoreOrgIdPublic(orgId: string): Promise<PublicProductRow[]> {
   const result = await query<PublicProductRow>(
     `SELECT p.id, p.name, p.slug, p.description, p.price::text AS price,
-            COALESCE(c.name, 'General') AS category_name, COALESCE(i.stock, 0) AS stock,
+            COALESCE(c.name, 'General') AS category_name,
+            COALESCE(i.stock, 0) AS stock,
             COALESCE(
               (
                 SELECT json_agg(pi.image_url ORDER BY pi.sort_order ASC)
@@ -94,7 +126,8 @@ export async function getProductBySlugPublic(
 ): Promise<PublicProductRow | null> {
   const result = await query<PublicProductRow>(
     `SELECT p.id, p.name, p.slug, p.description, p.price::text AS price,
-            COALESCE(c.name, 'General') AS category_name, COALESCE(i.stock, 0) AS stock,
+            COALESCE(c.name, 'General') AS category_name,
+            COALESCE(i.stock, 0) AS stock,
             COALESCE(
               (
                 SELECT json_agg(pi.image_url ORDER BY pi.sort_order ASC)
@@ -122,6 +155,9 @@ export async function getPublicOrderDetailsRow(
   const result = await query<PublicOrderDetailsRow>(
     `SELECT o.id, o.customer_name, o.total::text AS total, o.status,
             o.payment_method, o.payment_status,
+            o.delivery_type, o.delivery_fee::text AS delivery_fee,
+            o.delivery_fee_status, o.delivery_confirmation_code,
+            o.delivery_location,
             mt.mpesa_receipt_number, mt.checkout_request_id
      FROM   orders o
      LEFT JOIN mpesa_transactions mt 

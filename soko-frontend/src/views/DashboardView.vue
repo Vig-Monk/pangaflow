@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/views/DashboardView.vue
+// Complete dashboard with zero cumulative layout shift (CLS) during API loading.
 // =============================================================================
 
 import { computed, onMounted, ref } from 'vue';
@@ -15,11 +16,18 @@ import { apiGet } from '@/services/apiClient';
 import StatCard from '@/components/ledger/StatCard.vue';
 import LedgerRow from '@/components/ledger/LedgerRow.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
 import Modal from '@/components/ui/Modal.vue';
 import Button from '@/components/ui/Button.vue';
 import CurrencyInput from '@/components/ui/CurrencyInput.vue';
 import PhoneInput from '@/components/ui/PhoneInput.vue';
-import { Store, Inbox, AlertTriangle, Plus, CreditCard } from 'lucide-vue-next';
+import {
+  Store,
+  Inbox,
+  AlertTriangle,
+  Plus,
+  CreditCard,
+} from 'lucide-vue-next';
 
 const dashboardStore = useDashboardStore();
 const ledgerStore = useLedgerStore();
@@ -40,7 +48,7 @@ onMounted(async () => {
   try {
     const [ordersRes] = await Promise.all([
       apiGet<any>('/orders/summary'),
-      productsStore.fetchInventory({ low_stock: true, limit: 1 })
+      productsStore.fetchInventory({ low_stock: true, limit: 1 }),
     ]);
     ordersSummary.value = ordersRes;
     lowStockCount.value = productsStore.inventoryTotal;
@@ -55,9 +63,15 @@ function formatCurrency(value: string): string {
 }
 
 function formatTimestamp(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleDateString('en-KE', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
+// Record Sale Modal
 const showSaleModal = ref(false);
 const saleCustomerId = ref('');
 const saleAmount = ref(0);
@@ -85,6 +99,7 @@ async function submitSale(): Promise<void> {
   }
 }
 
+// Collect Payment Modal
 const showPaymentModal = ref(false);
 const paymentCustomerId = ref('');
 const paymentAmount = ref(0);
@@ -127,24 +142,34 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
         <h1 class="page-title">Dashboard</h1>
         <p class="page-subtitle">Overview of sales, inventory, and storefront performance.</p>
       </div>
-      
-      <!-- Operational Status Badges -->
-      <div class="operational-badges-row">
-        <router-link :to="{ name: 'store-settings' }" class="op-badge op-badge--store" :class="storeStatus">
-          <Store :size="14" />
-          <span>Store: <strong>{{ storeStatus.toUpperCase() }}</strong></span>
-        </router-link>
 
-        <router-link :to="{ name: 'merchant-orders' }" class="op-badge">
-          <Inbox :size="14" />
-          <span>Orders Today: <strong>{{ ordersSummary.today_count }}</strong></span>
-        </router-link>
-
-        <router-link :to="{ name: 'inventory' }" class="op-badge" :class="{ 'op-badge--warning': lowStockCount > 0 }">
-          <AlertTriangle :size="14" />
-          <span>Low Stock: <strong>{{ lowStockCount }}</strong></span>
-        </router-link>
+      <!-- Quick Action Header -->
+      <div class="header-action-group">
+        <Button variant="primary" size="md" @click="openSaleModal">
+          <Plus :size="16" /> Record Sale
+        </Button>
+        <Button variant="secondary" size="md" @click="openPaymentModal">
+          <CreditCard :size="16" /> Collect Payment
+        </Button>
       </div>
+    </div>
+
+    <!-- Operational Status Badges -->
+    <div class="operational-badges-row">
+      <router-link :to="{ name: 'store-settings' }" class="op-badge op-badge--store" :class="storeStatus">
+        <Store :size="14" />
+        <span>Store: <strong>{{ storeStatus.toUpperCase() }}</strong></span>
+      </router-link>
+
+      <router-link :to="{ name: 'merchant-orders' }" class="op-badge">
+        <Inbox :size="14" />
+        <span>Orders Today: <strong>{{ ordersSummary.today_count }}</strong></span>
+      </router-link>
+
+      <router-link :to="{ name: 'inventory' }" class="op-badge" :class="{ 'op-badge--warning': lowStockCount > 0 }">
+        <AlertTriangle :size="14" />
+        <span>Low Stock: <strong>{{ lowStockCount }}</strong></span>
+      </router-link>
     </div>
 
     <!-- Financial KPI Cards -->
@@ -171,8 +196,21 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
     <section class="activity-section">
       <h2 class="section-title">Recent Activity</h2>
 
+      <div v-if="dashboardStore.loading" class="activity-skeleton-list">
+        <div v-for="n in 5" :key="n" class="skeleton-row card">
+          <div class="skeleton-col">
+            <Skeleton height="16px" width="140px" />
+            <Skeleton height="12px" width="80px" />
+          </div>
+          <div class="skeleton-col skeleton-col--right">
+            <Skeleton height="16px" width="90px" />
+            <Skeleton height="12px" width="60px" />
+          </div>
+        </div>
+      </div>
+
       <EmptyState
-        v-if="!dashboardStore.loading && summary && summary.recent_transactions.length === 0"
+        v-else-if="summary && summary.recent_transactions.length === 0"
         title="No activity yet"
         description="Record your first sale to see it here."
       />
@@ -189,36 +227,52 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
       </div>
     </section>
 
-    <!-- Floating Action Buttons: positioned safely above mobile nav -->
-    <div class="fab-stack">
-      <Button variant="primary" size="md" @click="openSaleModal"><Plus :size="16" /> Record Sale</Button>
-      <Button variant="secondary" size="md" @click="openPaymentModal"><CreditCard :size="16" /> Collect Payment</Button>
-    </div>
-
-    <!-- Modals -->
+    <!-- Modals with Quick Chips -->
     <Modal :open="showSaleModal" title="Record Sale" @close="showSaleModal = false">
       <div class="modal-form">
-        <select v-model="saleCustomerId" class="modal-form__select">
-          <option value="" disabled>Select customer</option>
-          <option v-for="c in customersStore.list" :key="c.id" :value="c.id">{{ c.name }}</option>
-        </select>
-        <CurrencyInput v-model="saleAmount" />
-        <input v-model="saleDescription" type="text" placeholder="Description (optional)" class="modal-form__input" />
+        <div class="form-group">
+          <label class="form-label">Customer *</label>
+          <select v-model="saleCustomerId" class="modal-form__select">
+            <option value="" disabled>Select customer</option>
+            <option v-for="c in customersStore.list" :key="c.id" :value="c.id">{{ c.name }}</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Sale Amount (KES) *</label>
+          <CurrencyInput v-model="saleAmount" :show-quick-chips="true" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Description (Optional)</label>
+          <input v-model="saleDescription" type="text" placeholder="e.g. 2 bags of maize" class="modal-form__input" />
+        </div>
       </div>
       <template #footer>
         <Button variant="ghost" @click="showSaleModal = false">Cancel</Button>
-        <Button variant="primary" :loading="isSavingSale" @click="submitSale">Save</Button>
+        <Button variant="primary" :loading="isSavingSale" @click="submitSale">Save Sale</Button>
       </template>
     </Modal>
 
     <Modal :open="showPaymentModal" title="Collect Payment via M-Pesa" @close="showPaymentModal = false">
       <div class="modal-form">
-        <select v-model="paymentCustomerId" class="modal-form__select">
-          <option value="" disabled>Select customer</option>
-          <option v-for="c in customersStore.list" :key="c.id" :value="c.id">{{ c.name }}</option>
-        </select>
-        <CurrencyInput v-model="paymentAmount" />
-        <PhoneInput v-model="paymentPhone" />
+        <div class="form-group">
+          <label class="form-label">Customer *</label>
+          <select v-model="paymentCustomerId" class="modal-form__select">
+            <option value="" disabled>Select customer</option>
+            <option v-for="c in customersStore.list" :key="c.id" :value="c.id">{{ c.name }}</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Amount (KES) *</label>
+          <CurrencyInput v-model="paymentAmount" :show-quick-chips="true" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Customer Phone *</label>
+          <PhoneInput v-model="paymentPhone" />
+        </div>
       </div>
       <template #footer>
         <Button variant="ghost" @click="showPaymentModal = false">Cancel</Button>
@@ -242,17 +296,24 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-4);
-  margin-bottom: var(--space-6);
+  margin-bottom: var(--space-5);
 }
 
 .page-title { font-size: var(--text-2xl); }
 .page-subtitle { font-size: var(--text-sm); color: var(--color-text-muted); margin-top: 2px; }
+
+.header-action-group {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
 
 .operational-badges-row {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+  margin-bottom: var(--space-6);
 }
 
 .op-badge {
@@ -297,25 +358,33 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
   gap: var(--space-2);
 }
 
-/* Responsive FAB placement: safely positioned above mobile bar */
-.fab-stack {
-  position: fixed;
-  bottom: var(--space-6);
-  right: var(--space-6);
+.activity-skeleton-list {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  z-index: 70;
 }
 
-@media (max-width: 768px) {
-  .fab-stack {
-    bottom: calc(64px + var(--space-4) + env(safe-area-inset-bottom, 0px));
-    right: var(--space-4);
-  }
+.skeleton-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
 }
 
-.modal-form { display: flex; flex-direction: column; gap: var(--space-4); }
+.skeleton-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.skeleton-col--right {
+  align-items: flex-end;
+}
+
+.modal-form { display: flex; flex-direction: column; gap: var(--space-3); }
+.form-group { display: flex; flex-direction: column; gap: var(--space-1); }
+.form-label { font-size: var(--text-xs); font-weight: 600; color: var(--color-text-muted); }
+
 .modal-form__select,
 .modal-form__input {
   min-height: 44px;
@@ -326,5 +395,10 @@ const storeStatus = computed(() => storeSettingsStore.settings?.status ?? 'draft
   font-family: var(--font-body);
   font-size: var(--text-base);
   color: var(--color-text);
+  outline: none;
+}
+.modal-form__select:focus,
+.modal-form__input:focus {
+  border-color: var(--color-ink);
 }
 </style>

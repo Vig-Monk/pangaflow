@@ -1,25 +1,33 @@
 <script setup lang="ts">
 // =============================================================================
-// src/components/ui/Skeleton.vue
+// soko-frontend/src/components/ui/Skeleton.vue
+// Accessible shimmer skeleton with dark/light mode elevation matching.
 // =============================================================================
 
 interface Props {
   width?: string;
   height?: string;
   radius?: string;
+  variant?: 'text' | 'rect' | 'circle';
 }
 
 withDefaults(defineProps<Props>(), {
   width: '100%',
   height: '16px',
-  radius: 'var(--radius-md)',
+  radius: 'var(--radius-sm)',
+  variant: 'text',
 });
 </script>
 
 <template>
   <div
     class="skeleton"
-    :style="{ width, height, borderRadius: radius }"
+    :class="`skeleton--${variant}`"
+    :style="{
+      width: variant === 'circle' ? height : width,
+      height,
+      borderRadius: variant === 'circle' ? '50%' : radius,
+    }"
     aria-hidden="true"
   />
 </template>
@@ -28,12 +36,13 @@ withDefaults(defineProps<Props>(), {
 .skeleton {
   background: linear-gradient(
     90deg,
-    var(--color-border) 25%,
-    var(--color-bg) 50%,
-    var(--color-border) 75%
+    color-mix(in srgb, var(--color-border) 65%, transparent) 25%,
+    color-mix(in srgb, var(--color-surface-hover) 85%, transparent) 50%,
+    color-mix(in srgb, var(--color-border) 65%, transparent) 75%
   );
   background-size: 200% 100%;
   animation: skeleton-shimmer var(--duration-slow) ease-in-out infinite;
+  display: block;
 }
 
 @keyframes skeleton-shimmer {
@@ -41,8 +50,6 @@ withDefaults(defineProps<Props>(), {
   100% { background-position: -200% 0; }
 }
 
-/* Static fallback — a shimmer that never settles is exactly the kind
-   of motion prefers-reduced-motion exists to suppress. */
 @media (prefers-reduced-motion: reduce) {
   .skeleton {
     animation: none;

@@ -1,16 +1,31 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/views/storefront/CheckoutView.vue
+// Complete checkout: Delivery/Pickup toggle, interactive pin capture, order review.
 // =============================================================================
 
-import { computed, ref, onMounted } from 'vue';
+import { computed, ref, onMounted, reactive } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useCartStore } from '@/stores/cart';
 import { useStoreSettingsStore } from '@/stores/store';
 import { apiGet, apiPost } from '@/services/apiClient';
 import { useToast } from '@/composables/useToast';
+import DeliveryTypeStep, { type DeliveryType } from '@/components/storefront/DeliveryTypeStep.vue';
+import DeliveryLocationStep, { type LocationPayload } from '@/components/storefront/DeliveryLocationStep.vue';
 import Button from '@/components/ui/Button.vue';
-import { User, Phone, Mail, MapPin, FileText, CreditCard, ShieldCheck, Zap } from 'lucide-vue-next';
+import {
+  User,
+  Phone,
+  Mail,
+  FileText,
+  CreditCard,
+  ShieldCheck,
+  Zap,
+  ChevronDown,
+  ChevronUp,
+  Store,
+  AlertCircle,
+} from 'lucide-vue-next';
 
 const route = useRoute();
 const router = useRouter();
@@ -18,22 +33,55 @@ const cartStore = useCartStore();
 const storeSettingsStore = useStoreSettingsStore();
 const { push: pushToast } = useToast();
 
-const customerName = ref('');
-const customerPhone = ref('');
-const customerEmail = ref('');
-const deliveryLocation = ref('');
-const notes = ref('');
-const paymentMethod = ref('mpesa_cash');
-
-const isSubmitting = ref(false);
-const storeSlug = computed(() => (route.params.storeSlug as string) ?? '');
+const storeSlug = computed(() => (route.params.storeSlug as string || '').toLowerCase().trim());
 const isMpesaVerified = computed(() => (storeSettingsStore.settings as any)?.mpesa_verified ?? false);
+
+// Form state initialized from persistent Pinia checkout draft
+const deliveryType = ref<DeliveryType>(cartStore.checkoutDraft.deliveryType || 'delivery');
+const customerName = ref(cartStore.checkoutDraft.customerName || '');
+const customerPhone = ref(cartStore.checkoutDraft.customerPhone || '');
+const customerEmail = ref(cartStore.checkoutDraft.customerEmail || '');
+const notes = ref(cartStore.checkoutDraft.notes || '');
+const paymentMethod = ref(cartStore.checkoutDraft.paymentMethod || 'mpesa_cash');
+
+// Location State
+const locationData = reactive<LocationPayload>({
+  customerLat: cartStore.checkoutDraft.customerLat,
+  customerLng: cartStore.checkoutDraft.customerLng,
+  locationSource: cartStore.checkoutDraft.locationSource || 'manual_text',
+  locationAccuracyM: cartStore.checkoutDraft.locationAccuracyM,
+  fullAddress: cartStore.checkoutDraft.deliveryLocation || '',
+  estate: cartStore.checkoutDraft.estate || '',
+  landmark: cartStore.checkoutDraft.landmark || '',
+  houseNumber: cartStore.checkoutDraft.houseNumber || '',
+});
+
+// UI Controls
+const showItemsSummary = ref(false);
+const isSubmitting = ref(false);
+const phoneError = ref<string | null>(null);
+
+function normalizePhone(input: string): string {
+  const digits = input.replace(/\D/g, '');
+  if (digits.startsWith('254') && digits.length === 12) {
+    return '0' + digits.slice(3);
+  }
+  if ((digits.startsWith('7') || digits.startsWith('1')) && digits.length === 9) {
+    return '0' + digits;
+  }
+  return digits;
+}
+
+function validatePhone(input: string): boolean {
+  const normalized = normalizePhone(input);
+  return /^(07|01)\d{8}$/.test(normalized);
+}
 
 onMounted(async () => {
   cartStore.initForStore(storeSlug.value);
 
   if (cartStore.isEmpty) {
-    pushToast({ message: 'Cannot checkout with an empty cart', variant: 'error' });
+    pushToast({ message: 'Your shopping cart is empty.', variant: 'error' });
     router.push({ name: 'storefront-home', params: { storeSlug: storeSlug.value } });
     return;
   }
@@ -41,7 +89,7 @@ onMounted(async () => {
   try {
     const storeData = await apiGet<any>(`/public/stores/${storeSlug.value}`);
     storeSettingsStore.settings = storeData;
-    if (storeData.mpesa_verified) {
+    if (storeData.mpesa_verified && !paymentMethod.value) {
       paymentMethod.value = 'mpesa_direct';
     }
   } catch {
@@ -53,9 +101,68 @@ function formatCurrency(value: number): string {
   return `KES ${value.toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
 }
 
-async function handleCheckout(): Promise<void> {
-  if (!customerName.value.trim() || !customerPhone.value.trim() || !deliveryLocation.value.trim()) {
-    pushToast({ message: 'Please fill out all required fields.', variant: 'error' });
+function handleLocationConfirmed(payload: LocationPayload): void {
+  Object.assign(locationData, payload);
+  cartStore.setCheckoutDraft({
+    customerLat: payload.customerLat,
+    customerLng: payload.customerLng,
+    locationSource: payload.locationSource,
+    locationAccuracyM: payload.locationAccuracyM,
+    deliveryLocation: payload.fullAddress,
+    estate: payload.estate,
+    landmark: payload.landmark,
+    houseNumber: payload.houseNumber,
+  });
+  pushToast({ message: 'Delivery location confirmed', variant: 'success' });
+}
+
+function saveContactProgress(): void {
+  const cleanPhone = normalizePhone(customerPhone.value);
+  if (customerPhone.value && !validatePhone(cleanPhone)) {
+    phoneError.value = 'Enter a valid Kenyan number (e.g. 07XXXXXXXX or 01XXXXXXXX)';
+  } else {
+    phoneError.value = null;
+  }
+
+  cartStore.setCheckoutDraft({
+    deliveryType: deliveryType.value,
+    customerName: customerName.value.trim(),
+    customerPhone: cleanPhone,
+    customerEmail: customerEmail.value.trim(),
+    notes: notes.value.trim(),
+    paymentMethod: paymentMethod.value,
+  });
+}
+
+const isReadyToPlaceOrder = computed(() => {
+  const hasName = customerName.value.trim().length > 0;
+  const hasPhone = validatePhone(customerPhone.value);
+  if (!hasName || !hasPhone) return false;
+
+  if (deliveryType.value === 'delivery') {
+    return locationData.fullAddress.trim().length > 0 || (locationData.customerLat !== null && locationData.customerLng !== null);
+  }
+
+  return true;
+});
+
+async function handlePlaceOrder(): Promise<void> {
+  saveContactProgress();
+
+  if (!customerName.value.trim()) {
+    pushToast({ message: 'Please enter your full name', variant: 'error' });
+    return;
+  }
+
+  const cleanPhone = normalizePhone(customerPhone.value);
+  if (!validatePhone(cleanPhone)) {
+    phoneError.value = 'Enter a valid Kenyan number (e.g. 07XXXXXXXX or 01XXXXXXXX)';
+    pushToast({ message: 'Please provide a valid contact phone number', variant: 'error' });
+    return;
+  }
+
+  if (deliveryType.value === 'delivery' && !locationData.fullAddress.trim()) {
+    pushToast({ message: 'Please provide or confirm your delivery location', variant: 'error' });
     return;
   }
 
@@ -63,12 +170,17 @@ async function handleCheckout(): Promise<void> {
   try {
     const payload = {
       customerName: customerName.value.trim(),
-      customerPhone: customerPhone.value.trim(),
+      customerPhone: cleanPhone,
       customerEmail: customerEmail.value.trim() || null,
-      deliveryLocation: deliveryLocation.value.trim(),
+      deliveryLocation: deliveryType.value === 'delivery' ? locationData.fullAddress : 'Store Pickup',
       notes: notes.value.trim() || null,
       paymentMethod: paymentMethod.value,
-      items: cartStore.items.map(item => ({
+      deliveryType: deliveryType.value,
+      customerLat: locationData.customerLat,
+      customerLng: locationData.customerLng,
+      locationSource: locationData.locationSource,
+      locationAccuracyM: locationData.locationAccuracyM,
+      items: cartStore.items.map((item) => ({
         product_id: item.product_id,
         quantity: item.quantity,
       })),
@@ -98,134 +210,219 @@ async function handleCheckout(): Promise<void> {
   <div class="store-checkout-page">
     <div class="checkout-container">
       <header class="checkout-header">
-        <h1 class="page-title">Secure Checkout</h1>
-        <p class="page-subtitle">Complete your contact info and payment preference to finish placing your order.</p>
+        <h1 class="page-title">Checkout</h1>
+        <p class="page-subtitle">Complete your fulfillment preference and details to place your order.</p>
       </header>
 
       <div class="checkout-layout">
-        
-        <!-- STEPPING COLUMNS -->
+        <!-- LEFT COLUMN: Progressive Checkout Steps -->
         <div class="checkout-steps-column">
-          
-          <!-- STEP 1: YOUR DETAILS -->
+          <!-- STEP 1: DELIVERY VS PICKUP -->
           <div class="step-card card">
             <div class="step-header">
               <span class="step-badge">1</span>
-              <h2>Your Details</h2>
+              <h2>Fulfillment Method</h2>
             </div>
-            
+            <DeliveryTypeStep v-model="deliveryType" @select="saveContactProgress" />
+          </div>
+
+          <!-- STEP 2: LOCATION PIN & ADDRESS (DELIVERY ONLY) -->
+          <div v-if="deliveryType === 'delivery'" class="step-card card">
+            <div class="step-header">
+              <span class="step-badge">2</span>
+              <h2>Delivery Location</h2>
+            </div>
+            <DeliveryLocationStep
+              :initial-data="locationData"
+              @confirm="handleLocationConfirmed"
+            />
+          </div>
+
+          <!-- STEP 2 (ALTERNATIVE): STORE PICKUP NOTICE -->
+          <div v-else class="step-card card pickup-notice-card">
+            <div class="step-header">
+              <span class="step-badge">2</span>
+              <h2>Pickup Instructions</h2>
+            </div>
+            <div class="pickup-info-body">
+              <Store :size="24" class="text-teal" />
+              <div>
+                <p class="pickup-title">Collect in-person at our physical store</p>
+                <p class="pickup-address">{{ storeSettingsStore.settings?.location || 'Store location confirmed after checkout.' }}</p>
+                <p class="pickup-timing">{{ storeSettingsStore.settings?.delivery_info || 'Ready for collection during normal business hours.' }}</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- STEP 3: CONTACT & RECEIPT DETAILS -->
+          <div class="step-card card">
+            <div class="step-header">
+              <span class="step-badge">3</span>
+              <h2>Contact Information</h2>
+            </div>
+
             <div class="form-fields">
               <div class="form-group">
                 <label class="form-label">Full Name *</label>
                 <div class="input-with-icon">
                   <User :size="18" class="field-icon" />
-                  <input v-model="customerName" type="text" placeholder="e.g. Kiprono Koech" class="form-input" />
+                  <input
+                    v-model="customerName"
+                    type="text"
+                    placeholder="e.g. Kiprono Koech"
+                    class="form-input"
+                    @blur="saveContactProgress"
+                  />
                 </div>
               </div>
 
               <div class="form-group-row">
                 <div class="form-group flex-1">
-                  <label class="form-label">Phone Number *</label>
+                  <label class="form-label">Phone Number * (For Delivery &amp; M-Pesa)</label>
                   <div class="input-with-icon">
                     <Phone :size="18" class="field-icon" />
-                    <input v-model="customerPhone" type="tel" placeholder="07XXXXXXXX" class="form-input" />
+                    <input
+                      v-model="customerPhone"
+                      type="tel"
+                      placeholder="07XXXXXXXX or 01XXXXXXXX"
+                      class="form-input"
+                      :class="{ 'form-input--error': phoneError }"
+                      @blur="saveContactProgress"
+                    />
                   </div>
+                  <p v-if="phoneError" class="field-error-text">
+                    <AlertCircle :size="12" /> {{ phoneError }}
+                  </p>
                 </div>
+
                 <div class="form-group flex-1">
                   <label class="form-label">Email (Optional)</label>
                   <div class="input-with-icon">
                     <Mail :size="18" class="field-icon" />
-                    <input v-model="customerEmail" type="email" placeholder="email@address.com" class="form-input" />
+                    <input
+                      v-model="customerEmail"
+                      type="email"
+                      placeholder="name@email.com"
+                      class="form-input"
+                      @blur="saveContactProgress"
+                    />
                   </div>
                 </div>
               </div>
 
               <div class="form-group">
-                <label class="form-label">Delivery Location Address *</label>
-                <div class="input-with-icon">
-                  <MapPin :size="18" class="field-icon" />
-                  <input v-model="deliveryLocation" type="text" placeholder="Apartment / Road / Area Details" class="form-input" />
-                </div>
-              </div>
-
-              <div class="form-group">
-                <label class="form-label">Delivery Instructions (Optional)</label>
+                <label class="form-label">Special Delivery / Order Instructions (Optional)</label>
                 <div class="input-with-icon input-with-icon--textarea">
                   <FileText :size="18" class="field-icon field-icon--top" />
-                  <textarea v-model="notes" placeholder="e.g. Leave with gatekeeper or call before delivery" class="form-textarea" rows="2" />
+                  <textarea
+                    v-model="notes"
+                    placeholder="e.g. Gate code, call when at junction, landmark details"
+                    class="form-textarea"
+                    rows="2"
+                    @blur="saveContactProgress"
+                  />
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- STEP 2: PAYMENT METHOD -->
+          <!-- STEP 4: PAYMENT METHOD -->
           <div class="step-card card">
             <div class="step-header">
-              <span class="step-badge">2</span>
-              <h2>Payment Method</h2>
+              <span class="step-badge">4</span>
+              <h2>Payment Preference</h2>
             </div>
 
             <div class="payment-selection-column">
-              <!-- Online STK Push (Only available if merchant Till is verified) -->
+              <!-- Online STK Push (When Merchant Till is Verified) -->
               <label v-if="isMpesaVerified" class="payment-choice">
-                <input type="radio" value="mpesa_direct" v-model="paymentMethod" />
+                <input type="radio" value="mpesa_direct" v-model="paymentMethod" @change="saveContactProgress" />
                 <span class="payment-choice-box" :class="{ active: paymentMethod === 'mpesa_direct' }">
                   <Zap :size="20" class="text-teal" />
                   <div>
-                    <span class="choice-title">Direct M-Pesa (Online STK Push)</span>
-                    <span class="choice-desc">You will receive an instant M-Pesa PIN prompt on your phone to complete payment.</span>
+                    <span class="choice-title">Direct M-Pesa (Online STK Prompt)</span>
+                    <span class="choice-desc">You will receive an instant M-Pesa PIN prompt on your phone.</span>
                   </div>
                 </span>
               </label>
 
               <!-- Cash / Manual Coordination -->
               <label class="payment-choice">
-                <input type="radio" value="mpesa_cash" v-model="paymentMethod" />
+                <input type="radio" value="mpesa_cash" v-model="paymentMethod" @change="saveContactProgress" />
                 <span class="payment-choice-box" :class="{ active: paymentMethod === 'mpesa_cash' }">
                   <CreditCard :size="20" class="text-ink" />
                   <div>
-                    <span class="choice-title">Cash on Delivery / Manual M-Pesa</span>
-                    <span class="choice-desc">Pay upon delivery or coordinate payment directly with the merchant.</span>
+                    <span class="choice-title">
+                      {{ deliveryType === 'delivery' ? 'Cash on Delivery / Manual M-Pesa' : 'Pay at Store Pickup' }}
+                    </span>
+                    <span class="choice-desc">Pay upon handover or coordinate directly with the merchant.</span>
                   </div>
                 </span>
               </label>
             </div>
           </div>
-
         </div>
 
-        <!-- STEP 3 & 4: ORDER SUMMARY & PLACE ORDER -->
+        <!-- RIGHT COLUMN: Order Summary & Place Order -->
         <div class="checkout-summary-column">
           <div class="summary-card card">
-            <div class="step-header">
-              <span class="step-badge">3</span>
-              <h2>Order Summary</h2>
+            <div class="summary-card-header">
+              <h2 class="summary-title">Order Summary</h2>
+              <button
+                type="button"
+                class="items-toggle-btn"
+                @click="showItemsSummary = !showItemsSummary"
+              >
+                <span>{{ cartStore.totalItems }} items</span>
+                <component :is="showItemsSummary ? ChevronUp : ChevronDown" :size="16" />
+              </button>
             </div>
-            
-            <div class="review-items">
+
+            <!-- Collapsible Items List -->
+            <div v-if="showItemsSummary" class="review-items">
               <div v-for="item in cartStore.items" :key="item.product_id" class="review-item">
-                <span class="review-item-name">{{ item.name }} <span class="text-muted">× {{ item.quantity }}</span></span>
+                <span class="review-item-name">
+                  {{ item.name }} <span class="text-muted">× {{ item.quantity }}</span>
+                </span>
                 <span class="tabular-figure">{{ formatCurrency(item.price * item.quantity) }}</span>
               </div>
             </div>
 
-            <div class="review-totals">
-              <div class="review-total-row">
-                <span>Total</span>
-                <span class="tabular-figure bold text-ink">{{ formatCurrency(cartStore.subtotal) }}</span>
+            <div class="summary-cost-rows">
+              <div class="cost-row">
+                <span>Subtotal</span>
+                <span class="tabular-figure">{{ formatCurrency(cartStore.subtotal) }}</span>
               </div>
-              <div class="secure-trust-badge">
-                <ShieldCheck :size="16" class="text-teal" />
-                <span>Encrypted direct-to-merchant transaction</span>
+
+              <div class="cost-row">
+                <span>Fulfillment ({{ deliveryType === 'delivery' ? 'Delivery' : 'Pickup' }})</span>
+                <span v-if="deliveryType === 'pickup'" class="cost-badge cost-badge--free">FREE</span>
+                <span v-else class="cost-badge cost-badge--notice">Confirmed by Merchant</span>
+              </div>
+
+              <div class="cost-row cost-row--total">
+                <span class="total-label">Estimated Total</span>
+                <span class="total-amount tabular-figure text-ink">{{ formatCurrency(cartStore.subtotal) }}</span>
               </div>
             </div>
 
-            <Button variant="primary" size="lg" style="width: 100%;" :loading="isSubmitting" @click="handleCheckout">
-              Place Order
+            <div class="secure-trust-badge">
+              <ShieldCheck :size="16" class="text-teal" />
+              <span>Direct merchant fulfillment with verified handover</span>
+            </div>
+
+            <Button
+              variant="primary"
+              size="lg"
+              class="place-order-btn"
+              :disabled="!isReadyToPlaceOrder || isSubmitting"
+              :loading="isSubmitting"
+              @click="handlePlaceOrder"
+            >
+              Place Order • {{ formatCurrency(cartStore.subtotal) }}
             </Button>
           </div>
         </div>
-
       </div>
     </div>
   </div>
@@ -238,7 +435,7 @@ async function handleCheckout(): Promise<void> {
 }
 
 .checkout-container {
-  max-width: 1000px;
+  max-width: 1050px;
   margin: 0 auto;
 }
 
@@ -264,7 +461,7 @@ async function handleCheckout(): Promise<void> {
   flex-direction: column;
 }
 
-@media (min-width: 768px) {
+@media (min-width: 860px) {
   .checkout-layout {
     flex-direction: row;
     align-items: flex-start;
@@ -276,10 +473,14 @@ async function handleCheckout(): Promise<void> {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
+  min-width: 0;
 }
 
 .checkout-summary-column {
   flex: 1;
+  min-width: 0;
+  position: sticky;
+  top: 90px;
 }
 
 .step-card,
@@ -290,7 +491,7 @@ async function handleCheckout(): Promise<void> {
   padding: var(--space-6);
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--space-4);
 }
 
 .step-header {
@@ -302,8 +503,8 @@ async function handleCheckout(): Promise<void> {
 }
 
 .step-badge {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   background: var(--color-ink);
   color: var(--color-text-inverse);
   font-size: var(--text-xs);
@@ -319,6 +520,34 @@ async function handleCheckout(): Promise<void> {
   font-family: var(--font-display);
   font-size: var(--text-lg);
   color: var(--color-text);
+}
+
+.pickup-info-body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+
+.pickup-title {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.pickup-address {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
+.pickup-timing {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  margin-top: 2px;
 }
 
 .form-fields {
@@ -340,10 +569,14 @@ async function handleCheckout(): Promise<void> {
 }
 
 @media (min-width: 640px) {
-  .form-group-row { flex-direction: row; }
+  .form-group-row {
+    flex-direction: row;
+  }
 }
 
-.flex-1 { flex: 1; }
+.flex-1 {
+  flex: 1;
+}
 
 .form-label {
   font-size: var(--text-xs);
@@ -379,6 +612,7 @@ async function handleCheckout(): Promise<void> {
   font-size: var(--text-base);
   color: var(--color-text);
   outline: none;
+  transition: border-color var(--duration-fast) var(--ease-standard);
 }
 
 .form-textarea {
@@ -389,6 +623,19 @@ async function handleCheckout(): Promise<void> {
 .form-input:focus,
 .form-textarea:focus {
   border-color: var(--color-ink);
+}
+
+.form-input--error {
+  border-color: var(--color-market-clay);
+}
+
+.field-error-text {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: var(--color-market-clay);
+  margin-top: 2px;
 }
 
 .payment-selection-column {
@@ -402,7 +649,9 @@ async function handleCheckout(): Promise<void> {
   cursor: pointer;
 }
 
-.payment-choice input { display: none; }
+.payment-choice input {
+  display: none;
+}
 
 .payment-choice-box {
   display: flex;
@@ -416,8 +665,8 @@ async function handleCheckout(): Promise<void> {
 }
 
 .payment-choice-box.active {
-  border-color: var(--color-ink);
-  background: color-mix(in srgb, var(--color-ink) 5%, transparent);
+  border-color: var(--brand-primary);
+  background: color-mix(in srgb, var(--brand-primary) 8%, transparent);
 }
 
 .choice-title {
@@ -434,12 +683,41 @@ async function handleCheckout(): Promise<void> {
   margin-top: 2px;
 }
 
+/* Summary Card */
+.summary-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: var(--space-3);
+}
+
+.summary-title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  color: var(--color-text);
+}
+
+.items-toggle-btn {
+  background: transparent;
+  border: none;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .review-items {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  max-height: 240px;
+  max-height: 200px;
   overflow-y: auto;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .review-item {
@@ -449,21 +727,48 @@ async function handleCheckout(): Promise<void> {
   color: var(--color-text-muted);
 }
 
-.review-item-name { color: var(--color-text); }
+.review-item-name {
+  color: var(--color-text);
+}
 
-.review-totals {
-  border-top: 1px solid var(--color-border);
-  padding-top: var(--space-4);
+.summary-cost-rows {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
 }
 
-.review-total-row {
+.cost-row {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.cost-row--total {
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-3);
+  margin-top: var(--space-1);
+  font-weight: 700;
   font-size: var(--text-base);
-  font-weight: 600;
+}
+
+.cost-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.cost-badge--free {
+  background: color-mix(in srgb, var(--color-ledger-green) 15%, transparent);
+  color: var(--color-ledger-green);
+}
+
+.cost-badge--notice {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
 }
 
 .secure-trust-badge {
@@ -477,7 +782,13 @@ async function handleCheckout(): Promise<void> {
   border-radius: var(--radius-sm);
 }
 
-.bold { font-weight: 700; }
-.text-ink { color: var(--color-ink); }
-.text-teal { color: var(--color-ledger-green); }
-</style>
+.place-order-btn {
+  width: 100%;
+}
+
+.text-teal {
+  color: var(--color-ledger-green);
+}
+.text-ink {
+  color: var(--color-ink);
+  </style>

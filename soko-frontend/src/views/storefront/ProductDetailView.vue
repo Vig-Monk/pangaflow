@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/views/storefront/ProductDetailView.vue
+// Product detail view with gallery and QuantityStepper.
 // =============================================================================
 
 import { onMounted, ref, computed } from 'vue';
@@ -9,6 +10,7 @@ import { apiGet } from '@/services/apiClient';
 import { useCartStore } from '@/stores/cart';
 import { useToast } from '@/composables/useToast';
 import { useStoreSettingsStore } from '@/stores/store';
+import QuantityStepper from '@/components/ui/QuantityStepper.vue';
 import Button from '@/components/ui/Button.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import { ArrowLeft, CheckCircle2, XCircle, ShoppingBag, Truck, ShieldCheck } from 'lucide-vue-next';
@@ -38,8 +40,8 @@ const quantitySelection = ref(1);
 const loading = ref(true);
 const loadError = ref(false);
 
-const storeSlug = computed(() => route.params.storeSlug as string);
-const productSlug = computed(() => route.params.productSlug as string);
+const storeSlug = computed(() => (route.params.storeSlug as string || '').toLowerCase().trim());
+const productSlug = computed(() => (route.params.productSlug as string || '').trim());
 
 const availableStockLimit = computed(() => {
   if (!product.value) return 1;
@@ -89,7 +91,7 @@ function handleAddToCart(): void {
     product.value.stock
   );
 
-  pushToast({ message: 'Added to your shopping cart', variant: 'success' });
+  pushToast({ message: `Added ${product.value.name} to cart`, variant: 'success' });
 }
 
 function goBack(): void {
@@ -106,7 +108,6 @@ function goBack(): void {
 
       <div v-if="loadError" class="error-container">
         <div class="error-box card">
-          <span class="error-icon">🔍</span>
           <h2 class="error-title">Product Offline</h2>
           <p class="error-desc">This product could not be found, or has been set to draft mode by the merchant.</p>
         </div>
@@ -115,17 +116,17 @@ function goBack(): void {
       <template v-else>
         <div v-if="loading" class="detail-grid-skeleton">
           <div class="skeleton-gallery-wrap">
-            <Skeleton height="400px" />
+            <Skeleton height="360px" />
             <div class="skeleton-thumbnails">
               <Skeleton v-for="n in 3" :key="n" height="60px" width="60px" />
             </div>
           </div>
           <div class="skeleton-info-wrap">
-            <Skeleton height="20px" width="30%" />
-            <Skeleton height="36px" width="80%" />
-            <Skeleton height="28px" width="40%" />
-            <Skeleton height="100px" />
-            <Skeleton height="48px" width="100%" />
+            <Skeleton height="18px" width="30%" />
+            <Skeleton height="32px" width="80%" />
+            <Skeleton height="24px" width="40%" />
+            <Skeleton height="90px" />
+            <Skeleton height="44px" width="100%" />
           </div>
         </div>
 
@@ -156,16 +157,16 @@ function goBack(): void {
           <!-- Buying Column -->
           <div class="info-column">
             <div class="info-header card">
-              <span class="product-category">{{ product.category.name }}</span>
+              <span class="product-category">{{ product.category?.name || 'General' }}</span>
               <h1 class="product-name font-display">{{ product.name }}</h1>
               <p class="product-price tabular-figure">{{ formatCurrency(product.price) }}</p>
 
               <div class="product-status-alert">
                 <span v-if="product.availability === 'in_stock'" class="status-indicator status-indicator--in">
-                  <CheckCircle2 :size="16" /> Available In Stock ({{ product.stock }} units)
+                  <CheckCircle2 :size="15" /> In Stock ({{ product.stock }} available)
                 </span>
                 <span v-else class="status-indicator status-indicator--out">
-                  <XCircle :size="16" /> Temporarily Out of Stock
+                  <XCircle :size="15" /> Out of Stock
                 </span>
               </div>
 
@@ -173,9 +174,11 @@ function goBack(): void {
               <div class="add-to-cart-widget" v-if="product.availability === 'in_stock'">
                 <div class="quantity-picker-wrap">
                   <label class="form-label">Quantity</label>
-                  <select v-model.number="quantitySelection" class="form-select">
-                    <option v-for="qty in availableStockLimit" :key="qty" :value="qty">{{ qty }}</option>
-                  </select>
+                  <QuantityStepper
+                    v-model="quantitySelection"
+                    :max="availableStockLimit"
+                    size="md"
+                  />
                 </div>
                 
                 <Button variant="primary" size="lg" style="width: 100%;" @click="handleAddToCart">
@@ -199,17 +202,17 @@ function goBack(): void {
 
               <div class="policy-block">
                 <div class="policy-item">
-                  <Truck :size="20" class="text-ink" />
+                  <Truck :size="18" class="text-ink" />
                   <div>
                     <span class="policy-title">Delivery &amp; Fulfillment</span>
-                    <span class="policy-desc">{{ storeSettingsStore.settings?.delivery_info || 'Fast delivery options coordinated directly with merchant.' }}</span>
+                    <span class="policy-desc">{{ storeSettingsStore.settings?.delivery_info || 'Doorstep delivery and in-person pickup options calculated at checkout.' }}</span>
                   </div>
                 </div>
                 <div class="policy-item">
-                  <ShieldCheck :size="20" class="text-teal" />
+                  <ShieldCheck :size="18" class="text-teal" />
                   <div>
-                    <span class="policy-title">Secure Merchant Transaction</span>
-                    <span class="policy-desc">Verified store catalog with direct consumer-to-merchant coordination.</span>
+                    <span class="policy-title">Verified Merchant Catalog</span>
+                    <span class="policy-desc">Direct communication and delivery verification code on arrival.</span>
                   </div>
                 </div>
               </div>
@@ -229,12 +232,12 @@ function goBack(): void {
 }
 
 .detail-container {
-  max-width: 1100px;
+  max-width: 1050px;
   margin: 0 auto;
 }
 
 .detail-header {
-  margin-bottom: var(--space-6);
+  margin-bottom: var(--space-4);
 }
 
 .error-container {
@@ -251,37 +254,37 @@ function goBack(): void {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 
 .error-title {
   font-family: var(--font-display);
-  font-size: var(--text-2xl);
+  font-size: var(--text-xl);
   color: var(--color-text);
 }
 
 .error-desc {
   color: var(--color-text-muted);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   line-height: var(--leading-relaxed);
 }
 
 .detail-grid-skeleton {
   display: flex;
   flex-direction: column;
-  gap: var(--space-8);
+  gap: var(--space-6);
 }
 @media (min-width: 768px) {
   .detail-grid-skeleton { flex-direction: row; }
 }
 .skeleton-gallery-wrap { flex: 1; display: flex; flex-direction: column; gap: var(--space-3); }
 .skeleton-thumbnails { display: flex; gap: var(--space-2); }
-.skeleton-info-wrap { flex: 1; display: flex; flex-direction: column; gap: var(--space-4); }
+.skeleton-info-wrap { flex: 1; display: flex; flex-direction: column; gap: var(--space-3); }
 
 .detail-layout {
   display: flex;
   flex-direction: column;
-  gap: var(--space-8);
+  gap: var(--space-6);
 }
 @media (min-width: 768px) {
   .detail-layout { flex-direction: row; align-items: flex-start; }
@@ -295,10 +298,10 @@ function goBack(): void {
 }
 
 .main-display {
-  height: 400px;
+  height: 360px;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   overflow: hidden;
   display: flex;
   align-items: center;
@@ -307,7 +310,7 @@ function goBack(): void {
 }
 
 @media (min-width: 768px) {
-  .main-display { height: 460px; }
+  .main-display { height: 420px; }
 }
 
 .main-img {
@@ -324,9 +327,9 @@ function goBack(): void {
 }
 
 .thumb-btn {
-  width: 64px;
-  height: 64px;
-  border-radius: var(--radius-md);
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--color-border);
   background: var(--color-surface);
   overflow: hidden;
@@ -336,7 +339,7 @@ function goBack(): void {
 }
 
 .thumb-btn--active {
-  border-color: var(--color-ink);
+  border-color: var(--brand-primary);
   border-width: 2px;
 }
 
@@ -350,36 +353,36 @@ function goBack(): void {
   flex: 1.1;
   display: flex;
   flex-direction: column;
-  gap: var(--space-6);
+  gap: var(--space-5);
 }
 
 .info-header {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-6);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .product-category {
-  font-size: var(--text-xs);
+  font-size: 10px;
   text-transform: uppercase;
   color: var(--color-text-muted);
   letter-spacing: 0.05em;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .product-name {
-  font-size: var(--text-3xl);
+  font-size: var(--text-2xl);
   color: var(--color-text);
   line-height: var(--leading-tight);
 }
 
 .product-price {
-  font-size: var(--text-2xl);
-  font-weight: 700;
+  font-size: var(--text-xl);
+  font-weight: 800;
   color: var(--color-ink);
 }
 
@@ -391,9 +394,9 @@ function goBack(): void {
 .status-indicator {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-sm);
-  font-weight: 600;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 700;
 }
 .status-indicator--in { color: var(--color-ledger-green); }
 .status-indicator--out { color: var(--color-market-clay); }
@@ -401,10 +404,10 @@ function goBack(): void {
 .add-to-cart-widget {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
   border-top: 1px solid var(--color-border);
-  padding-top: var(--space-4);
-  margin-top: var(--space-2);
+  padding-top: var(--space-3);
+  margin-top: var(--space-1);
 }
 
 .quantity-picker-wrap {
@@ -419,42 +422,31 @@ function goBack(): void {
   color: var(--color-text-muted);
 }
 
-.form-select {
-  min-height: 44px;
-  padding: 0 var(--space-3);
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  font-size: var(--text-sm);
-  color: var(--color-text);
-  outline: none;
-}
-
 .secondary-details-card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-6);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--space-4);
 }
 
 .desc-block {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-1);
   border-bottom: 1px solid var(--color-border);
-  padding-bottom: var(--space-4);
+  padding-bottom: var(--space-3);
 }
 
 .desc-block h3 {
-  font-size: var(--text-base);
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: 700;
 }
 
 .product-desc {
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   line-height: var(--leading-relaxed);
   white-space: pre-wrap;
@@ -463,7 +455,7 @@ function goBack(): void {
 .policy-block {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .policy-item {
@@ -474,16 +466,16 @@ function goBack(): void {
 
 .policy-title {
   display: block;
-  font-size: var(--text-sm);
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: 700;
   color: var(--color-text);
 }
 
 .policy-desc {
   display: block;
-  font-size: var(--text-xs);
+  font-size: 11px;
   color: var(--color-text-muted);
-  margin-top: 2px;
+  margin-top: 1px;
 }
 
 .text-ink { color: var(--color-ink); }

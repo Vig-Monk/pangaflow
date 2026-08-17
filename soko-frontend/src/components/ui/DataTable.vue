@@ -1,7 +1,7 @@
 <script setup lang="ts" generic="T extends object">
 // =============================================================================
 // soko-frontend/src/components/ui/DataTable.vue
-// In-place responsive scroll box with zero page-level width blowout.
+// Sticky headers with backdrop blur, horizontal containment, and accessible contrast.
 // =============================================================================
 
 import Skeleton from './Skeleton.vue';
@@ -28,7 +28,7 @@ interface Props<T = any> {
 withDefaults(defineProps<Props<T>>(), {
   loading: false,
   onRowClick: undefined,
-  emptyTitle: 'No data',
+  emptyTitle: 'No data found',
   emptyDescription: undefined,
 });
 
@@ -43,7 +43,7 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
   <div class="data-table-wrapper">
     <div class="data-table-scroll-container">
       <table class="data-table__table">
-        <thead>
+        <thead class="data-table__thead">
           <tr>
             <th
               v-for="col in columns"
@@ -55,17 +55,17 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
             </th>
           </tr>
         </thead>
-        
-        <!-- Skeleton Loading Rows -->
+
+        <!-- Shimmer Skeleton Loading Rows -->
         <tbody v-if="loading">
-          <tr v-for="n in 5" :key="`skeleton-${n}`">
+          <tr v-for="n in 5" :key="`skeleton-${n}`" class="data-table__skeleton-row">
             <td v-for="col in columns" :key="col.key" class="data-table__td">
-              <Skeleton height="16px" />
+              <Skeleton height="15px" radius="4px" />
             </td>
           </tr>
         </tbody>
 
-        <!-- Animated Data Rows -->
+        <!-- Data Rows -->
         <TransitionGroup v-else name="table-row" tag="tbody">
           <tr
             v-for="row in rows"
@@ -89,7 +89,7 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
       </table>
     </div>
 
-    <!-- Empty State Box -->
+    <!-- Empty State -->
     <EmptyState
       v-if="!loading && rows.length === 0"
       :title="emptyTitle"
@@ -99,7 +99,6 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
 </template>
 
 <style scoped>
-/* Outer container: completely locks horizontal expansion */
 .data-table-wrapper {
   display: block;
   width: 100%;
@@ -112,7 +111,6 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
   position: relative;
 }
 
-/* Scroll Viewport: forces horizontal scrolling strictly IN PLACE */
 .data-table-scroll-container {
   display: block;
   width: 100%;
@@ -122,12 +120,17 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
   -webkit-overflow-scrolling: touch;
 }
 
-/* Table: maintains clean proportions on all screens without crunching */
 .data-table__table {
   width: 100%;
   min-width: 600px;
   border-collapse: collapse;
   text-align: left;
+}
+
+.data-table__thead {
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
 .data-table__th {
@@ -139,6 +142,7 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
   color: var(--color-text-muted);
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
+  backdrop-filter: blur(8px);
   white-space: nowrap;
 }
 .data-table__th--right { text-align: right; }
@@ -155,7 +159,11 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
   cursor: pointer;
 }
 .data-table__row--clickable:hover {
-  background: var(--color-bg);
+  background: var(--color-surface-hover);
+}
+
+.data-table__skeleton-row {
+  border-bottom: 1px solid var(--color-border);
 }
 
 .data-table__td {
@@ -168,11 +176,12 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
 
 :deep(.table-actions),
 :deep(.status-badge),
-:deep(.status-pill) {
+:deep(.status-pill),
+:deep(.payment-pill) {
   white-space: nowrap;
 }
 
-/* Subtle, custom horizontal scrollbar */
+/* Horizontal Scrollbar */
 .data-table-scroll-container::-webkit-scrollbar {
   height: 5px;
 }
@@ -183,11 +192,8 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
   background: var(--color-border);
   border-radius: var(--radius-full);
 }
-.data-table-scroll-container::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-muted);
-}
 
-/* Smooth FLIP & Row Transitions */
+/* FLIP Animations */
 .table-row-move,
 .table-row-enter-active,
 .table-row-leave-active {
@@ -197,12 +203,12 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
 
 .table-row-enter-from {
   opacity: 0;
-  transform: translateY(-8px);
+  transform: translateY(-6px);
 }
 
 .table-row-leave-to {
   opacity: 0;
-  transform: scale(0.96);
+  transform: scale(0.97);
 }
 
 @media (prefers-reduced-motion: reduce) {

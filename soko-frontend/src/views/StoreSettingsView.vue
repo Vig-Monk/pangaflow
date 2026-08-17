@@ -1,16 +1,18 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/views/StoreSettingsView.vue
+// Complete Store Customization + Fulfillment Hub & Delivery Distance Setup.
 // =============================================================================
 
 import { onMounted, ref, computed, reactive, watch } from 'vue';
-import { useStoreSettingsStore, type StoreSettings } from '@/stores/store';
+import { useStoreSettingsStore, type StoreSettings, type MerchantLocation } from '@/stores/store';
 import { useProductsStore } from '@/stores/products';
 import { useMpesaCredentialsStore } from '@/stores/mpesaCredentials';
 import { useAuthStore } from '@/stores/auth';
 import { useToast } from '@/composables/useToast';
 import Button from '@/components/ui/Button.vue';
 import StoreHero from '@/components/storefront/StoreHero.vue';
+import LeafletPinPicker from '@/components/storefront/LeafletPinPicker.vue';
 import {
   Store,
   Eye,
@@ -22,6 +24,9 @@ import {
   Key,
   Info,
   ExternalLink,
+  MapPin,
+  Bike,
+  Navigation,
 } from 'lucide-vue-next';
 
 const storeSettingsStore = useStoreSettingsStore();
@@ -29,6 +34,8 @@ const productsStore = useProductsStore();
 const mpesaStore = useMpesaCredentialsStore();
 const authStore = useAuthStore();
 const { push: pushToast } = useToast();
+
+const hubMapRef = ref<InstanceType<typeof LeafletPinPicker> | null>(null);
 
 const form = reactive<StoreSettings>({
   name: '',
@@ -47,8 +54,19 @@ const form = reactive<StoreSettings>({
   hero_cta_label: 'Shop Now',
 });
 
+const locationForm = reactive<MerchantLocation>({
+  name: 'Main Store / Hub',
+  lat: -1.286389,
+  lng: 36.817223,
+  address_text: '',
+  max_delivery_radius_km: 15,
+  base_delivery_fee: 100,
+  fee_per_km: 25,
+});
+
 const activeTab = ref<'customize' | 'preview'>('customize');
 const isSaving = ref(false);
+const isLocatingHub = ref(false);
 const logoUploading = ref(false);
 const coverUploading = ref(false);
 const showPublishCelebration = ref(false);
@@ -65,6 +83,7 @@ function sanitizeSlug(val: string): string {
 onMounted(async () => {
   await Promise.all([
     storeSettingsStore.fetchSettings(),
+    storeSettingsStore.fetchLocation(),
     mpesaStore.fetchCredentials(),
   ]);
 
@@ -88,6 +107,17 @@ onMounted(async () => {
     form.name = authStore.org?.name || '';
     form.slug = sanitizeSlug(authStore.org?.slug || authStore.org?.name || 'my-shop');
   }
+
+  if (storeSettingsStore.location) {
+    const l = storeSettingsStore.location;
+    locationForm.name = l.name || 'Main Store / Hub';
+    locationForm.lat = l.lat;
+    locationForm.lng = l.lng;
+    locationForm.address_text = l.address_text || '';
+    locationForm.max_delivery_radius_km = l.max_delivery_radius_km || 15;
+    locationForm.base_delivery_fee = l.base_delivery_fee ?? 100;
+    locationForm.fee_per_km = l.fee_per_km ?? 25;
+  }
 });
 
 watch(() => form.name, (newName) => {
@@ -106,6 +136,30 @@ const publicStorefrontUrl = computed(() => {
   if (!targetSlug) return '#';
   return `/store/${sanitizeSlug(targetSlug)}`;
 });
+
+function handleHubPinUpdate(coords: { lat: number; lng: number }): void {
+  locationForm.lat = coords.lat;
+  locationForm.lng = coords.lng;
+}
+
+function handleGetHubGps(): void {
+  if (!navigator.geolocation) return;
+  isLocatingHub.value = true;
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      isLocatingHub.value = false;
+      locationForm.lat = pos.coords.latitude;
+      locationForm.lng = pos.coords.longitude;
+      hubMapRef.value?.setCenter(pos.coords.latitude, pos.coords.longitude, 16);
+      pushToast({ message: 'Hub pin centered on your current location', variant: 'info' });
+    },
+    () => {
+      isLocatingHub.value = false;
+      pushToast({ message: 'Could not obtain GPS signal. You can drag the map pin manually.', variant: 'error' });
+    },
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+}
 
 async function uploadImage(event: Event, targetType: 'logo' | 'cover'): Promise<void> {
   const target = event.target as HTMLInputElement;
@@ -171,31 +225,43 @@ async function handleSave(): Promise<void> {
     const willBePublished = form.status === 'published';
     const isTransitioningToLive = willBePublished && wasPreviouslyDraft.value;
 
-    await storeSettingsStore.saveSettings({
-      name: form.name.trim(),
-      slug: cleanSlug,
-      description: form.description?.trim() || null,
-      logo_url: form.logo_url || null,
-      cover_image_url: form.cover_image_url || null,
-      contact_phone: form.contact_phone?.trim() || null,
-      contact_email: form.contact_email?.trim() || null,
-      location: form.location?.trim() || null,
-      delivery_info: form.delivery_info?.trim() || null,
-      status: form.status,
-      hero_layout: form.hero_layout || 'editorial',
-      hero_headline: form.hero_headline?.trim() || null,
-      hero_subheadline: form.hero_subheadline?.trim() || null,
-      hero_cta_label: form.hero_cta_label?.trim() || null,
-    });
+    // Save Store Settings & Fulfillment Location simultaneously
+    await Promise.all([
+      storeSettingsStore.saveSettings({
+        name: form.name.trim(),
+        slug: cleanSlug,
+        description: form.description?.trim() || null,
+        logo_url: form.logo_url || null,
+        cover_image_url: form.cover_image_url || null,
+        contact_phone: form.contact_phone?.trim() || null,
+        contact_email: form.contact_email?.trim() || null,
+        location: form.location?.trim() || null,
+        delivery_info: form.delivery_info?.trim() || null,
+        status: form.status,
+        hero_layout: form.hero_layout || 'editorial',
+        hero_headline: form.hero_headline?.trim() || null,
+        hero_subheadline: form.hero_subheadline?.trim() || null,
+        hero_cta_label: form.hero_cta_label?.trim() || null,
+      }),
+      storeSettingsStore.saveLocation({
+        name: locationForm.name.trim() || 'Main Store / Hub',
+        lat: Number(locationForm.lat),
+        lng: Number(locationForm.lng),
+        address_text: locationForm.address_text?.trim() || null,
+        max_delivery_radius_km: Number(locationForm.max_delivery_radius_km),
+        base_delivery_fee: Number(locationForm.base_delivery_fee),
+        fee_per_km: Number(locationForm.fee_per_km),
+      }),
+    ]);
 
     if (isTransitioningToLive) {
       showPublishCelebration.value = true;
     } else {
       pushToast({
         message: willBePublished
-          ? 'Store settings updated & live!'
-          : 'Draft settings saved successfully',
-        variant: 'success'
+          ? 'Store & delivery settings updated and live!'
+          : 'Draft configurations saved successfully',
+        variant: 'success',
       });
     }
   } catch (err) {
@@ -356,7 +422,86 @@ async function handleSave(): Promise<void> {
           </div>
         </section>
 
-        <!-- CARD 3: PUBLISHING STATUS & PAYMENT READINESS -->
+        <!-- CARD 3: FULFILLMENT & PICKUP HUB LOCATION (Automated Distance & Delivery Math) -->
+        <section class="section-card card">
+          <div class="card-heading">
+            <Bike :size="20" class="card-icon" />
+            <h2>Pickup Hub &amp; Delivery Fee Calculator</h2>
+          </div>
+
+          <p class="section-subtext">
+            Pin your physical kitchen, warehouse, or store hub. Customer delivery distances and fees are calculated server-side from this pin.
+          </p>
+
+          <div class="hub-location-picker-wrap">
+            <div class="hub-gps-bar">
+              <Button variant="secondary" size="sm" :loading="isLocatingHub" @click="handleGetHubGps">
+                <Navigation :size="14" /> Set Hub to Current Location
+              </Button>
+              <span class="hub-coords-tag">
+                <MapPin :size="12" /> Pin: {{ Number(locationForm.lat).toFixed(4) }}, {{ Number(locationForm.lng).toFixed(4) }}
+              </span>
+            </div>
+
+            <LeafletPinPicker
+              ref="hubMapRef"
+              :lat="locationForm.lat"
+              :lng="locationForm.lng"
+              @update:location="handleHubPinUpdate"
+            />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Hub Address / Landmark</label>
+            <input
+              v-model="locationForm.address_text"
+              type="text"
+              placeholder="e.g. Sarit Centre, Ground Floor, Westlands"
+              class="form-input"
+            />
+          </div>
+
+          <div class="form-group-row">
+            <div class="form-group flex-1">
+              <label class="form-label">Base Delivery Fee (KES) *</label>
+              <input
+                v-model.number="locationForm.base_delivery_fee"
+                type="number"
+                min="0"
+                placeholder="100"
+                class="form-input"
+              />
+              <span class="field-hint">Covers base distance up to 3 km.</span>
+            </div>
+
+            <div class="form-group flex-1">
+              <label class="form-label">Fee per Extra Km (KES) *</label>
+              <input
+                v-model.number="locationForm.fee_per_km"
+                type="number"
+                min="0"
+                placeholder="25"
+                class="form-input"
+              />
+              <span class="field-hint">Added for every km beyond 3 km.</span>
+            </div>
+
+            <div class="form-group flex-1">
+              <label class="form-label">Max Delivery Radius (Km) *</label>
+              <input
+                v-model.number="locationForm.max_delivery_radius_km"
+                type="number"
+                min="1"
+                max="100"
+                placeholder="15"
+                class="form-input"
+              />
+              <span class="field-hint">Orders beyond this require confirmation.</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- CARD 4: PUBLISHING STATUS & PAYMENT READINESS -->
         <section class="section-card card publishing-card" :class="{ 'card-published-active': form.status === 'published' }">
           <div class="card-heading">
             <Globe :size="20" class="card-icon" />
@@ -371,7 +516,7 @@ async function handleSave(): Promise<void> {
                 <p class="info-desc">You can publish your store right away. Connect your Till or Paybill anytime to enable direct online STK push payments.</p>
               </div>
             </div>
-            <RouterLink :to="{ name: 'mpesa-setup' }">
+       <RouterLink :to="{ name: 'mpesa-setup' }">
               <Button variant="secondary" size="sm"><Key :size="14" /> Setup Direct M-Pesa</Button>
             </RouterLink>
           </div>
@@ -428,7 +573,7 @@ async function handleSave(): Promise<void> {
               <Store v-else :size="18" class="text-muted" />
               <span class="preview-mini-name">{{ form.name || 'Store Name' }}</span>
             </div>
-            <div class="preview-mini-cart">🛒</div>
+            <div class="preview-mini-cart">ðŸ›’</div>
           </div>
 
           <div class="preview-hero-wrapper">
@@ -443,7 +588,6 @@ async function handleSave(): Promise<void> {
     </div>
   </div>
 </template>
-
 <style scoped>
 .customize-store-page {
   padding: var(--space-6);
@@ -518,7 +662,7 @@ async function handleSave(): Promise<void> {
 .workspace-grid { display: flex; gap: var(--space-6); align-items: flex-start; }
 .workspace-controls { flex: 1.2; display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
 .workspace-preview-pane {
- flex: 1;
+  flex: 1;
   position: sticky;
   top: var(--space-6);
   background: var(--color-surface);
@@ -544,6 +688,13 @@ async function handleSave(): Promise<void> {
   gap: var(--space-4);
 }
 
+.section-subtext {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  line-height: var(--leading-relaxed);
+  margin-top: -4px;
+}
+
 .publishing-card { transition: border-color var(--duration-base) var(--ease-standard); }
 .card-published-active { border-color: var(--color-ledger-green); }
 .card-heading {
@@ -557,6 +708,41 @@ async function handleSave(): Promise<void> {
 }
 .card-icon { color: var(--color-ink); }
 
+/* Hub Location Map Picker Styles */
+.hub-location-picker-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.hub-gps-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.hub-coords-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+.field-hint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-top: 2px;
+  display: block;
+}
+/* Payment Readiness Informational Card */
 .payment-info-card {
   display: flex;
   align-items: center;
@@ -600,6 +786,7 @@ async function handleSave(): Promise<void> {
   font-weight: 600;
   color: var(--color-ledger-green);
 }
+
 .form-group { display: flex; flex-direction: column; gap: var(--space-1); }
 .form-group-row { display: flex; gap: var(--space-4); flex-direction: column; }
 @media (min-width: 640px) { .form-group-row { flex-direction: row; } }
@@ -635,6 +822,7 @@ async function handleSave(): Promise<void> {
 }
 .upload-overlay-btn.disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Interactive Status Toggle Options */
 .toggle-row { display: flex; flex-direction: column; gap: var(--space-3); }
 @media (min-width: 640px) { .toggle-row { flex-direction: row; } }
 
@@ -716,7 +904,6 @@ async function handleSave(): Promise<void> {
   align-items: center;
   border-bottom: 1px solid var(--color-border);
 }
-
 .preview-brand-slot { display: flex; align-items: center; gap: var(--space-2); }
 .preview-mini-logo { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; }
 .preview-mini-name { font-size: var(--text-sm); font-weight: 600; }

@@ -2,15 +2,112 @@
 // src/modules/public/public.service.ts
 // =============================================================================
 
+import axios from 'axios';
 import { z } from 'zod';
 import { pool } from '../../config/db';
 import { env } from '../../config/env';
 import { AppError } from '../../utils/error';
+import { computeHaversineDistanceKm, calculateDeliveryFee } from '../../utils/geo';
+import { generateDeliveryConfirmationCode } from '../../utils/crypto';
 import * as publicQueries from './public.queries';
 import * as ordersQueries from '../orders/orders.queries';
 import { getCredentialsRowByOrgId, getDecryptedCredentials } from '../mpesa-credentials/mpesa-credentials.queries';
 import * as darajaService from '../../services/daraja.service';
 import { createPendingMpesaTransaction } from '../payments/payments.queries';
+
+export interface LocationSearchResult {
+  name: string;
+  lat: number;
+  lng: number;
+  source: 'local_list' | 'nominatim';
+  city?: string;
+}
+
+const nominatimCache = new Map<string, { data: LocationSearchResult[]; expiresAt: number }>();
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+let lastNominatimCallTime = 0;
+const NOMINATIM_MIN_INTERVAL_MS = 1000; // 1 req/sec max per OSM policy
+
+async function fetchNominatimWithRateLimit(searchQuery: string): Promise<LocationSearchResult[]> {
+  const cacheKey = searchQuery.trim().toLowerCase();
+  const cached = nominatimCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+
+  const now = Date.now();
+  const elapsed = now - lastNominatimCallTime;
+  if (elapsed < NOMINATIM_MIN_INTERVAL_MS) {
+    await new Promise((resolve) => setTimeout(resolve, NOMINATIM_MIN_INTERVAL_MS - elapsed));
+  }
+  lastNominatimCallTime = Date.now();
+
+  try {
+    const response = await axios.get<Array<{ display_name: string; lat: string; lon: string }>>(
+      'https://nominatim.openstreetmap.org/search',
+      {
+        params: {
+          q: searchQuery,
+          countrycodes: 'ke',
+          format: 'json',
+          limit: 5,
+          addressdetails: 1,
+        },
+        headers: {
+          'User-Agent': 'SokoApp-EACheckout/1.0 (support@soko.app)',
+        },
+        timeout: 5000,
+      }
+    );
+
+    const results: LocationSearchResult[] = (response.data || [])
+      .map((item) => ({
+        name: item.display_name,
+        lat: parseFloat(item.lat),
+        lng: parseFloat(item.lon),
+        source: 'nominatim' as const,
+      }))
+      .filter((r) => !isNaN(r.lat) && !isNaN(r.lng));
+
+    nominatimCache.set(cacheKey, {
+      data: results,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    });
+
+    return results;
+  } catch (err) {
+    console.warn('Nominatim fallback geocoding degraded gracefully:', err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
+export async function searchDeliveryLocations(rawQuery: unknown): Promise<LocationSearchResult[]> {
+  const schema = z.object({
+    q: z.string().min(1, 'Search query is required').max(100),
+  });
+
+  const parsed = schema.safeParse(rawQuery);
+  if (!parsed.success) {
+    return [];
+  }
+
+  const queryText = parsed.data.q.trim();
+
+  // Tier 1: Local curated estates database
+  const localEstates = await publicQueries.searchEstatesLocal(queryText);
+  if (localEstates.length > 0) {
+    return localEstates.map((estate) => ({
+      name: `${estate.name}, ${estate.city}`,
+      lat: parseFloat(estate.lat),
+      lng: parseFloat(estate.lng),
+      city: estate.city,
+      source: 'local_list' as const,
+    }));
+  }
+
+  // Tier 2: Nominatim fallback
+  return fetchNominatimWithRateLimit(queryText);
+}
 
 export const CheckoutSchema = z.object({
   customerName: z.string().min(1, 'Name is required').max(200),
@@ -19,6 +116,11 @@ export const CheckoutSchema = z.object({
   deliveryLocation: z.string().min(1, 'Delivery location is required').max(500),
   notes: z.string().max(1000).nullable().optional(),
   paymentMethod: z.string().min(1, 'Payment method selection is required'),
+  deliveryType: z.enum(['delivery', 'pickup']).default('delivery'),
+  customerLat: z.number().nullable().optional(),
+  customerLng: z.number().nullable().optional(),
+  locationSource: z.enum(['gps', 'local_list', 'nominatim', 'manual_text']).optional(),
+  locationAccuracyM: z.number().nullable().optional(),
   items: z.array(
     z.object({
       product_id: z.string().uuid(),
@@ -59,11 +161,16 @@ export interface PublicOrderConfirmation {
   orderId: string;
   customerName: string;
   total: number;
-  status: 'pending' | 'confirmed' | 'fulfilled' | 'cancelled';
+  status: 'pending' | 'confirmed' | 'assigned' | 'out_for_delivery' | 'delivered' | 'cancelled';
   paymentMethod: string;
   paymentStatus: 'pending' | 'paid' | 'failed';
   mpesaReceiptNumber: string | null;
   checkoutRequestId?: string | null;
+  deliveryType: 'delivery' | 'pickup';
+  deliveryFee: number;
+  deliveryFeeStatus: 'known' | 'needs_merchant_confirmation';
+  deliveryConfirmationCode: string | null;
+  deliveryLocation: string;
   items: Array<{
     productName: string;
     unitPrice: number;
@@ -167,7 +274,7 @@ export async function placeOrder(
   try {
     await client.query('BEGIN');
 
-    let calculatedTotal = 0;
+    let calculatedProductsSubtotal = 0;
     const itemsToInsert = [];
 
     for (const cartItem of items) {
@@ -190,7 +297,7 @@ export async function placeOrder(
 
       const unitPrice = parseFloat(product.price);
       const subtotal = Math.round(unitPrice * cartItem.quantity * 100) / 100;
-      calculatedTotal += subtotal;
+      calculatedProductsSubtotal += subtotal;
 
       itemsToInsert.push({
         productId: product.id,
@@ -201,7 +308,57 @@ export async function placeOrder(
       });
     }
 
-    calculatedTotal = Math.round(calculatedTotal * 100) / 100;
+    calculatedProductsSubtotal = Math.round(calculatedProductsSubtotal * 100) / 100;
+
+    // Server-Authoritative Delivery Fee & Verification Code Math
+    const isDelivery = customerData.deliveryType !== 'pickup';
+    let deliveryFee = 0;
+    let deliveryFeeStatus: 'known' | 'needs_merchant_confirmation' = 'known';
+    let confirmationCode: string | null = null;
+
+    if (isDelivery) {
+      confirmationCode = generateDeliveryConfirmationCode();
+
+      if (
+        customerData.customerLat !== null &&
+        customerData.customerLat !== undefined &&
+        customerData.customerLng !== null &&
+        customerData.customerLng !== undefined
+      ) {
+        const merchantLoc = await ordersQueries.getMerchantLocationTransactional(client, store.org_id);
+        if (merchantLoc) {
+          const merchantLat = parseFloat(merchantLoc.lat);
+          const merchantLng = parseFloat(merchantLoc.lng);
+          const distanceKm = computeHaversineDistanceKm(
+            merchantLat,
+            merchantLng,
+            customerData.customerLat,
+            customerData.customerLng
+          );
+
+          const feeCalc = calculateDeliveryFee(distanceKm, {
+            baseFee: parseFloat(merchantLoc.base_delivery_fee),
+            feePerKm: parseFloat(merchantLoc.fee_per_km),
+            maxDeliveryRadiusKm: parseFloat(merchantLoc.max_delivery_radius_km),
+          });
+
+          deliveryFee = feeCalc.fee;
+          deliveryFeeStatus = feeCalc.status;
+        } else {
+          deliveryFee = 0;
+          deliveryFeeStatus = 'needs_merchant_confirmation';
+        }
+      } else {
+        deliveryFee = 0;
+        deliveryFeeStatus = 'needs_merchant_confirmation';
+      }
+    } else {
+      deliveryFee = 0;
+      deliveryFeeStatus = 'known';
+      confirmationCode = null;
+    }
+
+    const finalOrderTotal = Math.round((calculatedProductsSubtotal + deliveryFee) * 100) / 100;
 
     const orderId = await ordersQueries.insertOrderTransactional(client, {
       orgId: store.org_id,
@@ -212,8 +369,18 @@ export async function placeOrder(
       deliveryLocation: customerData.deliveryLocation,
       notes: customerData.notes,
       paymentMethod: customerData.paymentMethod,
-      total: calculatedTotal,
+      total: finalOrderTotal,
+      deliveryType: customerData.deliveryType,
+      customerLat: customerData.customerLat,
+      customerLng: customerData.customerLng,
+      locationSource: customerData.locationSource,
+      locationAccuracyM: customerData.locationAccuracyM,
+      deliveryFee,
+      deliveryFeeStatus,
+      deliveryConfirmationCode: confirmationCode,
     });
+
+    await ordersQueries.insertOrderStatusHistoryTransactional(client, orderId, 'pending', 'system');
 
     for (const item of itemsToInsert) {
       await ordersQueries.insertOrderItemTransactional(client, orderId, item);
@@ -233,7 +400,7 @@ export async function placeOrder(
         const stkResult = await darajaService.stkPush({
           credentials: decryptedCreds,
           phone: customerData.customerPhone,
-          amount: calculatedTotal,
+          amount: finalOrderTotal,
           accountReference: orderId,
           transactionDesc: `Order ${orderId.slice(0, 8)}`,
           callbackUrl,
@@ -246,7 +413,7 @@ export async function placeOrder(
           checkoutRequestId: stkResult.checkoutRequestId,
           merchantRequestId: stkResult.merchantRequestId,
           phone: customerData.customerPhone,
-          amount: calculatedTotal,
+          amount: finalOrderTotal,
           accountReference: orderId,
           transactionDesc: `Order ${orderId.slice(0, 8)}`,
         });
@@ -289,6 +456,11 @@ export async function getPublicOrderDetails(
     paymentStatus: order.payment_status,
     mpesaReceiptNumber: order.mpesa_receipt_number,
     checkoutRequestId: order.checkout_request_id,
+    deliveryType: order.delivery_type,
+    deliveryFee: parseFloat(order.delivery_fee || '0'),
+    deliveryFeeStatus: order.delivery_fee_status,
+    deliveryConfirmationCode: order.delivery_confirmation_code,
+    deliveryLocation: order.delivery_location,
     items: items.map((row) => ({
       productName: row.product_name,
       unitPrice: parseFloat(row.unit_price),

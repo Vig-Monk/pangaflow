@@ -1,11 +1,23 @@
 // =============================================================================
 // src/modules/public/public.controller.ts
-// Controller — Public Storefront Catalog.
 // =============================================================================
 
 import { Request, Response, NextFunction } from 'express';
 import { success } from '../../utils/response';
 import * as publicService from './public.service';
+
+export async function searchDeliveryLocationsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const results = await publicService.searchDeliveryLocations(req.query);
+    success(res, results);
+  } catch (err) {
+    next(err);
+  }
+}
 
 export async function getStoreMetadataHandler(
   req: Request,

@@ -126,6 +126,26 @@ export const SaveStoreSchema = z.object({
         .transform(v => (v === "" ? null : v))
 });
 
+export const SaveMerchantLocationSchema = z.object({
+    name: z
+        .string()
+        .min(1, "Location hub name is required")
+        .max(200)
+        .default("Main Store / Hub"),
+    lat: z.number().min(-90).max(90),
+    lng: z.number().min(-180).max(180),
+    address_text: z
+        .string()
+        .max(500)
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
+    max_delivery_radius_km: z.number().positive().max(100).default(15),
+    base_delivery_fee: z.number().nonnegative().default(100),
+    fee_per_km: z.number().nonnegative().default(25)
+});
+
 export async function fetchStoreSettings(orgId: string) {
     return storesQueries.getStoreByOrgId(orgId);
 }
@@ -151,4 +171,20 @@ export async function saveStoreSettings(orgId: string, rawBody: unknown) {
     }
 
     return storesQueries.upsertStore(orgId, parsed.data);
+}
+
+export async function fetchMerchantLocation(orgId: string) {
+    return storesQueries.getMerchantLocation(orgId);
+}
+
+export async function saveMerchantLocation(orgId: string, rawBody: unknown) {
+    const parsed = SaveMerchantLocationSchema.safeParse(rawBody);
+    if (!parsed.success) {
+        throw new AppError(
+            parsed.error.issues[0]?.message ?? "Invalid location configuration",
+            400
+        );
+    }
+
+    return storesQueries.upsertMerchantLocation(orgId, parsed.data);
 }

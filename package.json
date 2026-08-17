@@ -8,7 +8,10 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "type-check": "tsc --noEmit",
-    "migrate": "tsx src/migrations/run.ts"
+    "migrate": "tsx src/migrations/run.ts",
+    "test": "tsx src/tests/run-all-tests.ts",
+    "test:unit": "tsx src/tests/unit-math-crypto.test.ts",
+    "test:e2e": "tsx src/tests/e2e-delivery-flow.test.ts"
   },
   "dependencies": {
     "axios": "^1.18.1",

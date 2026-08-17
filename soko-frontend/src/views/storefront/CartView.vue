@@ -1,12 +1,13 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/views/storefront/CartView.vue (PROMPT 06)
-// Shopper cart review layout with clean trust language and Lucide icons.
+// soko-frontend/src/views/storefront/CartView.vue
+// Full-page cart review with interactive QuantityStepper controls.
 // =============================================================================
 
 import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useCartStore } from '@/stores/cart';
+import QuantityStepper from '@/components/ui/QuantityStepper.vue';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import { ShoppingBag, Trash2, ArrowRight } from 'lucide-vue-next';
@@ -15,7 +16,7 @@ const route = useRoute();
 const router = useRouter();
 const cartStore = useCartStore();
 
-const storeSlug = computed(() => route.params.storeSlug as string);
+const storeSlug = computed(() => (route.params.storeSlug as string || '').toLowerCase().trim());
 
 function formatCurrency(value: number): string {
   return `KES ${value.toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
@@ -74,15 +75,12 @@ function handleProceedToCheckout(): void {
                 </div>
 
                 <div class="item-actions-row">
-                  <div class="qty-select-wrap">
-                    <select
-                      :value="item.quantity"
-                      class="qty-select"
-                      @change="handleQuantityChange(item.product_id, Number(($event.target as HTMLSelectElement).value))"
-                    >
-                      <option v-for="qty in 10" :key="qty" :value="qty">{{ qty }}</option>
-                    </select>
-                  </div>
+                  <QuantityStepper
+                    :model-value="item.quantity"
+                    size="sm"
+                    :max="10"
+                    @update:model-value="(qty) => handleQuantityChange(item.product_id, qty)"
+                  />
                   
                   <button type="button" class="remove-btn" @click="handleRemoveItem(item.product_id)">
                     <Trash2 :size="14" /> Remove
@@ -99,7 +97,7 @@ function handleProceedToCheckout(): void {
           </div>
         </div>
 
-        <!-- Order Summary Panel (Prompt 06: removed anxiety-inducing warning boxes) -->
+        <!-- Order Summary Panel -->
         <div class="cart-summary-column">
           <div class="summary-card card">
             <h2 class="summary-title">Order Summary</h2>
@@ -115,7 +113,6 @@ function handleProceedToCheckout(): void {
               </div>
             </div>
 
-            <!-- Clean, confident trust line instead of gold warning alert -->
             <div class="trust-delivery-note">
               <p class="trust-text">Delivery options and final calculations confirmed at checkout.</p>
             </div>
@@ -151,7 +148,7 @@ function handleProceedToCheckout(): void {
 
 .page-title {
   font-family: var(--font-display);
-  font-size: var(--text-3xl);
+  font-size: var(--text-2xl);
   color: var(--color-text);
 }
 
@@ -188,16 +185,16 @@ function handleProceedToCheckout(): void {
   gap: var(--space-4);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   padding: var(--space-4);
   align-items: center;
 }
 
 .item-card__media {
-  width: 72px;
-  height: 72px;
+  width: 68px;
+  height: 68px;
   background: var(--color-bg);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   overflow: hidden;
   display: flex;
   align-items: center;
@@ -225,8 +222,8 @@ function handleProceedToCheckout(): void {
 }
 
 .item-name {
-  font-size: var(--text-base);
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: 700;
   color: var(--color-text);
 }
 
@@ -239,16 +236,6 @@ function handleProceedToCheckout(): void {
   display: flex;
   align-items: center;
   gap: var(--space-4);
-}
-
-.qty-select {
-  min-height: 28px;
-  padding: 0 var(--space-2);
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-xs);
-  outline: none;
 }
 
 .remove-btn {
@@ -267,7 +254,7 @@ function handleProceedToCheckout(): void {
 
 .item-card__total {
   font-size: var(--text-sm);
-  font-weight: 700;
+  font-weight: 800;
   color: var(--color-text);
   white-space: nowrap;
 }
@@ -277,11 +264,11 @@ function handleProceedToCheckout(): void {
 .summary-card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   padding: var(--space-5);
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--space-4);
 }
 
 .summary-title {
@@ -307,7 +294,7 @@ function handleProceedToCheckout(): void {
 
 .summary-row--bold {
   font-size: var(--text-base);
-  font-weight: 700;
+  font-weight: 800;
   color: var(--color-text);
   border-top: 1px solid var(--color-border);
   padding-top: var(--space-3);
@@ -316,9 +303,8 @@ function handleProceedToCheckout(): void {
 
 .text-ink { color: var(--color-ink); }
 
-/* Clean trust statement replacing the anxiety alert box */
 .trust-delivery-note {
-  padding: var(--space-2) 0;
+  padding: var(--space-1) 0;
 }
 
 .trust-text {

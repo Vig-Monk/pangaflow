@@ -2,33 +2,28 @@
    soko-frontend/src/styles/theme.css
    SOKO COMPACT RESPONSIVE DESIGN SYSTEM
    Palette: Vibrant Crimson (#D91E4E), Rich Emerald, True Charcoals & Soft Whites.
-   Typography: High-density sans-serif scale (14px base).
    ========================================================================== */
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
 
 :root {
   /* =========================================================================
-     1. MASTER BRAND ANCHOR (Change this single token to re-theme the app/store)
+     1. MASTER BRAND ANCHOR
      ========================================================================= */
   --brand-primary: #D91E4E;
   --brand-primary-hover: color-mix(in srgb, var(--brand-primary) 85%, #000000);
   --brand-primary-light: color-mix(in srgb, var(--brand-primary) 10%, transparent);
 
-  /* Primary Button Tokens (White text in both light and dark modes) */
+  /* Primary Button Tokens */
   --btn-primary-bg: var(--brand-primary);
   --btn-primary-hover: var(--brand-primary-hover);
   --btn-primary-text: #FFFFFF;
-
-  /* =========================================================================
-     2. BRAND TOKENS (Preserving legacy names for seamless compatibility)
-     ========================================================================= */
 
   /* Deep charcoal ink for headings, secondary borders, dark badges */
   --color-ink: #18181B;
   --color-ink-hover: #27272A;
 
-  /* Accent & Highlight (Driven directly by master brand anchor) */
+  /* Accent & Highlight */
   --color-gold: var(--brand-primary);
   --color-gold-hover: var(--brand-primary-hover);
 
@@ -36,15 +31,15 @@
   --color-ledger-green: #1F7A4D;       /* Rich Botanical Emerald */
   --color-ledger-green-hover: #166534;
   --color-market-clay: #C2410C;        /* Warm Terracotta / Destructive */
-  --color-info: #3B82F6;               /* Balanced Info Blue */
+  --color-info: #2563EB;               /* Vibrant Blue */
 
   /* =========================================================================
-     3. LIGHT MODE SURFACES & TEXT
+     2. LIGHT MODE SURFACES & ELEVATIONS
      ========================================================================= */
-
   --color-bg: #F8F9FA;
   --color-surface: #FFFFFF;
   --color-surface-raised: #FFFFFF;
+  --color-surface-hover: #F1F3F5;
   --color-border: #EBECEF;
 
   --color-text: #18181B;
@@ -54,28 +49,27 @@
   --color-focus-ring: var(--brand-primary);
 
   /* =========================================================================
-     4. COMPACT SANS-SERIF TYPOGRAPHY & FLUID SCALES
+     3. SANS-SERIF TYPOGRAPHY & FLUID SCALES
      ========================================================================= */
   --font-display: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
 
-  /* Subtly scaled down for high-density SaaS readability */
-  --text-xs: 0.6875rem;                                  /* 11px - micro labels, pills, tags */
-  --text-sm: 0.78125rem;                                 /* 12.5px - secondary metadata, th headers */
-  --text-base: 0.875rem;                                 /* 14px - crisp UI body baseline */
-  --text-lg: clamp(0.9375rem, 1.2vw + 0.75rem, 1.0625rem); /* 15px - 17px section headers */
-  --text-xl: clamp(1.0625rem, 1.5vw + 0.75rem, 1.25rem);   /* 17px - 20px card titles */
-  --text-2xl: clamp(1.25rem, 2vw + 0.75rem, 1.45rem);      /* 20px - 23px page titles */
-  --text-3xl: clamp(1.45rem, 2.8vw + 0.75rem, 1.85rem);    /* 23px - 29.5px stats */
-  --text-4xl: clamp(1.65rem, 4vw + 0.75rem, 2.25rem);      /* 26px - 36px hero headlines */
+  --text-xs: 0.6875rem;                                  /* 11px */
+  --text-sm: 0.78125rem;                                 /* 12.5px */
+  --text-base: 0.875rem;                                 /* 14px */
+  --text-lg: clamp(0.9375rem, 1.2vw + 0.75rem, 1.0625rem); /* 15px - 17px */
+  --text-xl: clamp(1.0625rem, 1.5vw + 0.75rem, 1.25rem);   /* 17px - 20px */
+  --text-2xl: clamp(1.25rem, 2vw + 0.75rem, 1.45rem);      /* 20px - 23px */
+  --text-3xl: clamp(1.45rem, 2.8vw + 0.75rem, 1.85rem);    /* 23px - 29.5px */
+  --text-4xl: clamp(1.65rem, 4vw + 0.75rem, 2.25rem);      /* 26px - 36px */
 
   --leading-tight: 1.22;
   --leading-normal: 1.55;
   --leading-relaxed: 1.7;
 
   /* =========================================================================
-     5. RESPONSIVE FLUID SPACING
+     4. SPACING SCALE
      ========================================================================= */
   --space-1: 0.25rem;   /* 4px */
   --space-2: 0.5rem;    /* 8px */
@@ -89,7 +83,7 @@
   --space-16: 4rem;     /* 64px */
 
   /* =========================================================================
-     6. RADII & SHADOWS
+     5. RADII & SHADOWS
      ========================================================================= */
   --radius-sm: 6px;
   --radius-md: 10px;
@@ -107,22 +101,22 @@
 }
 
 /* =============================================================================
-   MOBILE OVERRIDES (<= 640px)
+   MOBILE VIEWPORT ADAPTATIONS (<= 640px)
    ========================================================================== */
 @media (max-width: 640px) {
   :root {
-    --space-5: 1rem;       /* 16px */
-    --space-6: 1.125rem;   /* 18px */
-    --space-8: 1.375rem;   /* 22px */
-    --space-10: 1.75rem;   /* 28px */
-    --space-12: 2rem;      /* 32px */
-    --space-16: 2.5rem;    /* 40px */
+    --space-5: 1rem;
+    --space-6: 1.125rem;
+    --space-8: 1.375rem;
+    --space-10: 1.75rem;
+    --space-12: 2rem;
+    --space-16: 2.5rem;
     --radius-lg: 12px;
   }
 }
 
 /* =============================================================================
-   DARK MODE (True Warm Charcoal & Luminous Accents)
+   DARK MODE ELEVATION & CONTRAST (True Charcoal & Luminous Accents)
    ========================================================================== */
 [data-theme='dark'] {
   --brand-primary: #E83D69;
@@ -133,10 +127,11 @@
   --btn-primary-hover: var(--brand-primary-hover);
   --btn-primary-text: #FFFFFF;
 
-  --color-bg: #111113;
-  --color-surface: #18181B;
-  --color-surface-raised: #222226;
-  --color-border: #27272A;
+  --color-bg: #0F0F12;
+  --color-surface: #17171C;
+  --color-surface-raised: #202027;
+  --color-surface-hover: #282832;
+  --color-border: #2C2C36;
 
   --color-ink: #F4F4F5;
   --color-ink-hover: #FFFFFF;
@@ -145,22 +140,23 @@
   --color-gold-hover: var(--brand-primary-hover);
 
   --color-ledger-green: #34D399;
+  --color-ledger-green-hover: #10B981;
   --color-market-clay: #FB7185;
   --color-info: #60A5FA;
 
   --color-text: #F4F4F5;
   --color-text-muted: #94A3B8;
-  --color-text-inverse: #111113;
+  --color-text-inverse: #0F0F12;
 
   --color-focus-ring: var(--brand-primary);
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
-  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.32);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.44);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
 }
 
 /* =============================================================================
-   GLOBAL RESET & OVERFLOW DEFENSE
+   GLOBAL RESET
    ========================================================================== */
 * {
   box-sizing: border-box;
@@ -228,3 +224,4 @@ h1, h2, h3, .page-title {
 .stitch--in     { --stitch-color: var(--color-ledger-green); }
 .stitch--out    { --stitch-color: var(--color-market-clay); }
 .stitch--adjust { --stitch-color: var(--brand-primary); }
+</style>

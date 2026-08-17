@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/views/storefront/StoreHomeView.vue
+// Instant client-side search, category count badges, and zero layout shift.
 // =============================================================================
 
 import { onMounted, ref, computed, watch } from 'vue';
@@ -12,7 +13,15 @@ import { apiGet } from '@/services/apiClient';
 import StoreHero from '@/components/storefront/StoreHero.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
-import { ShoppingBag, Plus, Tag, ArrowUpDown, CheckSquare, Square } from 'lucide-vue-next';
+import {
+  ShoppingBag,
+  Plus,
+  ArrowUpDown,
+  CheckSquare,
+  Square,
+  Search,
+  X,
+} from 'lucide-vue-next';
 
 interface PublicProduct {
   id: string;
@@ -33,6 +42,7 @@ const { push: pushToast } = useToast();
 
 const products = ref<PublicProduct[]>([]);
 const selectedCategory = ref('');
+const searchQuery = ref('');
 const inStockOnly = ref(false);
 const priceSort = ref<'default' | 'asc' | 'desc'>('default');
 
@@ -42,22 +52,46 @@ const loadError = ref(false);
 
 const storeSlug = computed(() => (route.params.storeSlug as string || '').toLowerCase().trim());
 
-const categories = computed(() => {
-  const list = products.value.map(p => p.category?.name).filter(Boolean);
-  return ['All', ...Array.from(new Set(list))];
+// Category tabs with real-time count badges
+const categoryCounts = computed(() => {
+  const counts: Record<string, number> = { All: products.value.length };
+  for (const p of products.value) {
+    const catName = p.category?.name || 'General';
+    counts[catName] = (counts[catName] || 0) + 1;
+  }
+  return counts;
+});
+
+const categoryNames = computed(() => {
+  const unique = Array.from(new Set(products.value.map((p) => p.category?.name).filter(Boolean)));
+  return ['All', ...unique];
 });
 
 const productsByCategory = computed(() => {
   let result = [...products.value];
 
+  // 1. Text Search Filter (instant, client-side across name, description, SKU)
+  const q = searchQuery.value.trim().toLowerCase();
+  if (q) {
+    result = result.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        (p.description && p.description.toLowerCase().includes(q)) ||
+        (p.category?.name && p.category.name.toLowerCase().includes(q))
+    );
+  }
+
+  // 2. Category Tab Filter
   if (selectedCategory.value && selectedCategory.value !== 'All') {
-    result = result.filter(p => p.category?.name === selectedCategory.value);
+    result = result.filter((p) => p.category?.name === selectedCategory.value);
   }
 
+  // 3. In-Stock Filter
   if (inStockOnly.value) {
-    result = result.filter(p => p.availability === 'in_stock');
+    result = result.filter((p) => p.availability === 'in_stock');
   }
 
+  // 4. Price Sort
   if (priceSort.value === 'asc') {
     result.sort((a, b) => a.price - b.price);
   } else if (priceSort.value === 'desc') {
@@ -89,7 +123,7 @@ async function loadStoreData(): Promise<void> {
 
     products.value = await apiGet<PublicProduct[]>(`/public/stores/${storeSlug.value}/products`);
     loadingProducts.value = false;
-  } catch (err) {
+  } catch {
     loadError.value = true;
     loadingStore.value = false;
     loadingProducts.value = false;
@@ -101,12 +135,15 @@ onMounted(() => {
   loadStoreData();
 });
 
-watch(() => route.params.storeSlug, (newSlug) => {
-  if (newSlug) {
-    cartStore.initForStore(String(newSlug).toLowerCase().trim());
-    loadStoreData();
+watch(
+  () => route.params.storeSlug,
+  (newSlug) => {
+    if (newSlug) {
+      cartStore.initForStore(String(newSlug).toLowerCase().trim());
+      loadStoreData();
+    }
   }
-});
+);
 
 function formatCurrency(value: number): string {
   return `KES ${value.toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
@@ -132,6 +169,13 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
 
   pushToast({ message: `Added ${prod.name} to cart`, variant: 'success' });
 }
+
+function clearFilters(): void {
+  searchQuery.value = '';
+  selectedCategory.value = '';
+  inStockOnly.value = false;
+  priceSort.value = 'default';
+}
 </script>
 
 <template>
@@ -148,44 +192,68 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
     <template v-else>
       <section class="store-hero-section">
         <div v-if="loadingStore" class="hero-skeleton">
-          <Skeleton height="320px" radius="0" />
+          <Skeleton height="300px" radius="0" />
         </div>
         <StoreHero v-else :settings="storeSettingsStore.settings" />
       </section>
 
+      <!-- Instant Catalog Filter & Search Toolbar -->
       <div class="promoted-categories-bar" v-if="!loadingProducts && products.length > 0">
         <div class="categories-bar-inner">
-          <div class="categories-label">
-            <Tag :size="16" /> Categories:
-          </div>
-          <div class="filter-wrap">
+          <!-- Instant Search Input -->
+          <div class="catalog-search-wrap">
+            <Search :size="16" class="search-icon text-muted" />
+            <input
+              v-model="searchQuery"
+              type="text"
+              placeholder="Search products in catalog..."
+              class="catalog-search-input"
+            />
             <button
-              v-for="cat in categories"
-              :key="cat"
-              class="filter-tab"
-              :class="{ 'filter-tab--active': (cat === 'All' && !selectedCategory) || selectedCategory === cat }"
-              @click="selectedCategory = cat === 'All' ? '' : cat"
+              v-if="searchQuery"
+              type="button"
+              class="search-clear-btn"
+              @click="searchQuery = ''"
             >
-              {{ cat }}
+              <X :size="14" />
             </button>
           </div>
 
+          <!-- Category Filter Pills with Item Count Badges -->
+          <div class="filter-wrap">
+            <button
+              v-for="cat in categoryNames"
+              :key="cat"
+              class="filter-tab"
+              :class="{
+                'filter-tab--active': (cat === 'All' && !selectedCategory) || selectedCategory === cat,
+              }"
+              @click="selectedCategory = cat === 'All' ? '' : cat"
+            >
+              <span>{{ cat }}</span>
+              <span class="tab-count-pill tabular-figure">
+                {{ categoryCounts[cat] || 0 }}
+              </span>
+            </button>
+          </div>
+
+          <!-- Stock & Price Controls -->
           <div class="catalog-controls-toolbar">
-            <button 
+            <button
               class="control-toggle-btn"
               :class="{ active: inStockOnly }"
               type="button"
               @click="inStockOnly = !inStockOnly"
               title="Filter items currently in stock"
             >
-              <component :is="inStockOnly ? CheckSquare : Square" :size="16" />
-              <span>In Stock Only</span>
+              <component :is="inStockOnly ? CheckSquare : Square" :size="15" />
+              <span>In Stock</span>
             </button>
 
             <div class="sort-select-wrapper">
-              <ArrowUpDown :size="14" class="sort-icon" />
+              <ArrowUpDown :size="13" class="sort-icon" />
               <select v-model="priceSort" class="sort-select">
-                <option value="default">Sort by: Featured</option>
+                <option value="default">Featured</option>
                 <option value="asc">Price: Low to High</option>
                 <option value="desc">Price: High to Low</option>
               </select>
@@ -195,11 +263,13 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
       </div>
 
       <div class="catalog-container">
+        <!-- Structural Loading Skeleton -->
         <div v-if="loadingProducts" class="products-grid-skeleton">
-          <div v-for="n in 4" :key="n" class="skeleton-card">
-            <Skeleton height="220px" />
-            <Skeleton height="24px" width="70%" />
-            <Skeleton height="20px" width="40%" />
+          <div v-for="n in 6" :key="n" class="skeleton-card card">
+            <Skeleton height="200px" radius="var(--radius-md)" />
+            <Skeleton height="16px" width="40%" />
+            <Skeleton height="20px" width="80%" />
+            <Skeleton height="18px" width="50%" />
           </div>
         </div>
 
@@ -211,17 +281,26 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
             />
           </div>
 
-          <div v-else-if="Object.keys(productsByCategory).length === 0" class="empty-catalog card">
+          <!-- Empty Search Filter State -->
+          <div
+            v-else-if="Object.keys(productsByCategory).length === 0"
+            class="empty-catalog card"
+          >
             <EmptyState
-              title="No products match your filters"
-              description="Try adjusting your category selection or stock filters to view available inventory."
-              action-label="Reset Filters"
-              :on-action="() => { selectedCategory = ''; inStockOnly = false; priceSort = 'default'; }"
+              title="No products match your search"
+              description="Try adjusting your keyword search, category selection, or stock filters."
+              action-label="Clear All Filters"
+              :on-action="clearFilters"
             />
           </div>
 
+          <!-- Catalog Grouped Sections -->
           <div v-else class="catalog-sections-stack">
-            <div v-for="(catProducts, categoryName) in productsByCategory" :key="categoryName" class="category-section-group">
+            <div
+              v-for="(catProducts, categoryName) in productsByCategory"
+              :key="categoryName"
+              class="category-section-group"
+            >
               <div class="category-section-header">
                 <h2 class="category-section-title font-display">{{ categoryName }}</h2>
                 <span class="category-count tabular-figure">{{ catProducts.length }} items</span>
@@ -235,12 +314,21 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
                   class="product-card"
                 >
                   <div class="product-card__media">
-                    <img v-if="prod.images && prod.images.length > 0" :src="prod.images[0]" :alt="prod.name" class="product-card__img" />
+                    <img
+                      v-if="prod.images && prod.images.length > 0"
+                      :src="prod.images[0]"
+                      :alt="prod.name"
+                      class="product-card__img"
+                      loading="lazy"
+                    />
                     <div v-else class="product-card__img-placeholder">
                       <ShoppingBag :size="32" />
                     </div>
-                    
-                    <span v-if="prod.availability === 'out_of_stock'" class="out-of-stock-badge">
+
+                    <span
+                      v-if="prod.availability === 'out_of_stock'"
+                      class="out-of-stock-badge"
+                    >
                       Out of Stock
                     </span>
 
@@ -287,7 +375,7 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
   position: sticky;
-  top: 73px;
+  top: 61px;
   z-index: 90;
   box-shadow: var(--shadow-sm);
 }
@@ -298,46 +386,77 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
   padding: var(--space-3) var(--space-4);
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
-.categories-label {
+.catalog-search-wrap {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-xs);
-  font-weight: 700;
-  color: var(--color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  flex-shrink: 0;
-  display: none;
+  min-width: 220px;
+  flex: 1;
 }
 
 @media (min-width: 768px) {
-  .categories-label { display: flex; }
+  .catalog-search-wrap {
+    max-width: 260px;
+  }
+}
+
+.search-icon {
+  position: absolute;
+  left: var(--space-3);
+  pointer-events: none;
+}
+
+.search-clear-btn {
+  position: absolute;
+  right: var(--space-2);
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 2px;
+}
+
+.catalog-search-input {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 var(--space-7) 0 calc(var(--space-8) + 2px);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  color: var(--color-text);
+  outline: none;
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+.catalog-search-input:focus {
+  border-color: var(--color-ink);
 }
 
 .filter-wrap {
   display: flex;
   gap: var(--space-2);
   overflow-x: auto;
-  flex: 1;
+  flex: 1.5;
   padding-bottom: 2px;
 }
 
 .filter-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
-  padding: var(--space-2) var(--space-5);
-  font-size: var(--text-sm);
+  padding: 4px var(--space-3);
+  font-size: var(--text-xs);
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-  transition: background var(--duration-fast) var(--ease-standard),
-              color var(--duration-fast) var(--ease-standard);
+  transition: all var(--duration-fast) var(--ease-standard);
 }
 
 .filter-tab:hover {
@@ -350,10 +469,23 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
   border-color: var(--color-ink);
 }
 
+.tab-count-pill {
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, 0.08);
+  font-weight: 700;
+}
+
+.filter-tab--active .tab-count-pill {
+  background: rgba(255, 255, 255, 0.25);
+  color: #FFFFFF;
+}
+
 .catalog-controls-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   margin-left: auto;
 }
 
@@ -364,7 +496,7 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
-  padding: var(--space-2) var(--space-4);
+  padding: 4px var(--space-3);
   font-size: var(--text-xs);
   font-weight: 600;
   color: var(--color-text-muted);
@@ -385,20 +517,20 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
-  padding: 0 var(--space-4);
-  min-height: 36px;
+  padding: 0 var(--space-3);
+  min-height: 32px;
 }
 
 .sort-icon {
   color: var(--color-text-muted);
-  margin-right: var(--space-2);
+  margin-right: 4px;
 }
 
 .sort-select {
   background: transparent;
   border: none;
   font-family: var(--font-body);
-  font-size: var(--text-xs);
+  font-size: 11px;
   font-weight: 600;
   color: var(--color-text);
   outline: none;
@@ -408,13 +540,13 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
 .catalog-container {
   max-width: 1200px;
   margin: 0 auto;
-  padding: var(--space-8) var(--space-4);
+  padding: var(--space-6) var(--space-4);
 }
 
 .catalog-sections-stack {
   display: flex;
   flex-direction: column;
-  gap: var(--space-12);
+  gap: var(--space-10);
 }
 
 .category-section-group {
@@ -432,24 +564,25 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
 }
 
 .category-section-title {
-  font-size: var(--text-2xl);
+  font-size: var(--text-xl);
   color: var(--color-text);
 }
 
 .category-count {
-  font-size: var(--text-xs);
+  font-size: 11px;
   color: var(--color-text-muted);
-  font-weight: 600;
+  font-weight: 700;
   text-transform: uppercase;
 }
 
 .products-grid-skeleton {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: var(--space-6);
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-4);
 }
 
 .skeleton-card {
+  padding: var(--space-3);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -465,13 +598,13 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
 
 .products-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: var(--space-6);
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-4);
 }
 
 .product-card {
   background: var(--color-surface);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
   overflow: hidden;
   display: flex;
@@ -488,7 +621,7 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
 }
 
 .product-card__media {
-  height: 220px;
+  height: 180px;
   background: var(--color-bg);
   position: relative;
   display: flex;
@@ -508,24 +641,24 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
 
 .out-of-stock-badge {
   position: absolute;
-  top: var(--space-3);
-  right: var(--space-3);
+  top: var(--space-2);
+  right: var(--space-2);
   background: var(--color-market-clay);
-  color: var(--color-text-inverse);
-  font-size: var(--text-xs);
-  font-weight: 600;
-  padding: var(--space-1) var(--space-3);
+  color: #FFFFFF;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px var(--space-2);
   border-radius: var(--radius-full);
 }
 
 .quick-add-btn {
   position: absolute;
-  bottom: var(--space-3);
-  right: var(--space-3);
-  width: 36px;
-  height: 36px;
-  background: var(--color-ink);
-  color: var(--color-text-inverse);
+  bottom: var(--space-2);
+  right: var(--space-2);
+  width: 32px;
+  height: 32px;
+  background: var(--brand-primary);
+  color: #FFFFFF;
   border: none;
   border-radius: var(--radius-full);
   display: flex;
@@ -533,53 +666,42 @@ function handleQuickAddToCart(prod: PublicProduct, event: Event): void {
   justify-content: center;
   cursor: pointer;
   box-shadow: var(--shadow-sm);
-  opacity: 0;
-  transform: translateY(4px);
-  transition: opacity var(--duration-fast) var(--ease-standard),
-              transform var(--duration-fast) var(--ease-standard),
+  transition: transform var(--duration-fast) var(--ease-standard),
               background var(--duration-fast) var(--ease-standard);
 }
 
-.product-card:hover .quick-add-btn {
-  opacity: 1;
-  transform: translateY(0);
-}
-
 .quick-add-btn:hover {
-  background: var(--color-gold);
-  color: var(--color-text);
-}
-
-@media (max-width: 768px) {
-  .quick-add-btn {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  background: var(--brand-primary-hover);
+  transform: scale(1.08);
 }
 
 .product-card__info {
-  padding: var(--space-4);
+  padding: var(--space-3);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 2px;
 }
 
 .product-category {
-  font-size: var(--text-xs);
+  font-size: 10px;
   text-transform: uppercase;
   color: var(--color-text-muted);
   letter-spacing: 0.05em;
+  font-weight: 700;
 }
 
 .product-name {
-  font-size: var(--text-base);
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .product-price {
-  font-size: var(--text-sm);
-  font-weight: 700;
+  font-size: var(--text-xs);
+  font-weight: 800;
   color: var(--color-ink);
-  margin-top: var(--space-1);
+  margin-top: 2px;
 }
 </style>

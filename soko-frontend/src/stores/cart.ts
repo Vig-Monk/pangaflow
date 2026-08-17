@@ -2,124 +2,182 @@
 // soko-frontend/src/stores/cart.ts
 // =============================================================================
 
-import { defineStore } from "pinia";
+import { defineStore } from 'pinia';
 
 export interface CartItem {
-    product_id: string;
-    name: string;
-    image_url: string | null;
-    price: number;
-    quantity: number;
+  product_id: string;
+  name: string;
+  image_url: string | null;
+  price: number;
+  quantity: number;
 }
 
-const CART_PREFIX = "soko_cart_";
+export interface CheckoutDraftState {
+  deliveryType: 'delivery' | 'pickup';
+  customerName: string;
+  customerPhone: string;
+  customerEmail: string;
+  deliveryLocation: string;
+  customerLat: number | null;
+  customerLng: number | null;
+  locationSource: 'gps' | 'local_list' | 'nominatim' | 'manual_text';
+  locationAccuracyM: number | null;
+  estate: string;
+  landmark: string;
+  houseNumber: string;
+  notes: string;
+  paymentMethod: string;
+}
 
-function getStorageKey(slug: string): string {
-    return `${CART_PREFIX}${slug.toLowerCase().trim()}`;
+const CART_PREFIX = 'soko_cart_';
+const CHECKOUT_PREFIX = 'soko_checkout_state_';
+
+function getCartStorageKey(slug: string): string {
+  return `${CART_PREFIX}${slug.toLowerCase().trim()}`;
+}
+
+function getCheckoutStorageKey(slug: string): string {
+  return `${CHECKOUT_PREFIX}${slug.toLowerCase().trim()}`;
 }
 
 function loadCartForStore(slug: string): CartItem[] {
-    if (typeof window === "undefined" || !slug) return [];
-    const stored = localStorage.getItem(getStorageKey(slug));
-    if (!stored) return [];
-    try {
-        return JSON.parse(stored);
-    } catch {
-        return [];
-    }
+  if (typeof window === 'undefined' || !slug) return [];
+  const stored = localStorage.getItem(getCartStorageKey(slug));
+  if (!stored) return [];
+  try {
+    return JSON.parse(stored);
+  } catch {
+    return [];
+  }
 }
 
 function saveCartForStore(slug: string, items: CartItem[]): void {
-    if (typeof window === "undefined" || !slug) return;
-    if (items.length === 0) {
-        localStorage.removeItem(getStorageKey(slug));
-    } else {
-        localStorage.setItem(getStorageKey(slug), JSON.stringify(items));
-    }
+  if (typeof window === 'undefined' || !slug) return;
+  if (items.length === 0) {
+    localStorage.removeItem(getCartStorageKey(slug));
+  } else {
+    localStorage.setItem(getCartStorageKey(slug), JSON.stringify(items));
+  }
 }
 
-export const useCartStore = defineStore("cart", {
-    state: () => ({
-        storeSlug: "" as string,
-        items: [] as CartItem[]
-    }),
+function loadCheckoutDraft(slug: string): Partial<CheckoutDraftState> {
+  if (typeof window === 'undefined' || !slug) return {};
+  const stored = localStorage.getItem(getCheckoutStorageKey(slug));
+  if (!stored) return {};
+  try {
+    return JSON.parse(stored);
+  } catch {
+    return {};
+  }
+}
 
-    getters: {
-        isEmpty: (state): boolean => state.items.length === 0,
+function saveCheckoutDraft(slug: string, draft: Partial<CheckoutDraftState>): void {
+  if (typeof window === 'undefined' || !slug) return;
+  localStorage.setItem(getCheckoutStorageKey(slug), JSON.stringify(draft));
+}
 
-        totalItems: (state): number => {
-            return state.items.reduce(
-                (total, item) => total + item.quantity,
-                0
-            );
-        },
+export const useCartStore = defineStore('cart', {
+  state: () => ({
+    storeSlug: '' as string,
+    items: [] as CartItem[],
+    checkoutDraft: {
+      deliveryType: 'delivery',
+      customerName: '',
+      customerPhone: '',
+      customerEmail: '',
+      deliveryLocation: '',
+      customerLat: null,
+      customerLng: null,
+      locationSource: 'manual_text',
+      locationAccuracyM: null,
+      estate: '',
+      landmark: '',
+      houseNumber: '',
+      notes: '',
+      paymentMethod: 'mpesa_cash',
+    } as CheckoutDraftState,
+  }),
 
-        subtotal: (state): number => {
-            const sum = state.items.reduce(
-                (total, item) => total + item.price * item.quantity,
-                0
-            );
-            return Math.round(sum * 100) / 100;
-        }
+  getters: {
+    isEmpty: (state): boolean => state.items.length === 0,
+
+    totalItems: (state): number => {
+      return state.items.reduce((total, item) => total + item.quantity, 0);
     },
 
-    actions: {
-        initForStore(slug: string): void {
-            const normalized = (slug || "").toLowerCase().trim();
-            if (!normalized) return;
-            if (this.storeSlug !== normalized) {
-                this.storeSlug = normalized;
-                this.items = loadCartForStore(normalized);
-            }
-        },
+    subtotal: (state): number => {
+      const sum = state.items.reduce((total, item) => total + item.price * item.quantity, 0);
+      return Math.round(sum * 100) / 100;
+    },
+  },
 
-        addItem(
-            storeSlug: string,
-            productId: string,
-            name: string,
-            imageUrl: string | null,
-            price: number,
-            quantity: number,
-            maxStock?: number
-        ): void {
-            this.initForStore(storeSlug);
+  actions: {
+    initForStore(slug: string): void {
+      const normalized = (slug || '').toLowerCase().trim();
+      if (!normalized) return;
+      if (this.storeSlug !== normalized) {
+        this.storeSlug = normalized;
+        this.items = loadCartForStore(normalized);
+        const savedDraft = loadCheckoutDraft(normalized);
+        this.checkoutDraft = { ...this.checkoutDraft, ...savedDraft };
+      }
+    },
 
-            const limit = maxStock !== undefined ? Math.min(10, Math.max(1, maxStock)) : 10;
-            const existing = this.items.find((item) => item.product_id === productId);
+    setCheckoutDraft(draft: Partial<CheckoutDraftState>): void {
+      this.checkoutDraft = { ...this.checkoutDraft, ...draft };
+      if (this.storeSlug) {
+        saveCheckoutDraft(this.storeSlug, this.checkoutDraft);
+      }
+    },
 
-            if (existing) {
-                existing.quantity = Math.min(limit, existing.quantity + quantity);
-            } else {
-                this.items.push({
-                    product_id: productId,
-                    name,
-                    image_url: imageUrl,
-                    price,
-                    quantity: Math.min(limit, quantity)
-                });
-            }
-            saveCartForStore(this.storeSlug, this.items);
-        },
+    addItem(
+      storeSlug: string,
+      productId: string,
+      name: string,
+      imageUrl: string | null,
+      price: number,
+      quantity: number,
+      maxStock?: number
+    ): void {
+      this.initForStore(storeSlug);
 
-        updateQuantity(productId: string, quantity: number, maxStock?: number): void {
-            const item = this.items.find((item) => item.product_id === productId);
-            if (item) {
-                const limit = maxStock !== undefined ? Math.min(10, Math.max(1, maxStock)) : 10;
-                item.quantity = Math.max(1, Math.min(limit, quantity));
-                saveCartForStore(this.storeSlug, this.items);
-            }
-        },
+      const limit = maxStock !== undefined ? Math.min(10, Math.max(1, maxStock)) : 10;
+      const existing = this.items.find((item) => item.product_id === productId);
 
-        removeItem(productId: string): void {
-            this.items = this.items.filter((item) => item.product_id !== productId);
-            saveCartForStore(this.storeSlug, this.items);
-        },
+      if (existing) {
+        existing.quantity = Math.min(limit, existing.quantity + quantity);
+      } else {
+        this.items.push({
+          product_id: productId,
+          name,
+          image_url: imageUrl,
+          price,
+          quantity: Math.min(limit, quantity),
+        });
+      }
+      saveCartForStore(this.storeSlug, this.items);
+    },
 
-        clearCart(): void {
-            this.items = [];
-            if (this.storeSlug) {
-                saveCartForStore(this.storeSlug, []);
-            }
-        }
-    }
+    updateQuantity(productId: string, quantity: number, maxStock?: number): void {
+      const item = this.items.find((item) => item.product_id === productId);
+      if (item) {
+        const limit = maxStock !== undefined ? Math.min(10, Math.max(1, maxStock)) : 10;
+        item.quantity = Math.max(1, Math.min(limit, quantity));
+        saveCartForStore(this.storeSlug, this.items);
+      }
+    },
+
+    removeItem(productId: string): void {
+      this.items = this.items.filter((item) => item.product_id !== productId);
+      saveCartForStore(this.storeSlug, this.items);
+    },
+
+    clearCart(): void {
+      this.items = [];
+      if (this.storeSlug) {
+        saveCartForStore(this.storeSlug, []);
+        localStorage.removeItem(getCheckoutStorageKey(this.storeSlug));
+      }
+    },
+  },
 });
