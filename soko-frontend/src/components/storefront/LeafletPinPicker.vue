@@ -118,7 +118,7 @@ function createOrUpdateMarker(lat: number, lng: number): void {
   }
 }
 
-export function setCenter(lat: number, lng: number, zoomLevel = 15): void {
+function setCenter(lat: number, lng: number, zoomLevel = 15): void {
   if (!map) return;
   map.setView([lat, lng], zoomLevel);
   createOrUpdateMarker(lat, lng);

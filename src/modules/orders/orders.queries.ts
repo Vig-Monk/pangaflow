@@ -719,7 +719,7 @@ export async function completeOrderDeliveryTransactional(
             input.collectedBy?.trim() || order.rider_name || "merchant";
 
         // Update Order to Delivered
-        const updateRes = await client.query<Order>(
+        await client.query<Order>(
             `UPDATE orders
        SET    status           = 'delivered',
               delivered_at     = NOW(),
