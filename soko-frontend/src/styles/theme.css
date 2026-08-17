@@ -224,4 +224,3 @@ h1, h2, h3, .page-title {
 .stitch--in     { --stitch-color: var(--color-ledger-green); }
 .stitch--out    { --stitch-color: var(--color-market-clay); }
 .stitch--adjust { --stitch-color: var(--brand-primary); }
-</style>
