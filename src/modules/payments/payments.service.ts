@@ -40,6 +40,17 @@ export interface InitiatePaymentResult {
     customerMessage: string;
 }
 
+function normalizePhone(input: string): string {
+    const digits = (input || "").replace(/\D/g, "");
+    if (digits.startsWith("254") && digits.length === 12) {
+        return `0${digits.slice(3)}`;
+    }
+    if ((digits.startsWith("7") || digits.startsWith("1")) && digits.length === 9) {
+        return `0${digits}`;
+    }
+    return digits.slice(0, 10);
+}
+
 export async function initiatePayment(
     input: InitiatePaymentInput
 ): Promise<InitiatePaymentResult> {
@@ -146,7 +157,6 @@ export async function handleMpesaCallback(
         );
     }
 
-    // Idempotency: Skip if already processed
     if (existing.status === "completed") {
         return;
     }
@@ -172,69 +182,52 @@ export async function handleMpesaCallback(
             }
         );
 
-        // 2. Route by transaction context
+        // 2. Context Routing
         if (isVerification) {
-            // Case A: Till Verification STK Test
             if (callback.isSuccess) {
-                await updateVerificationStatus(
-                    existing.org_id,
-                    "verified",
-                    null
-                );
+                await updateVerificationStatus(existing.org_id, "verified", null);
             } else {
-                await updateVerificationStatus(
-                    existing.org_id,
-                    "failed",
-                    callback.resultDesc
-                );
+                await updateVerificationStatus(existing.org_id, "failed", callback.resultDesc);
             }
         } else {
-            // Check if reference matches an Order UUID
-            const order = await findOrderForWebhook(
-                client,
-                existing.account_reference
-            );
+            const order = await findOrderForWebhook(client, existing.account_reference);
 
             if (order) {
-                // Case B: Storefront Customer Order Payment
                 if (callback.isSuccess) {
                     await markOrderAsPaidTransactional(client, order.id);
 
-                    // Find or create customer entry in merchant directory
+                    // Find or create customer record in CRM
                     let customerId = existing.customer_id;
                     if (!customerId && order.customer_phone) {
+                        const cleanPhone = normalizePhone(order.customer_phone);
                         const custRes = await client.query<{ id: string }>(
                             `SELECT id FROM customers WHERE org_id = $1 AND phone = $2 AND deleted_at IS NULL LIMIT 1`,
-                            [order.org_id, order.customer_phone]
+                            [order.org_id, cleanPhone]
                         );
 
                         if (custRes.rows.length > 0) {
                             customerId = custRes.rows[0].id;
                         } else {
-                            const newCustRes = await client.query<{
-                                id: string;
-                            }>(
+                            const newCustRes = await client.query<{ id: string }>(
                                 `INSERT INTO customers (org_id, name, phone, address)
                  VALUES ($1, $2, $3, $4)
                  RETURNING id`,
                                 [
                                     order.org_id,
                                     order.customer_name,
-                                    order.customer_phone,
+                                    cleanPhone,
                                     order.delivery_location
                                 ]
                             );
-                            customerId = newCustRes.rows[0].id;
+                            customerId = newCustRes.rows[0]?.id;
                         }
                     }
 
-                    // Record in financial ledger so Dashboard revenue updates immediately
+                    // Record in financial ledger so Dashboard updates immediately
                     if (customerId) {
-                        const amount =
-                            callback.amount ?? parseFloat(order.total);
+                        const amount = callback.amount ?? parseFloat(order.total);
                         const receipt = callback.mpesaReceiptNumber || "N/A";
 
-                        // Record sale (increases sales count/total)
                         await recordTransaction(client, {
                             orgId: order.org_id,
                             customerId,
@@ -244,7 +237,6 @@ export async function handleMpesaCallback(
                             createdBy: null
                         });
 
-                        // Record payment (clears balance to 0 while crediting dashboard revenue)
                         await recordTransaction(client, {
                             orgId: order.org_id,
                             customerId,
@@ -258,7 +250,6 @@ export async function handleMpesaCallback(
                     await markOrderPaymentFailedTransactional(client, order.id);
                 }
             } else if (callback.isSuccess && existing.customer_id) {
-                // Case C: Manual Customer Credit Ledger Payment
                 await recordTransaction(client, {
                     orgId: existing.org_id,
                     customerId: existing.customer_id,

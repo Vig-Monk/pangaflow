@@ -1,22 +1,29 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/views/CustomerDetailView.vue
-// Customer credit ledger with SmartSaleModal integration & WhatsApp statement.
+// Customer credit ledger with SmartSaleModal, SettleDebtModal & Customer Deletion.
 // =============================================================================
 
 import { computed, onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { useCustomersStore } from '@/stores/customers';
 import { useLedgerStore } from '@/stores/ledger';
+import { useToast } from '@/composables/useToast';
 import Button from '@/components/ui/Button.vue';
 import Pagination from '@/components/ui/Pagination.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import LedgerRow from '@/components/ledger/LedgerRow.vue';
 import SmartSaleModal from '@/components/ledger/SmartSaleModal.vue';
+import SettleDebtModal from '@/components/ledger/SettleDebtModal.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import {
   AlertCircle,
   CheckCircle2,
   Share2,
   Plus,
+  DollarSign,
+  Trash2,
+  ArrowLeft,
 } from 'lucide-vue-next';
 
 interface Props {
@@ -25,10 +32,15 @@ interface Props {
 
 const props = defineProps<Props>();
 
+const router = useRouter();
 const customersStore = useCustomersStore();
 const ledgerStore = useLedgerStore();
+const { push: pushToast } = useToast();
 
 const showSmartSaleModal = ref(false);
+const showSettleModal = ref(false);
+const showConfirmDelete = ref(false);
+const isDeleting = ref(false);
 
 onMounted(() => {
   customersStore.fetchOne(props.id);
@@ -61,25 +73,45 @@ const whatsappStatementUrl = computed(() => {
   const lines = [
     `*📋 SOKO CUSTOMER STATEMENT — ${customer.value.name.toUpperCase()}*`,
     `--------------------------------`,
-    `*Current Balance:* KES ${Math.abs(balanceNumber.value).toLocaleString('en-KE')} (${hasDebt.value ? 'OUTSTANDING DEBT' : 'CLEARED / IN CREDIT'})`,
+    `*Current Balance:* KES ${Math.abs(balanceNumber.value).toLocaleString('en-KE')} (${hasDebt.value ? 'OWES' : 'CLEARED / PAID UP'})`,
     `*Total Transactions:* ${ledgerStore.total}`,
     `--------------------------------`,
-    `_Thank you for your business! Please reach out if you have any questions._`,
+    `_Thank you for your business!_`,
   ].join('\n');
 
   return `https://wa.me/${phone}?text=${encodeURIComponent(lines)}`;
 });
 
-function handleSaleSuccess(): void {
+function refreshData(): void {
   ledgerStore.fetchLedger(props.id, { page: 1 });
   customersStore.fetchOne(props.id);
+}
+
+async function executeDelete(): Promise<void> {
+  if (!customer.value) return;
+  isDeleting.value = true;
+  try {
+    await customersStore.remove(customer.value.id);
+    pushToast({ message: `Customer "${customer.value.name}" deleted`, variant: 'success' });
+    router.push({ name: 'customers' });
+  } catch (err) {
+    pushToast({ message: err instanceof Error ? err.message : 'Failed to delete customer', variant: 'error' });
+  } finally {
+    isDeleting.value = false;
+  }
 }
 </script>
 
 <template>
   <div class="detail-page">
+    <header class="page-top-nav">
+      <Button variant="ghost" @click="router.push({ name: 'customers' })">
+        <ArrowLeft :size="16" /> Back to Customers
+      </Button>
+    </header>
+
     <template v-if="customer">
-      <header class="detail-header card">
+      <div class="detail-header card">
         <div class="header-top-row">
           <div>
             <div class="name-status-row">
@@ -89,21 +121,32 @@ function handleSaleSuccess(): void {
                 :class="hasDebt ? 'debt-status-pill--owed' : 'debt-status-pill--cleared'"
               >
                 <component :is="hasDebt ? AlertCircle : CheckCircle2" :size="12" />
-                {{ hasDebt ? 'OUTSTANDING DEBT' : 'CLEARED' }}
+                {{ hasDebt ? `OWES ${formatCurrency(customer.current_balance)}` : 'CLEARED' }}
               </span>
             </div>
             <p v-if="customer.phone" class="customer-phone font-mono">{{ customer.phone }}</p>
           </div>
 
-          <a
-            v-if="customer.phone"
-            :href="whatsappStatementUrl"
-            target="_blank"
-            rel="noopener"
-            class="whatsapp-statement-btn"
-          >
-            <Share2 :size="14" /> Send Statement via WhatsApp
-          </a>
+          <div class="top-action-links">
+            <a
+              v-if="customer.phone"
+              :href="whatsappStatementUrl"
+              target="_blank"
+              rel="noopener"
+              class="whatsapp-statement-btn"
+            >
+              <Share2 :size="14" /> Send Statement via WhatsApp
+            </a>
+
+            <button
+              type="button"
+              class="delete-cust-btn"
+              title="Delete Customer"
+              @click="showConfirmDelete = true"
+            >
+              <Trash2 :size="15" /> Delete
+            </button>
+          </div>
         </div>
 
         <div class="balance-block">
@@ -118,10 +161,18 @@ function handleSaleSuccess(): void {
 
         <div class="header-actions">
           <Button variant="primary" size="lg" @click="showSmartSaleModal = true">
-            <Plus :size="16" /> Record Sale &amp; Payment (POS)
+            <Plus :size="16" /> Record Sale &amp; POS
+          </Button>
+          <Button
+            v-if="hasDebt"
+            variant="secondary"
+            size="lg"
+            @click="showSettleModal = true"
+          >
+            <DollarSign :size="16" /> Settle Debt (Lipa Deni)
           </Button>
         </div>
-      </header>
+      </div>
 
       <section class="ledger-section">
         <h2 class="section-title">Transaction History</h2>
@@ -152,12 +203,31 @@ function handleSaleSuccess(): void {
       </section>
     </template>
 
+    <!-- Delete Customer Confirmation Dialog -->
+    <ConfirmDialog
+      :open="showConfirmDelete"
+      title="Delete Customer"
+      :message="`Are you sure you want to delete customer '${customer?.name}'? If they have past transaction records, their history will be archived safely.`"
+      confirm-label="Delete Customer"
+      danger
+      @confirm="executeDelete"
+      @cancel="showConfirmDelete = false"
+    />
+
     <!-- Smart Sale POS Modal -->
     <SmartSaleModal
       :open="showSmartSaleModal"
       :preselected-customer-id="props.id"
       @close="showSmartSaleModal = false"
-      @success="handleSaleSuccess"
+      @success="refreshData"
+    />
+
+    <!-- Settle Debt Modal -->
+    <SettleDebtModal
+      :open="showSettleModal"
+      :customer="customer"
+      @close="showSettleModal = false"
+      @success="refreshData"
     />
   </div>
 </template>
@@ -167,13 +237,19 @@ function handleSaleSuccess(): void {
   padding: var(--space-6);
   max-width: 760px;
   margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.page-top-nav {
+  margin-bottom: var(--space-1);
 }
 
 .detail-header {
   background: var(--color-surface);
   border-radius: var(--radius-lg);
   padding: var(--space-6);
-  margin-bottom: var(--space-6);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
@@ -209,20 +285,27 @@ function handleSaleSuccess(): void {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
-  padding: 2px 7px;
+  padding: 2px 8px;
   border-radius: var(--radius-full);
 }
 
 .debt-status-pill--owed {
   background: color-mix(in srgb, var(--color-market-clay) 12%, transparent);
   color: var(--color-market-clay);
+  border: 1px solid color-mix(in srgb, var(--color-market-clay) 30%, transparent);
 }
 
 .debt-status-pill--cleared {
   background: color-mix(in srgb, var(--color-ledger-green) 12%, transparent);
   color: var(--color-ledger-green);
+}
+
+.top-action-links {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .whatsapp-statement-btn {
@@ -242,6 +325,26 @@ function handleSaleSuccess(): void {
 .whatsapp-statement-btn:hover {
   background: var(--color-ledger-green);
   color: #FFFFFF;
+}
+
+.delete-cust-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  color: var(--color-market-clay);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-standard);
+}
+.delete-cust-btn:hover {
+  background: var(--color-market-clay);
+  color: #FFFFFF;
+  border-color: var(--color-market-clay);
 }
 
 .balance-block {
@@ -267,6 +370,7 @@ function handleSaleSuccess(): void {
 .header-actions {
   display: flex;
   gap: var(--space-3);
+  flex-wrap: wrap;
 }
 
 .section-title {

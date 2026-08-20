@@ -48,6 +48,20 @@ export async function deleteProductHandler(
   }
 }
 
+export async function bulkDeleteProductsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const count = await productsService.deleteProductsBulk(orgId, req.body);
+    success(res, { deleted: true, count });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function createCategoryHandler(
   req: Request,
   res: Response,

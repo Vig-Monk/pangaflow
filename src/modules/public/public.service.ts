@@ -28,6 +28,17 @@ const CACHE_TTL_MS = 60 * 60 * 1000;
 let lastNominatimCallTime = 0;
 const NOMINATIM_MIN_INTERVAL_MS = 1000;
 
+function normalizeCustomerPhone(input: string): string {
+  const digits = (input || '').replace(/\D/g, '');
+  if (digits.startsWith('254') && digits.length === 12) {
+    return `0${digits.slice(3)}`;
+  }
+  if ((digits.startsWith('7') || digits.startsWith('1')) && digits.length === 9) {
+    return `0${digits}`;
+  }
+  return digits.slice(0, 10);
+}
+
 async function fetchNominatimWithRateLimit(searchQuery: string): Promise<LocationSearchResult[]> {
   const cacheKey = searchQuery.trim().toLowerCase();
   const cached = nominatimCache.get(cacheKey);
@@ -94,7 +105,7 @@ export async function searchDeliveryLocations(rawQuery: unknown): Promise<Locati
   const queryText = parsed.data.q.trim();
   const localEstates = await publicQueries.searchEstatesLocal(queryText);
   if (localEstates.length > 0) {
-    return localEstates.map((estate) => ({
+    return localEstates.map((estate: publicQueries.LocalEstateRow) => ({
       name: `${estate.name}, ${estate.city}`,
       lat: parseFloat(estate.lat),
       lng: parseFloat(estate.lng),
@@ -109,7 +120,7 @@ export async function searchDeliveryLocations(rawQuery: unknown): Promise<Locati
 export const CheckoutSchema = z.object({
   customerName: z.string().min(1, 'Name is required').max(200),
   customerPhone: z.string().min(1, 'Phone is required').max(20),
-  customerEmail: z.string().email('Invalid email').nullable().optional(),
+  customerEmail: z.string().email('Invalid email').nullable().optional().or(z.literal('')).transform(v => (v === '' ? null : v)),
   deliveryLocation: z.string().min(1, 'Delivery location is required').max(500),
   notes: z.string().max(1000).nullable().optional(),
   paymentMethod: z.string().min(1, 'Payment method selection is required'),
@@ -271,26 +282,46 @@ export async function placeOrder(
   try {
     await client.query('BEGIN');
 
-    // 1. Auto-Sync Shopper into Merchant's Customer CRM Directory
-    const existingCustomer = await client.query<{ id: string }>(
-      `SELECT id FROM customers WHERE org_id = $1 AND phone = $2 AND deleted_at IS NULL LIMIT 1`,
-      [store.org_id, customerData.customerPhone]
+    // 1. Auto-Sync & Deduplicate Shopper in Merchant's Customer CRM
+    const cleanPhone = normalizeCustomerPhone(customerData.customerPhone);
+
+    const existingCustomer = await client.query<{ id: string; email: string | null; address: string | null }>(
+      `SELECT id, email, address FROM customers WHERE org_id = $1 AND phone = $2 AND deleted_at IS NULL LIMIT 1`,
+      [store.org_id, cleanPhone]
     );
 
     if (existingCustomer.rows.length === 0) {
       await client.query(
-        `INSERT INTO customers (org_id, name, phone, address)
-         VALUES ($1, $2, $3, $4)`,
+        `INSERT INTO customers (org_id, name, phone, email, address)
+         VALUES ($1, $2, $3, $4, $5)`,
         [
           store.org_id,
-          customerData.customerName,
-          customerData.customerPhone,
+          customerData.customerName.trim(),
+          cleanPhone,
+          customerData.customerEmail?.trim() || null,
+          customerData.deliveryLocation || null,
+        ]
+      );
+    } else {
+      const existingId = existingCustomer.rows[0].id;
+      await client.query(
+        `UPDATE customers
+         SET name = COALESCE(NULLIF($3, ''), name),
+             email = COALESCE(email, $4),
+             address = COALESCE(address, $5),
+             updated_at = NOW()
+         WHERE id = $1 AND org_id = $2`,
+        [
+          existingId,
+          store.org_id,
+          customerData.customerName.trim(),
+          customerData.customerEmail?.trim() || null,
           customerData.deliveryLocation || null,
         ]
       );
     }
 
-    // 2. Fetch Products, Inventory & Snapshot Real COGS (cost_price)
+    // 2. Fetch Products & Snapshot Real Cost Price (COGS)
     let calculatedProductsSubtotal = 0;
     const itemsToInsert = [];
 
@@ -390,9 +421,9 @@ export async function placeOrder(
     const orderId = await ordersQueries.insertOrderTransactional(client, {
       orgId: store.org_id,
       storeId: store.id,
-      customerName: customerData.customerName,
-      customerPhone: customerData.customerPhone,
-      customerEmail: customerData.customerEmail,
+      customerName: customerData.customerName.trim(),
+      customerPhone: cleanPhone,
+      customerEmail: customerData.customerEmail?.trim() || null,
       deliveryLocation: customerData.deliveryLocation,
       notes: customerData.notes,
       paymentMethod: customerData.paymentMethod,
@@ -409,7 +440,7 @@ export async function placeOrder(
 
     await ordersQueries.insertOrderStatusHistoryTransactional(client, orderId, 'pending', 'system');
 
-    // 5. Insert Snapshot Line Items & Decrement Stock
+    // 5. Insert Snapshot Line Items with COGS & Decrement Stock
     for (const item of itemsToInsert) {
       await ordersQueries.insertOrderItemTransactional(client, orderId, item);
 
@@ -428,7 +459,7 @@ export async function placeOrder(
         const callbackUrl = `${env.API_PUBLIC_URL.replace(/\/$/, '')}/api/v1/payments/mpesa/callback`;
         const stkResult = await darajaService.stkPush({
           credentials: decryptedCreds,
-          phone: customerData.customerPhone,
+          phone: cleanPhone,
           amount: finalOrderTotal,
           accountReference: orderId,
           transactionDesc: `Order ${orderId.slice(0, 8)}`,
@@ -441,7 +472,7 @@ export async function placeOrder(
           orgId: store.org_id,
           checkoutRequestId: stkResult.checkoutRequestId,
           merchantRequestId: stkResult.merchantRequestId,
-          phone: customerData.customerPhone,
+          phone: cleanPhone,
           amount: finalOrderTotal,
           accountReference: orderId,
           transactionDesc: `Order ${orderId.slice(0, 8)}`,
@@ -490,7 +521,7 @@ export async function getPublicOrderDetails(
     deliveryFeeStatus: order.delivery_fee_status,
     deliveryConfirmationCode: order.delivery_confirmation_code,
     deliveryLocation: order.delivery_location,
-    items: items.map((row) => ({
+    items: items.map((row: publicQueries.PublicOrderItemRow) => ({
       productName: row.product_name,
       unitPrice: parseFloat(row.unit_price),
       quantity: row.quantity,

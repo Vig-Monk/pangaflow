@@ -54,6 +54,10 @@ export const BulkCreateSchema = z.object({
         .max(10, "Cannot exceed 10 products per batch")
 });
 
+export const BulkDeleteProductsSchema = z.object({
+    productIds: z.array(z.string().uuid()).min(1, "At least one product must be selected for deletion"),
+});
+
 export const ListProductsQuerySchema = z.object({
     category_id: z.string().uuid().optional(),
     q: z.string().optional(),
@@ -96,7 +100,7 @@ async function generateUniqueSlug(
     const base = name
         .toLowerCase()
         .trim()
-        .replace(/[^a-z0-9\s-]/g, "")
+        .replace(/[^a-z0-9-]/g, "")
         .replace(/\s+/g, "-")
         .replace(/-+/g, "-")
         .replace(/^-|-$/g, "");
@@ -248,6 +252,17 @@ export async function deleteMerchantProduct(orgId: string, productId: string) {
         throw new AppError("Product not found", 404);
     }
     return productsQueries.deleteProductPermanently(orgId, productId);
+}
+
+export async function deleteProductsBulk(orgId: string, rawBody: unknown) {
+    const parsed = BulkDeleteProductsSchema.safeParse(rawBody);
+    if (!parsed.success) {
+        throw new AppError(
+            parsed.error.issues[0]?.message ?? "Invalid bulk deletion payload",
+            400
+        );
+    }
+    return productsQueries.bulkDeleteProducts(orgId, parsed.data.productIds);
 }
 
 export async function listMerchantInventory(orgId: string, rawQuery: unknown) {

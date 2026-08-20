@@ -43,6 +43,15 @@ export const SmartSaleSchema = z.object({
   message: 'Select an existing customer or provide new customer details',
 });
 
+export const SettleDebtSchema = z.object({
+  customerId: z.string().uuid('Customer ID must be a valid UUID'),
+  amount: z.number().positive('Payment amount must be greater than zero'),
+  paymentMethod: z.enum(['cash', 'mpesa_manual', 'mpesa_stk']).default('cash'),
+  mpesaRef: z.string().max(50).optional(),
+  phone: z.string().max(20).optional(),
+  description: z.string().max(500).optional(),
+});
+
 export const LedgerQuerySchema = z.object({
   page:  z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
@@ -50,6 +59,7 @@ export const LedgerQuerySchema = z.object({
 
 export type RecordTransactionBody = z.infer<typeof RecordTransactionSchema>;
 export type SmartSaleBody          = z.infer<typeof SmartSaleSchema>;
+export type SettleDebtBody         = z.infer<typeof SettleDebtSchema>;
 export type LedgerQuery           = z.infer<typeof LedgerQuerySchema>;
 
 export async function record(
@@ -110,7 +120,6 @@ export async function smartSale(
   try {
     await client.query('BEGIN');
 
-    // 1. Resolve or Quick-Create Customer Inline
     let customerId: string;
     let customerName: string;
     let customerPhone: string | null = null;
@@ -133,8 +142,7 @@ export async function smartSale(
       customerPhone = custRes.rows[0].phone;
     }
 
-    // 2. Record Sale (Increases ledger debit/balance)
-    const saleDescription = data.description?.trim() || 'Sale recorded';
+    const saleDescription = data.description?.trim() || (data.paymentMode === 'credit' ? 'Sale on credit (Deni)' : 'Sale recorded');
     const saleTransaction = await recordTransaction(client, {
       orgId,
       customerId,
@@ -148,22 +156,19 @@ export async function smartSale(
     let checkoutRequestId: string | undefined;
     let customerMessage: string | undefined;
 
-    // 3. Multi-Channel Settlement Routing
     if (data.paymentMode === 'cash') {
-      // Instant Cash in Hand: atomically offsets balance back to 0 while logging cash in till
       paymentTransaction = await recordTransaction(client, {
         orgId,
         customerId,
         type: 'payment',
         amount: data.amount,
-        description: 'Cash Payment Received',
+        description: 'Cash payment received (Cleared)',
         createdBy: userId,
       });
     } else if (data.paymentMode === 'mpesa_manual') {
-      // Manual M-Pesa (Till / Send Money) with reference code
       const desc = data.mpesaRef?.trim()
-        ? `M-Pesa Ref: ${data.mpesaRef.trim().toUpperCase()}`
-        : 'M-Pesa Payment Received';
+        ? `M-Pesa payment (Ref: ${data.mpesaRef.trim().toUpperCase()})`
+        : 'M-Pesa payment received (Cleared)';
 
       paymentTransaction = await recordTransaction(client, {
         orgId,
@@ -174,7 +179,6 @@ export async function smartSale(
         createdBy: userId,
       });
     } else if (data.paymentMode === 'mpesa_stk') {
-      // Direct M-Pesa STK Push from POS Modal
       const targetPhone = data.phone?.trim() || customerPhone;
       if (!targetPhone) {
         throw new AppError('Customer phone number is required for M-Pesa STK Push', 400);
@@ -223,6 +227,128 @@ export async function smartSale(
       customerId,
       customerName,
       paymentMode: data.paymentMode,
+      checkoutRequestId,
+      customerMessage,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function settleDebt(
+  orgId: string,
+  userId: string,
+  rawBody: unknown
+): Promise<{
+  paymentTransaction: Transaction;
+  customerId: string;
+  customerName: string;
+  amountSettled: number;
+  newBalance: string;
+  paymentMethod: string;
+  checkoutRequestId?: string;
+  customerMessage?: string;
+}> {
+  const parsed = SettleDebtSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid debt settlement payload', 400);
+  }
+
+  const data = parsed.data;
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const custRes = await client.query<{ id: string; name: string; phone: string | null }>(
+      `SELECT id, name, phone FROM customers WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL`,
+      [data.customerId, orgId]
+    );
+
+    if (custRes.rows.length === 0) {
+      throw new AppError('Customer not found', 404);
+    }
+
+    const customer = custRes.rows[0];
+
+    let desc = data.description?.trim();
+    if (!desc) {
+      if (data.paymentMethod === 'cash') {
+        desc = 'Debt settled (Cash in hand)';
+      } else if (data.paymentMethod === 'mpesa_manual') {
+        desc = data.mpesaRef?.trim()
+          ? `Debt settled via M-Pesa (Ref: ${data.mpesaRef.trim().toUpperCase()})`
+          : 'Debt settled via M-Pesa';
+      } else if (data.paymentMethod === 'mpesa_stk') {
+        desc = 'Debt payment via M-Pesa STK Push';
+      }
+    }
+
+    const paymentTransaction = await recordTransaction(client, {
+      orgId,
+      customerId: customer.id,
+      type: 'payment',
+      amount: data.amount,
+      description: desc,
+      createdBy: userId,
+    });
+
+    let checkoutRequestId: string | undefined;
+    let customerMessage: string | undefined;
+
+    if (data.paymentMethod === 'mpesa_stk') {
+      const targetPhone = data.phone?.trim() || customer.phone;
+      if (!targetPhone) {
+        throw new AppError('Customer phone number is required for M-Pesa STK Push', 400);
+      }
+
+      const credsRow = await getCredentialsRowByOrgId(orgId);
+      if (!credsRow || credsRow.status !== 'verified') {
+        throw new AppError('M-Pesa credentials not configured or verified for this store', 400);
+      }
+
+      const creds = await getDecryptedCredentials(orgId);
+      if (!creds) {
+        throw new AppError('Failed to decrypt M-Pesa credentials', 500, false);
+      }
+
+      const callbackUrl = `${env.API_PUBLIC_URL.replace(/\/$/, '')}/api/v1/payments/mpesa/callback`;
+      const stkResult = await darajaService.stkPush({
+        credentials: creds,
+        phone: targetPhone,
+        amount: data.amount,
+        accountReference: customer.id,
+        transactionDesc: 'Settle Debt',
+        callbackUrl,
+      });
+
+      checkoutRequestId = stkResult.checkoutRequestId;
+      customerMessage = stkResult.customerMessage;
+
+      await createPendingMpesaTransaction(client, {
+        orgId,
+        customerId: customer.id,
+        checkoutRequestId: stkResult.checkoutRequestId,
+        merchantRequestId: stkResult.merchantRequestId,
+        phone: targetPhone,
+        amount: data.amount,
+        accountReference: customer.id,
+        transactionDesc: 'Settle Debt',
+      });
+    }
+
+    await client.query('COMMIT');
+
+    return {
+      paymentTransaction,
+      customerId: customer.id,
+      customerName: customer.name,
+      amountSettled: data.amount,
+      newBalance: paymentTransaction.balance_after,
+      paymentMethod: data.paymentMethod,
       checkoutRequestId,
       customerMessage,
     };

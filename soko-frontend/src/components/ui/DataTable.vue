@@ -45,13 +45,15 @@ function cellValue(row: T, column: DataTableColumn<T>): string {
       <table class="data-table__table">
         <thead class="data-table__thead">
           <tr>
-            <th
+          <th
               v-for="col in columns"
               :key="col.key"
               class="data-table__th"
               :class="{ 'data-table__th--right': col.align === 'right' }"
             >
-              {{ col.label }}
+              <slot :name="`header-${col.key}`">
+                {{ col.label }}
+              </slot>
             </th>
           </tr>
         </thead>

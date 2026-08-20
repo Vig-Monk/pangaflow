@@ -42,6 +42,20 @@ export async function smartSaleHandler(
   }
 }
 
+export async function settleDebtHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { orgId, userId } = requireAuth(req);
+    const result = await transactionsService.settleDebt(orgId, userId, req.body);
+    success(res, result, undefined, 200);
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function ledgerHandler(
   req: Request,
   res: Response,

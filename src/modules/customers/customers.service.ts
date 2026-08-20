@@ -1,7 +1,5 @@
 // =============================================================================
 // src/modules/customers/customers.service.ts
-// Business logic for the customers module.
-// Validates inputs, enforces invariants, delegates DB work to customers.queries.ts.
 // =============================================================================
 
 import { z } from 'zod';
@@ -22,14 +20,10 @@ import {
   updateCustomer,
 } from './customers.queries';
 
-// ---------------------------------------------------------------------------
-// Zod schemas — used by both the service and exported for controller reuse
-// ---------------------------------------------------------------------------
-
 export const CreateCustomerSchema = z.object({
-  name:     z.string().min(1, 'Name is required').max(200),
+  name:     z.string().min(1, 'Customer name is required').max(200),
   phone:    z.string().max(20).optional(),
-  email:    z.string().email('Invalid email').optional(),
+  email:    z.string().email('Invalid email').optional().or(z.literal('')).transform(v => (v === '' ? undefined : v)),
   address:  z.string().max(500).optional(),
   notes:    z.string().max(2000).optional(),
   metadata: z.record(z.unknown()).optional(),
@@ -38,7 +32,7 @@ export const CreateCustomerSchema = z.object({
 export const UpdateCustomerSchema = z.object({
   name:     z.string().min(1).max(200).optional(),
   phone:    z.string().max(20).nullable().optional(),
-  email:    z.string().email('Invalid email').nullable().optional(),
+  email:    z.string().email('Invalid email').nullable().optional().or(z.literal('')).transform(v => (v === '' ? null : v)),
   address:  z.string().max(500).nullable().optional(),
   notes:    z.string().max(2000).nullable().optional(),
   metadata: z.record(z.unknown()).optional(),
@@ -55,14 +49,9 @@ export const SearchQuerySchema = z.object({
   q: z.string().min(1, 'Search query is required').max(100),
 });
 
-// Inferred types — used inside controller handlers
 export type CreateCustomerBody = z.infer<typeof CreateCustomerSchema>;
 export type UpdateCustomerBody = z.infer<typeof UpdateCustomerSchema>;
 export type ListCustomersQuery = z.infer<typeof ListCustomersQuerySchema>;
-
-// ---------------------------------------------------------------------------
-// Service functions
-// ---------------------------------------------------------------------------
 
 export async function list(
   orgId: string,
@@ -88,11 +77,9 @@ export async function getOne(
   customerId: string
 ): Promise<CustomerWithBalance> {
   const customer = await getCustomerById(orgId, customerId);
-
   if (!customer) {
     throw new AppError('Customer not found', 404);
   }
-
   return customer;
 }
 
@@ -108,7 +95,6 @@ export async function create(
   const data: CreateCustomerInput = parsed.data;
   const customer = await createCustomer(orgId, data);
 
-  // Balance is definitionally 0.00 at creation — avoids a second round-trip
   return { ...customer, current_balance: '0.00' };
 }
 
@@ -122,7 +108,6 @@ export async function update(
     throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid request body', 400);
   }
 
-  // Guard: confirm the customer exists in this org before attempting update
   const existing = await getCustomerById(orgId, customerId);
   if (!existing) {
     throw new AppError('Customer not found', 404);
@@ -131,8 +116,6 @@ export async function update(
   const fields: Partial<UpdateCustomerInput> = parsed.data;
   const updated = await updateCustomer(orgId, customerId, fields);
 
-  // updateCustomer returns null only if the row disappeared between the
-  // existence check and the update — a race condition that warrants 404.
   if (!updated) {
     throw new AppError('Customer not found', 404);
   }
@@ -159,13 +142,13 @@ export async function archive(
 export async function remove(
   orgId: string,
   customerId: string
-): Promise<void> {
+): Promise<{ deleted: boolean; permanent: boolean }> {
   const existing = await getCustomerById(orgId, customerId);
   if (!existing) {
     throw new AppError('Customer not found', 404);
   }
 
-  await deleteCustomer(orgId, customerId);
+  return deleteCustomer(orgId, customerId);
 }
 
 export async function search(

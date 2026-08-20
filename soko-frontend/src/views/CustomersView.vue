@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/views/CustomersView.vue
+// Customers directory with Settle Debt shortcuts, Customer Deletion & Smart POS.
 // =============================================================================
 
 import { computed, onMounted, ref } from 'vue';
@@ -14,12 +15,39 @@ import Modal from '@/components/ui/Modal.vue';
 import Button from '@/components/ui/Button.vue';
 import Pagination from '@/components/ui/Pagination.vue';
 import UpgradeModal from '@/components/ledger/UpgradeModal.vue';
-import { UserPlus } from 'lucide-vue-next';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
+import SettleDebtModal from '@/components/ledger/SettleDebtModal.vue';
+import SmartSaleModal from '@/components/ledger/SmartSaleModal.vue';
+import {
+  UserPlus,
+  Trash2,
+  DollarSign,
+  Plus,
+} from 'lucide-vue-next';
 
 const router = useRouter();
 const customersStore = useCustomersStore();
 const orgStore = useOrgStore();
 const { push: pushToast } = useToast();
+
+const isSearchMode = ref(false);
+
+// Modals
+const showAddModal = ref(false);
+const newName = ref('');
+const newPhone = ref('');
+const newEmail = ref('');
+const isSaving = ref(false);
+
+// Deletion State
+const customerToDelete = ref<Customer | null>(null);
+const showConfirmDelete = ref(false);
+const isDeleting = ref(false);
+
+// Settle Debt / Smart Sale Modals
+const selectedCustomerForDebt = ref<Customer | null>(null);
+const showSettleModal = ref(false);
+const showSmartSaleModal = ref(false);
 
 onMounted(() => {
   customersStore.fetchList({ page: 1 });
@@ -31,28 +59,28 @@ function formatCurrency(value: string): string {
 }
 
 const columns: DataTableColumn<Customer>[] = [
-  { key: 'name', label: 'Name' },
-  { key: 'phone', label: 'Phone', render: (row) => row.phone ?? '—' },
+  { key: 'name', label: 'Customer Name' },
+  { key: 'phone', label: 'Phone Contact', render: (row) => row.phone ?? '—' },
   {
     key: 'current_balance',
-    label: 'Balance',
+    label: 'Credit Debt Status',
     align: 'right',
-    render: (row) => formatCurrency(row.current_balance),
-    cellClass: (row) =>
-      parseFloat(row.current_balance) > 0 ? 'balance-owed tabular-figure' : 'balance-credit tabular-figure',
   },
   {
     key: 'created_at',
-    label: 'Last Activity',
+    label: 'Last Recorded',
     render: (row) => new Date(row.created_at).toLocaleDateString('en-KE', { day: 'numeric', month: 'short' }),
+  },
+  {
+    key: 'actions',
+    label: 'Actions',
+    align: 'right',
   },
 ];
 
 function handleRowClick(row: Customer): void {
   router.push({ name: 'customer-detail', params: { id: row.id } });
 }
-
-const isSearchMode = ref(false);
 
 function handleSearch(query: string): void {
   if (query.length === 0) {
@@ -67,12 +95,6 @@ function handleSearch(query: string): void {
 const displayedRows = computed<Customer[]>(() =>
   isSearchMode.value ? customersStore.searchResults : customersStore.list
 );
-
-const showAddModal = ref(false);
-const newName = ref('');
-const newPhone = ref('');
-const newEmail = ref('');
-const isSaving = ref(false);
 
 function openAddModal(): void {
   newName.value = '';
@@ -100,7 +122,7 @@ async function submitAdd(): Promise<void> {
       return;
     }
 
-    pushToast({ message: 'Customer added successfully', variant: 'success' });
+    pushToast({ message: `Customer "${result.name}" created`, variant: 'success' });
     showAddModal.value = false;
   } catch (err) {
     pushToast({ message: err instanceof Error ? err.message : 'Failed to add customer', variant: 'error' });
@@ -108,21 +130,58 @@ async function submitAdd(): Promise<void> {
     isSaving.value = false;
   }
 }
+
+function openSettleModal(cust: Customer): void {
+  selectedCustomerForDebt.value = cust;
+  showSettleModal.value = true;
+}
+
+function confirmDeleteCustomer(cust: Customer): void {
+  customerToDelete.value = cust;
+  showConfirmDelete.value = true;
+}
+
+async function executeDeleteCustomer(): Promise<void> {
+  if (!customerToDelete.value) return;
+  isDeleting.value = true;
+
+  try {
+    await customersStore.remove(customerToDelete.value.id);
+    pushToast({ message: `Deleted customer "${customerToDelete.value.name}"`, variant: 'success' });
+    showConfirmDelete.value = false;
+    customerToDelete.value = null;
+  } catch (err) {
+    pushToast({ message: err instanceof Error ? err.message : 'Failed to delete customer', variant: 'error' });
+  } finally {
+    isDeleting.value = false;
+  }
+}
+
+function handleDebtSettled(): void {
+  customersStore.fetchList({ page: customersStore.page });
+}
 </script>
 
 <template>
   <div class="page-container">
     <div class="page-header">
       <div>
-        <h1 class="page-title">Customers</h1>
-        <p class="page-subtitle">Manage customer directory and credit balances.</p>
+        <h1 class="page-title">Customers Directory</h1>
+        <p class="page-subtitle">Manage customer directory, track credit debt, and record fast payments.</p>
       </div>
+
       <div class="page-header__actions">
-        <SearchBar placeholder="Search customers…" @search="handleSearch" />
-        <Button variant="primary" @click="openAddModal"><UserPlus :size="18" /> Add Customer</Button>
+        <SearchBar placeholder="Search by name or phone..." @search="handleSearch" />
+        <Button variant="secondary" @click="showSmartSaleModal = true">
+          <Plus :size="16" /> Record Sale &amp; POS
+        </Button>
+        <Button variant="primary" @click="openAddModal">
+          <UserPlus :size="16" /> Add Customer
+        </Button>
       </div>
     </div>
 
+    <!-- Customers Data Table -->
     <DataTable
       :columns="columns"
       :rows="displayedRows"
@@ -130,8 +189,52 @@ async function submitAdd(): Promise<void> {
       :row-key="(row) => row.id"
       :on-row-click="handleRowClick"
       empty-title="No customers yet"
-      empty-description="Add your first customer to start tracking credit."
-    />
+      empty-description="Add your first customer to start tracking sales and credit balances."
+    >
+      <!-- Debt Status Badge Cell -->
+      <template #cell-current_balance="{ row }">
+        <div class="balance-cell-wrapper">
+          <span
+            v-if="parseFloat((row as Customer).current_balance) > 0"
+            class="balance-badge balance-badge--owed tabular-figure"
+          >
+            Owes {{ formatCurrency((row as Customer).current_balance) }}
+          </span>
+          <span
+            v-else
+            class="balance-badge balance-badge--cleared"
+          >
+            Cleared / Paid
+          </span>
+        </div>
+      </template>
+
+      <!-- Row Actions Cell -->
+      <template #cell-actions="{ row }">
+        <div class="table-actions-row">
+          <!-- 1-Click Settle Debt Shortcut if customer owes balance -->
+          <button
+            v-if="parseFloat((row as Customer).current_balance) > 0"
+            type="button"
+            class="settle-btn-shortcut"
+            title="Settle Debt (Lipa Deni)"
+            @click.stop="openSettleModal(row as Customer)"
+          >
+            <DollarSign :size="13" /> Settle
+          </button>
+
+          <!-- Delete Customer Button -->
+          <button
+            type="button"
+            class="delete-icon-btn"
+            title="Delete Customer"
+            @click.stop="confirmDeleteCustomer(row as Customer)"
+          >
+            <Trash2 :size="14" />
+          </button>
+        </div>
+      </template>
+    </DataTable>
 
     <div class="pagination-wrap" v-if="!isSearchMode && customersStore.list.length > 0">
       <Pagination
@@ -141,18 +244,53 @@ async function submitAdd(): Promise<void> {
       />
     </div>
 
-    <!-- Add Customer modal -->
-    <Modal :open="showAddModal" title="Add Customer" @close="showAddModal = false">
+    <!-- Add Customer Modal -->
+    <Modal :open="showAddModal" title="Add New Customer" @close="showAddModal = false">
       <div class="modal-form">
-        <input v-model="newName" type="text" placeholder="Name" class="modal-form__input" />
-        <input v-model="newPhone" type="tel" placeholder="Phone (optional)" class="modal-form__input" />
-        <input v-model="newEmail" type="email" placeholder="Email (optional)" class="modal-form__input" />
+        <div class="form-group">
+          <label class="form-label">Full Name *</label>
+          <input v-model="newName" type="text" placeholder="e.g. Grace Njeri" class="form-input" autofocus />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Phone Number (Optional)</label>
+          <input v-model="newPhone" type="tel" placeholder="07XXXXXXXX" class="form-input" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Email (Optional)</label>
+          <input v-model="newEmail" type="email" placeholder="name@email.com" class="form-input" />
+        </div>
       </div>
       <template #footer>
         <Button variant="ghost" @click="showAddModal = false">Cancel</Button>
-        <Button variant="primary" :loading="isSaving" @click="submitAdd">Save</Button>
+        <Button variant="primary" :loading="isSaving" @click="submitAdd">Save Customer</Button>
       </template>
     </Modal>
+
+    <!-- Delete Customer Confirmation Dialog -->
+    <ConfirmDialog
+      :open="showConfirmDelete"
+      title="Delete Customer"
+      :message="`Are you sure you want to delete customer '${customerToDelete?.name}'? If they have past transaction records, their history will be archived safely.`"
+      confirm-label="Delete Customer"
+      danger
+      @confirm="executeDeleteCustomer"
+      @cancel="showConfirmDelete = false"
+    />
+
+    <!-- Settle Debt Modal -->
+    <SettleDebtModal
+      :open="showSettleModal"
+      :customer="selectedCustomerForDebt"
+      @close="showSettleModal = false"
+      @success="handleDebtSettled"
+    />
+
+    <!-- Smart POS Modal -->
+    <SmartSaleModal
+      :open="showSmartSaleModal"
+      @close="showSmartSaleModal = false"
+      @success="() => customersStore.fetchList({ page: 1 })"
+    />
 
     <UpgradeModal
       :open="orgStore.upgradeModalOpen"
@@ -164,7 +302,7 @@ async function submitAdd(): Promise<void> {
 
 <style scoped>
 .page-container {
-  max-width: 1040px;
+  max-width: 1080px;
   width: 100%;
   margin: 0 auto;
   padding: var(--space-6);
@@ -184,19 +322,91 @@ async function submitAdd(): Promise<void> {
 
 .page-header__actions {
   display: flex;
-  gap: var(--space-3);
+  gap: var(--space-2);
   align-items: center;
   flex-wrap: wrap;
 }
 
-.modal-form { display: flex; flex-direction: column; gap: var(--space-4); }
-.modal-form__input {
-  min-height: 44px; padding: 0 var(--space-4); background: var(--color-bg);
-  border: 1px solid var(--color-border); border-radius: var(--radius-md); font-size: var(--text-base); color: var(--color-text);
+.balance-cell-wrapper {
+  display: flex;
+  justify-content: flex-end;
 }
 
-:deep(.balance-owed) { color: var(--color-market-clay); font-weight: 600; }
-:deep(.balance-credit) { color: var(--color-ledger-green); font-weight: 600; }
+.balance-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.balance-badge--owed {
+  background: color-mix(in srgb, var(--color-market-clay) 12%, transparent);
+  color: var(--color-market-clay);
+  border: 1px solid color-mix(in srgb, var(--color-market-clay) 25%, transparent);
+}
+
+.balance-badge--cleared {
+  background: color-mix(in srgb, var(--color-ledger-green) 12%, transparent);
+  color: var(--color-ledger-green);
+}
+
+.table-actions-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.settle-btn-shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: color-mix(in srgb, var(--color-ledger-green) 10%, transparent);
+  border: 1px solid var(--color-ledger-green);
+  color: var(--color-ledger-green);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-standard);
+}
+.settle-btn-shortcut:hover {
+  background: var(--color-ledger-green);
+  color: #FFFFFF;
+}
+
+.delete-icon-btn {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-standard);
+}
+.delete-icon-btn:hover {
+  background: var(--color-market-clay);
+  border-color: var(--color-market-clay);
+  color: #FFFFFF;
+}
+
+.modal-form { display: flex; flex-direction: column; gap: var(--space-3); }
+.form-group { display: flex; flex-direction: column; gap: 2px; }
+.form-label { font-size: var(--text-xs); font-weight: 700; color: var(--color-text); }
+.form-input {
+  min-height: 42px; padding: 0 var(--space-3);
+  background: var(--color-bg); border: 1px solid var(--color-border);
+  border-radius: var(--radius-md); font-size: var(--text-sm); color: var(--color-text); outline: none;
+}
+.form-input:focus { border-color: var(--color-ink); }
 
 .pagination-wrap {
   margin-top: var(--space-6);

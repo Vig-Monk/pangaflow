@@ -230,6 +230,12 @@ export const useProductsStore = defineStore("products", {
             await apiDelete(`/products/${id}`);
             this.list = this.list.filter(p => p.id !== id);
             this.total = Math.max(0, this.total - 1);
+        },
+
+        async deleteBulk(productIds: string[]): Promise<void> {
+            await apiPost("/products/bulk-delete", { productIds });
+            this.list = this.list.filter(p => !productIds.includes(p.id));
+            this.total = Math.max(0, this.total - productIds.length);
         }
     }
 });

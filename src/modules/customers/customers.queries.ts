@@ -1,32 +1,13 @@
 // =============================================================================
 // src/modules/customers/customers.queries.ts
-// Database access layer — customers module. Raw pg only. No business logic.
-//
-// Tenancy rule: orgId is the FIRST required typed parameter on every function
-// that touches tenant-scoped data. Omitting it is a compile error.
 // =============================================================================
 
 import { query } from '../../config/db';
 import { Customer } from '../../types/models';
 
-// ---------------------------------------------------------------------------
-// Extended types
-// ---------------------------------------------------------------------------
-
-/**
- * Customer row augmented with their running credit balance.
- * current_balance is computed from the transactions table via a subquery —
- * never stored on the customers row itself, so it is always current.
- * pg returns NUMERIC as string; callers use parseFloat() where arithmetic
- * is needed. See README Section 22 TypeScript ↔ Database Type Mapping.
- */
 export interface CustomerWithBalance extends Customer {
   current_balance: string;
 }
-
-// ---------------------------------------------------------------------------
-// Input types
-// ---------------------------------------------------------------------------
 
 export interface CreateCustomerInput {
   name: string;
@@ -58,14 +39,6 @@ export interface PaginatedCustomers {
   total: number;
 }
 
-// ---------------------------------------------------------------------------
-// Balance subquery
-// Reused across listCustomers, getCustomerById, searchCustomers.
-// Returns 0.00 for customers with no transactions (LEFT JOIN + COALESCE).
-// The ORDER BY + LIMIT 1 on created_at DESC gets the most recent
-// balance_after, which is the current running balance by ledger design.
-// ---------------------------------------------------------------------------
-
 const BALANCE_SUBQUERY = `
   COALESCE(
     (
@@ -80,15 +53,6 @@ const BALANCE_SUBQUERY = `
   ) AS current_balance
 `;
 
-// ---------------------------------------------------------------------------
-// listCustomers
-// ---------------------------------------------------------------------------
-
-/**
- * Returns a paginated list of customers for an org, each with their current
- * credit balance. Supports optional full-text search across name, phone, and
- * email. Excludes soft-deleted customers in all cases.
- */
 export async function listCustomers(
   orgId: string,
   options: ListCustomersOptions
@@ -96,8 +60,6 @@ export async function listCustomers(
   const { search, page, limit, includeArchived = false } = options;
   const offset = (page - 1) * limit;
 
-  // Build the WHERE clauses incrementally so the parameterised query stays
-  // legible without string concatenation near the actual values.
   const conditions: string[] = [
     'c.org_id     = $1',
     'c.deleted_at IS NULL',
@@ -110,7 +72,6 @@ export async function listCustomers(
   }
 
   if (search && search.trim().length > 0) {
-    // Case-insensitive substring match across the three most-searched fields.
     conditions.push(
       `(c.name ILIKE $${paramIndex} OR c.phone ILIKE $${paramIndex} OR c.email ILIKE $${paramIndex})`
     );
@@ -120,7 +81,6 @@ export async function listCustomers(
 
   const whereClause = conditions.join(' AND ');
 
-  // COUNT query — same filters, no pagination
   const countResult = await query<{ count: string }>(
     `SELECT COUNT(*) AS count FROM customers c WHERE ${whereClause}`,
     params
@@ -132,7 +92,6 @@ export async function listCustomers(
     return { customers: [], total: 0 };
   }
 
-  // Data query — add pagination params after the shared WHERE params
   const dataParams = [...params, limit, offset];
 
   const dataResult = await query<CustomerWithBalance>(
@@ -143,7 +102,7 @@ export async function listCustomers(
        ${BALANCE_SUBQUERY}
      FROM   customers c
      WHERE  ${whereClause}
-     ORDER  BY c.name ASC
+     ORDER  BY (CASE WHEN (${BALANCE_SUBQUERY})::NUMERIC > 0 THEN 0 ELSE 1 END), c.name ASC
      LIMIT  $${paramIndex} OFFSET $${paramIndex + 1}`,
     dataParams
   );
@@ -151,15 +110,6 @@ export async function listCustomers(
   return { customers: dataResult.rows, total };
 }
 
-// ---------------------------------------------------------------------------
-// getCustomerById
-// ---------------------------------------------------------------------------
-
-/**
- * Fetches a single customer by id, scoped to the org. Returns null if the
- * customer does not exist, belongs to a different org, or has been soft-deleted.
- * Always includes current_balance.
- */
 export async function getCustomerById(
   orgId: string,
   customerId: string
@@ -180,16 +130,6 @@ export async function getCustomerById(
   return result.rows[0] ?? null;
 }
 
-// ---------------------------------------------------------------------------
-// createCustomer
-// ---------------------------------------------------------------------------
-
-/**
- * Creates a new customer for an org. Returns the created row without
- * current_balance — the caller should use getCustomerById if it needs the
- * full CustomerWithBalance shape immediately after creation (balance is 0
- * at creation time, so the controller simply returns 0.00 directly).
- */
 export async function createCustomer(
   orgId: string,
   data: CreateCustomerInput
@@ -205,11 +145,11 @@ export async function createCustomer(
        created_at, updated_at, deleted_at`,
     [
       orgId,
-      data.name,
-      data.phone   ?? null,
-      data.email   ?? null,
-      data.address ?? null,
-      data.notes   ?? null,
+      data.name.trim(),
+      data.phone?.trim() ?? null,
+      data.email?.trim() ?? null,
+      data.address?.trim() ?? null,
+      data.notes?.trim() ?? null,
       JSON.stringify(data.metadata ?? {}),
     ]
   );
@@ -217,25 +157,11 @@ export async function createCustomer(
   return result.rows[0];
 }
 
-// ---------------------------------------------------------------------------
-// updateCustomer
-// ---------------------------------------------------------------------------
-
-/**
- * Applies a partial update to a customer. Only the fields present in
- * `fields` are updated — undefined fields leave the existing DB value
- * unchanged. Returns the updated CustomerWithBalance, or null if the
- * customer does not exist in this org.
- *
- * Dynamic SET clause: built from the keys present in `fields` using
- * parameterised placeholders — never string interpolation of user values.
- */
 export async function updateCustomer(
   orgId: string,
   customerId: string,
   fields: Partial<UpdateCustomerInput>
 ): Promise<CustomerWithBalance | null> {
-  // Map the typed input keys to their snake_case column names
   const columnMap: Record<keyof UpdateCustomerInput, string> = {
     name:     'name',
     phone:    'phone',
@@ -253,7 +179,6 @@ export async function updateCustomer(
     if (key in fields) {
       const value = fields[key];
       setClauses.push(`${column} = $${paramIndex}`);
-      // JSONB column needs explicit serialisation
       params.push(key === 'metadata' && value !== null && value !== undefined
         ? JSON.stringify(value)
         : (value ?? null)
@@ -263,7 +188,6 @@ export async function updateCustomer(
   }
 
   if (setClauses.length === 0) {
-    // No updatable fields — return the current row unchanged
     return getCustomerById(orgId, customerId);
   }
 
@@ -284,15 +208,6 @@ export async function updateCustomer(
   return result.rows[0] ?? null;
 }
 
-// ---------------------------------------------------------------------------
-// archiveCustomer
-// ---------------------------------------------------------------------------
-
-/**
- * Toggles is_archived = TRUE on a customer (soft-hide, not soft-delete).
- * Returns void — the controller re-fetches or simply 204s.
- * No-ops silently if the customer does not exist in this org.
- */
 export async function archiveCustomer(
   orgId: string,
   customerId: string
@@ -307,42 +222,51 @@ export async function archiveCustomer(
   );
 }
 
-// ---------------------------------------------------------------------------
-// deleteCustomer (soft)
-// ---------------------------------------------------------------------------
-
 /**
- * Soft-deletes a customer by setting deleted_at. The customer disappears
- * from all queries that filter deleted_at IS NULL. This is permanent from
- * the UI's perspective — there is no undelete in the lite version.
- * Returns void. No-ops if customer not found in org.
+ * Intelligent Deletion Guard:
+ * - If customer has 0 transactions/payments: Hard-deletes cleanly.
+ * - If customer has financial transaction history: Soft-deletes (deleted_at = NOW())
+ *   to preserve historical financial accuracy while hiding them from active lists.
  */
 export async function deleteCustomer(
   orgId: string,
   customerId: string
-): Promise<void> {
-  await query(
-    `UPDATE customers
-     SET    deleted_at = NOW()
-     WHERE  org_id     = $1
-       AND  id         = $2
-       AND  deleted_at IS NULL`,
+): Promise<{ deleted: boolean; permanent: boolean }> {
+  // 1. Check if customer has any transactions
+  const txCheck = await query<{ count: string }>(
+    `SELECT COUNT(*) AS count FROM transactions WHERE org_id = $1 AND customer_id = $2`,
     [orgId, customerId]
   );
+  const txCount = parseInt(txCheck.rows[0]?.count || '0', 10);
+
+  // 2. Check if customer is linked to any M-Pesa payments
+  const mpesaCheck = await query<{ count: string }>(
+    `SELECT COUNT(*) AS count FROM mpesa_transactions WHERE org_id = $1 AND customer_id = $2`,
+    [orgId, customerId]
+  );
+  const mpesaCount = parseInt(mpesaCheck.rows[0]?.count || '0', 10);
+
+  if (txCount === 0 && mpesaCount === 0) {
+    // Permanent clean delete if created by accident with zero history
+    await query(
+      `DELETE FROM customers WHERE org_id = $1 AND id = $2`,
+      [orgId, customerId]
+    );
+    return { deleted: true, permanent: true };
+  } else {
+    // Soft delete to protect financial ledger integrity
+    await query(
+      `UPDATE customers
+       SET    deleted_at = NOW()
+       WHERE  org_id     = $1
+         AND  id         = $2
+         AND  deleted_at IS NULL`,
+      [orgId, customerId]
+    );
+    return { deleted: true, permanent: false };
+  }
 }
 
-// ---------------------------------------------------------------------------
-// searchCustomers
-// ---------------------------------------------------------------------------
-
-/**
- * Fast, unbounded ILIKE search across name, phone, and email — intended for
- * the typeahead/search-as-you-type endpoint. Not paginated; capped at 20
- * results. Excludes archived and soft-deleted customers.
- *
- * For large orgs in Stage 2 this can be promoted to a
- * full-text tsvector index — the query interface stays identical.
- */
 export async function searchCustomers(
   orgId: string,
   searchQuery: string
@@ -362,7 +286,7 @@ export async function searchCustomers(
               c.phone ILIKE $2 OR
               c.email ILIKE $2
             )
-     ORDER  BY c.name ASC
+     ORDER  BY (CASE WHEN (${BALANCE_SUBQUERY})::NUMERIC > 0 THEN 0 ELSE 1 END), c.name ASC
      LIMIT  20`,
     [orgId, `%${searchQuery.trim()}%`]
   );

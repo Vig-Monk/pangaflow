@@ -13,6 +13,7 @@ import {
     getProductHandler,
     updateProductHandler,
     deleteProductHandler,
+    bulkDeleteProductsHandler,
     publishProductHandler,
     unpublishProductHandler,
     archiveProductHandler,
@@ -33,8 +34,9 @@ router.patch("/inventory/:productId", updateStockHandler);
 // Image Signature Generation
 router.post("/upload-signature", uploadSignatureHandler);
 
-// Bulk Creation Path (Applying Product Plan Gating)
+// Bulk Operations
 router.post("/bulk", checkProductLimit, createProductsBulkHandler);
+router.post("/bulk-delete", bulkDeleteProductsHandler);
 
 // Standard Product Paths
 router.get("/", listProductsHandler);

@@ -167,7 +167,6 @@ export async function listProducts(
     }
 
     const dataParams = [...params, limit, offset];
-    // Archived products are prioritized to the bottom of the list
     const dataResult = await query<ProductWithImages>(
         `SELECT ${PRODUCT_SELECT_FIELDS}
      FROM products p
@@ -268,7 +267,6 @@ export async function deleteProductPermanently(
     try {
         await client.query("BEGIN");
 
-        // 1. Verify existence in org
         const check = await client.query(
             "SELECT id FROM products WHERE id = $1 AND org_id = $2",
             [productId, orgId]
@@ -278,21 +276,10 @@ export async function deleteProductPermanently(
             return false;
         }
 
-        // 2. Clear related images and inventory
-        await client.query("DELETE FROM product_images WHERE product_id = $1", [
-            productId
-        ]);
-        await client.query("DELETE FROM inventory WHERE product_id = $1", [
-            productId
-        ]);
+        await client.query("DELETE FROM product_images WHERE product_id = $1", [productId]);
+        await client.query("DELETE FROM inventory WHERE product_id = $1", [productId]);
+        await client.query("UPDATE order_items SET product_id = NULL WHERE product_id = $1", [productId]);
 
-        // 3. Clear or nullify historic order item references (preserving order snapshots)
-        await client.query(
-            "UPDATE order_items SET product_id = NULL WHERE product_id = $1",
-            [productId]
-        );
-
-        // 4. Permanently hard delete product
         const deleteRes = await client.query(
             "DELETE FROM products WHERE id = $1 AND org_id = $2",
             [productId, orgId]
@@ -300,6 +287,43 @@ export async function deleteProductPermanently(
 
         await client.query("COMMIT");
         return deleteRes.rowCount !== null && deleteRes.rowCount > 0;
+    } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+    } finally {
+        client.release();
+    }
+}
+
+export async function bulkDeleteProducts(
+    orgId: string,
+    productIds: string[]
+): Promise<number> {
+    if (productIds.length === 0) return 0;
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+
+        await client.query(
+            `DELETE FROM product_images WHERE product_id IN (SELECT id FROM products WHERE id = ANY($1::uuid[]) AND org_id = $2)`,
+            [productIds, orgId]
+        );
+        await client.query(
+            `DELETE FROM inventory WHERE product_id IN (SELECT id FROM products WHERE id = ANY($1::uuid[]) AND org_id = $2)`,
+            [productIds, orgId]
+        );
+        await client.query(
+            `UPDATE order_items SET product_id = NULL WHERE product_id = ANY($1::uuid[])`,
+            [productIds]
+        );
+
+        const deleteRes = await client.query(
+            `DELETE FROM products WHERE id = ANY($1::uuid[]) AND org_id = $2`,
+            [productIds, orgId]
+        );
+
+        await client.query("COMMIT");
+        return deleteRes.rowCount ?? 0;
     } catch (err) {
         await client.query("ROLLBACK");
         throw err;
