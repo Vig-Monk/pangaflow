@@ -1,6 +1,5 @@
 // =============================================================================
 // src/modules/transactions/transactions.controller.ts
-// HTTP layer for the transactions module. Thin — no business logic.
 // =============================================================================
 
 import { Request, Response, NextFunction } from 'express';
@@ -8,23 +7,12 @@ import { success } from '../../utils/response';
 import { AppError } from '../../utils/error';
 import * as transactionsService from './transactions.service';
 
-// ---------------------------------------------------------------------------
-// Helper — extracts verified orgId and userId from the request.
-// Both are guaranteed present after verifyToken, but typed as optional
-// on the base Request interface — this guard satisfies strict null checks
-// without scattering non-null assertions across handlers.
-// ---------------------------------------------------------------------------
-
 function requireAuth(req: Request): { orgId: string; userId: string } {
   if (!req.orgId || !req.user) {
     throw new AppError('Unauthorized', 401);
   }
   return { orgId: req.orgId, userId: req.user.id };
 }
-
-// ---------------------------------------------------------------------------
-// POST /transactions
-// ---------------------------------------------------------------------------
 
 export async function recordHandler(
   req: Request,
@@ -40,9 +28,19 @@ export async function recordHandler(
   }
 }
 
-// ---------------------------------------------------------------------------
-// GET /transactions/:customerId
-// ---------------------------------------------------------------------------
+export async function smartSaleHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { orgId, userId } = requireAuth(req);
+    const result = await transactionsService.smartSale(orgId, userId, req.body);
+    success(res, result, undefined, 201);
+  } catch (err) {
+    next(err);
+  }
+}
 
 export async function ledgerHandler(
   req: Request,
@@ -66,10 +64,6 @@ export async function ledgerHandler(
     next(err);
   }
 }
-
-// ---------------------------------------------------------------------------
-// GET /dashboard/summary
-// ---------------------------------------------------------------------------
 
 export async function dashboardSummaryHandler(
   req: Request,

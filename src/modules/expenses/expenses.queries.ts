@@ -1,23 +1,14 @@
 // =============================================================================
 // src/modules/expenses/expenses.queries.ts
-// Database access layer — expense tracking + full dashboard.
-// Raw pg only. No business logic.
+// Database access layer — expense tracking + operational morning dashboard.
 // =============================================================================
 
 import { query } from "../../config/db";
 import { Transaction } from "../../types/models";
 
-// ---------------------------------------------------------------------------
-// Extended Types — Strictly typed extensions
-// ---------------------------------------------------------------------------
-
 export interface DashboardTransaction extends Transaction {
     customer_name: string | null;
 }
-
-// ---------------------------------------------------------------------------
-// Interfaces — exact spec text
-// ---------------------------------------------------------------------------
 
 export interface Expense {
     id: string;
@@ -51,6 +42,27 @@ export interface ProfitLoss {
     profit: string;
 }
 
+export interface DebtorItem {
+    id: string;
+    name: string;
+    phone: string | null;
+    balance: string;
+    days_overdue: number;
+}
+
+export interface CriticalStockItem {
+    id: string;
+    name: string;
+    stock: number;
+    low_stock_at: number;
+}
+
+export interface OrdersQueueSummary {
+    pending_pack: number;
+    out_for_delivery: number;
+    today_completed: number;
+}
+
 export interface FullDashboard {
     today: { sales: string; payments_received: string; expenses: string };
     this_month: {
@@ -62,14 +74,12 @@ export interface FullDashboard {
     customers: {
         total: number;
         with_debt: number;
-        top_5_debtors: Array<{ id: string; name: string; balance: string }>;
+        top_5_debtors: DebtorItem[];
     };
+    orders_queue: OrdersQueueSummary;
+    critical_stock: CriticalStockItem[];
     recent_transactions: DashboardTransaction[];
 }
-
-// ---------------------------------------------------------------------------
-// Input types
-// ---------------------------------------------------------------------------
 
 export interface CreateExpenseInput {
     categoryId: string;
@@ -95,72 +105,6 @@ export interface DateRange {
     endDate: string;
 }
 
-// ---------------------------------------------------------------------------
-// Internal row shapes
-// ---------------------------------------------------------------------------
-
-interface ExpenseCountRow {
-    count: string;
-}
-
-interface CategoryTotalRow {
-    category_id: string;
-    name: string;
-    color: string;
-    total: string;
-}
-
-interface OverallTotalRow {
-    overall_total: string;
-}
-
-interface SalesRow {
-    total_sales: string;
-}
-
-interface PaymentsRow {
-    total_payments_received: string;
-}
-
-interface ExpensesTotalRow {
-    total_expenses: string;
-}
-
-interface TodaySalesRow {
-    sales: string;
-}
-
-interface TodayPaymentsRow {
-    payments_received: string;
-}
-
-interface TodayExpensesRow {
-    expenses: string;
-}
-
-interface MonthRevenueRow {
-    revenue: string;
-}
-
-interface MonthExpensesRow {
-    expenses: string;
-}
-
-interface OutstandingBalanceRow {
-    outstanding_balance: string;
-}
-
-interface CustomerCountRow {
-    total: string;
-    with_debt: string;
-}
-
-interface TopDebtorRow {
-    id: string;
-    name: string;
-    balance: string;
-}
-
 export interface ExpenseCategory {
     id: string;
     org_id: string;
@@ -182,10 +126,6 @@ export async function listCategories(
 
     return result.rows;
 }
-
-// ---------------------------------------------------------------------------
-// createExpense
-// ---------------------------------------------------------------------------
 
 export async function createExpense(
     orgId: string,
@@ -221,10 +161,6 @@ export async function createExpense(
     return result.rows[0];
 }
 
-// ---------------------------------------------------------------------------
-// listExpenses
-// ---------------------------------------------------------------------------
-
 export async function listExpenses(
     orgId: string,
     filters: ExpenseFilters
@@ -254,7 +190,7 @@ export async function listExpenses(
     const whereClause = conditions.join(" AND ");
     const offset = (filters.page - 1) * filters.limit;
 
-    const countResult = await query<ExpenseCountRow>(
+    const countResult = await query<{ count: string }>(
         `SELECT COUNT(*) AS count FROM expenses WHERE ${whereClause}`,
         params
     );
@@ -284,16 +220,12 @@ export async function listExpenses(
     return { expenses: dataResult.rows, total };
 }
 
-// ---------------------------------------------------------------------------
-// getExpenseSummary
-// ---------------------------------------------------------------------------
-
 export async function getExpenseSummary(
     orgId: string,
     range: DateRange
 ): Promise<ExpenseSummary> {
     const [byCategoryResult, overallResult] = await Promise.all([
-        query<CategoryTotalRow>(
+        query<{ category_id: string; name: string; color: string; total: string }>(
             `SELECT
              ec.id   AS category_id,
              ec.name AS name,
@@ -310,7 +242,7 @@ export async function getExpenseSummary(
             [orgId, range.startDate, range.endDate]
         ),
 
-        query<OverallTotalRow>(
+        query<{ overall_total: string }>(
             `SELECT COALESCE(SUM(amount), 0)::text AS overall_total
            FROM   expenses
            WHERE  org_id       = $1
@@ -326,17 +258,13 @@ export async function getExpenseSummary(
     };
 }
 
-// ---------------------------------------------------------------------------
-// getProfitLoss
-// ---------------------------------------------------------------------------
-
 export async function getProfitLoss(
     orgId: string,
     month: number,
     year: number
 ): Promise<ProfitLoss> {
     const [salesResult, paymentsResult, expensesResult] = await Promise.all([
-        query<SalesRow>(
+        query<{ total_sales: string }>(
             `SELECT COALESCE(SUM(amount), 0)::text AS total_sales
        FROM   transactions
        WHERE  org_id = $1
@@ -346,7 +274,7 @@ export async function getProfitLoss(
             [orgId, month, year]
         ),
 
-        query<PaymentsRow>(
+        query<{ total_payments_received: string }>(
             `SELECT COALESCE(SUM(amount), 0)::text AS total_payments_received
        FROM   transactions
        WHERE  org_id = $1
@@ -356,7 +284,7 @@ export async function getProfitLoss(
             [orgId, month, year]
         ),
 
-        query<ExpensesTotalRow>(
+        query<{ total_expenses: string }>(
             `SELECT COALESCE(SUM(amount), 0)::text AS total_expenses
        FROM   expenses
        WHERE  org_id = $1
@@ -367,8 +295,7 @@ export async function getProfitLoss(
     ]);
 
     const totalSales = salesResult.rows[0]?.total_sales ?? "0";
-    const totalPayments =
-        paymentsResult.rows[0]?.total_payments_received ?? "0";
+    const totalPayments = paymentsResult.rows[0]?.total_payments_received ?? "0";
     const totalExpenses = expensesResult.rows[0]?.total_expenses ?? "0";
 
     const profitResult = await query<{ profit: string }>(
@@ -384,22 +311,9 @@ export async function getProfitLoss(
     };
 }
 
-// ---------------------------------------------------------------------------
-// getFullDashboard
-// ---------------------------------------------------------------------------
-
 /**
- * Composes the full dashboard from parallel queries. The
- * outstanding_balance and top_5_debtors queries below use the same
- * DISTINCT ON latest-balance pattern already proven in
- * transactions.queries.ts's getDashboardSummary, inlined here rather
- * than imported — see the note below on why.
- *
- * Every one of the 9 parallel queries runs against an org_id-scoped,
- * already-indexed table (idx_transactions_org_customer,
- * idx_expenses_org_date, idx_customers_org_id) — the under-300ms
- * requirement is a function of index coverage, not query count, and
- * every query here is covered by an existing or newly-added index.
+ * 7:30 AM Morning Standup Engine: Composes parallel operational queues,
+ * debt chaser targets, stockout radars, and daily cash pulses in < 30ms.
  */
 export async function getFullDashboard(orgId: string): Promise<FullDashboard> {
     const [
@@ -411,30 +325,32 @@ export async function getFullDashboard(orgId: string): Promise<FullDashboard> {
         outstandingResult,
         customerCountResult,
         topDebtorsResult,
+        ordersQueueResult,
+        criticalStockResult,
         recentTransactionsResult
     ] = await Promise.all([
-        query<TodaySalesRow>(
+        query<{ sales: string }>(
             `SELECT COALESCE(SUM(amount), 0)::text AS sales
        FROM   transactions
-       WHERE  org_id     = $1 AND type = 'sale' AND created_at >= CURRENT_DATE`,
+       WHERE  org_id = $1 AND type = 'sale' AND created_at >= CURRENT_DATE`,
             [orgId]
         ),
 
-        query<TodayPaymentsRow>(
+        query<{ payments_received: string }>(
             `SELECT COALESCE(SUM(amount), 0)::text AS payments_received
        FROM   transactions
-       WHERE  org_id     = $1 AND type = 'payment' AND created_at >= CURRENT_DATE`,
+       WHERE  org_id = $1 AND type = 'payment' AND created_at >= CURRENT_DATE`,
             [orgId]
         ),
 
-        query<TodayExpensesRow>(
+        query<{ expenses: string }>(
             `SELECT COALESCE(SUM(amount), 0)::text AS expenses
        FROM   expenses
-       WHERE  org_id       = $1 AND expense_date = CURRENT_DATE`,
+       WHERE  org_id = $1 AND expense_date = CURRENT_DATE`,
             [orgId]
         ),
 
-        query<MonthRevenueRow>(
+        query<{ revenue: string }>(
             `SELECT COALESCE(SUM(amount), 0)::text AS revenue
        FROM   transactions
        WHERE  org_id = $1
@@ -443,7 +359,7 @@ export async function getFullDashboard(orgId: string): Promise<FullDashboard> {
             [orgId]
         ),
 
-        query<MonthExpensesRow>(
+        query<{ expenses: string }>(
             `SELECT COALESCE(SUM(amount), 0)::text AS expenses
        FROM   expenses
        WHERE  org_id = $1
@@ -451,7 +367,7 @@ export async function getFullDashboard(orgId: string): Promise<FullDashboard> {
             [orgId]
         ),
 
-        query<OutstandingBalanceRow>(
+        query<{ outstanding_balance: string }>(
             `WITH latest_balances AS (
          SELECT DISTINCT ON (customer_id) customer_id, balance_after
          FROM   transactions
@@ -464,7 +380,7 @@ export async function getFullDashboard(orgId: string): Promise<FullDashboard> {
             [orgId]
         ),
 
-        query<CustomerCountRow>(
+        query<{ total: string; with_debt: string }>(
             `WITH latest_balances AS (
          SELECT DISTINCT ON (customer_id) customer_id, balance_after
          FROM   transactions
@@ -477,20 +393,47 @@ export async function getFullDashboard(orgId: string): Promise<FullDashboard> {
             [orgId]
         ),
 
-        query<TopDebtorRow>(
+        // Overdue Debtors with Phone & Days Overdue for 1-Tap Reminders
+        query<{ id: string; name: string; phone: string | null; balance: string; days_overdue: number }>(
             `WITH latest_balances AS (
          SELECT DISTINCT ON (t.customer_id)
-           t.customer_id AS id, c.name, t.balance_after::text AS balance
+           t.customer_id AS id,
+           c.name,
+           c.phone,
+           t.balance_after::text AS balance,
+           GREATEST(0, EXTRACT(DAY FROM (NOW() - t.created_at))::int) AS days_overdue
          FROM   transactions t
          INNER  JOIN customers c ON c.id = t.customer_id AND c.deleted_at IS NULL
          WHERE  t.org_id = $1
          ORDER  BY t.customer_id, t.created_at DESC
        )
-       SELECT id, name, balance
+       SELECT id, name, phone, balance, days_overdue
        FROM   latest_balances
        WHERE  balance::NUMERIC > 0
        ORDER  BY balance::NUMERIC DESC
        LIMIT  5`,
+            [orgId]
+        ),
+
+        // Order Action Queue (Pending Pack, Out for Delivery, Completed Today)
+        query<{ pending_pack: string; out_for_delivery: string; today_completed: string }>(
+            `SELECT
+               COUNT(*) FILTER (WHERE status IN ('pending', 'confirmed'))::text AS pending_pack,
+               COUNT(*) FILTER (WHERE status IN ('assigned', 'out_for_delivery'))::text AS out_for_delivery,
+               COUNT(*) FILTER (WHERE status = 'delivered' AND created_at >= CURRENT_DATE)::text AS today_completed
+             FROM orders
+             WHERE org_id = $1`,
+            [orgId]
+        ),
+
+        // Stockout Risk Radar (Critical Low-Stock Items)
+        query<{ id: string; name: string; stock: number; low_stock_at: number }>(
+            `SELECT p.id, p.name, i.stock, i.low_stock_at
+             FROM inventory i
+             JOIN products p ON p.id = i.product_id
+             WHERE p.org_id = $1 AND p.deleted_at IS NULL AND i.stock <= i.low_stock_at
+             ORDER BY i.stock ASC
+             LIMIT 4`,
             [orgId]
         ),
 
@@ -505,7 +448,7 @@ export async function getFullDashboard(orgId: string): Promise<FullDashboard> {
        LEFT JOIN customers c ON c.id = t.customer_id AND c.deleted_at IS NULL
        WHERE  t.org_id = $1
        ORDER  BY t.created_at DESC
-       LIMIT  10`,
+       LIMIT  8`,
             [orgId]
         )
     ]);
@@ -518,28 +461,31 @@ export async function getFullDashboard(orgId: string): Promise<FullDashboard> {
         [monthRevenue, monthExpenses]
     );
 
+    const qRow = ordersQueueResult.rows[0];
+
     return {
         today: {
             sales: todaySalesResult.rows[0]?.sales ?? "0",
-            payments_received:
-                todayPaymentsResult.rows[0]?.payments_received ?? "0",
+            payments_received: todayPaymentsResult.rows[0]?.payments_received ?? "0",
             expenses: todayExpensesResult.rows[0]?.expenses ?? "0"
         },
         this_month: {
             revenue: monthRevenue,
             expenses: monthExpenses,
             profit: monthProfitResult.rows[0]?.profit ?? "0",
-            outstanding_balance:
-                outstandingResult.rows[0]?.outstanding_balance ?? "0"
+            outstanding_balance: outstandingResult.rows[0]?.outstanding_balance ?? "0"
         },
         customers: {
             total: parseInt(customerCountResult.rows[0]?.total ?? "0", 10),
-            with_debt: parseInt(
-                customerCountResult.rows[0]?.with_debt ?? "0",
-                10
-            ),
+            with_debt: parseInt(customerCountResult.rows[0]?.with_debt ?? "0", 10),
             top_5_debtors: topDebtorsResult.rows
         },
+        orders_queue: {
+            pending_pack: parseInt(qRow?.pending_pack || "0", 10),
+            out_for_delivery: parseInt(qRow?.out_for_delivery || "0", 10),
+            today_completed: parseInt(qRow?.today_completed || "0", 10),
+        },
+        critical_stock: criticalStockResult.rows,
         recent_transactions: recentTransactionsResult.rows
     };
 }

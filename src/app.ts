@@ -28,6 +28,7 @@ import storesRoutes from "./modules/stores/stores.routes";
 import ordersRoutes from "./modules/orders/orders.routes";
 import publicRoutes from "./modules/public/public.routes";
 import mpesaCredentialsRoutes from "./modules/mpesa-credentials/mpesa-credentials.routes";
+import analyticsRoutes from "./modules/analytics/analytics.routes";
 
 const app = express();
 
@@ -127,6 +128,7 @@ apiRouter.use("/products", productsRoutes);
 apiRouter.use("/store", storesRoutes);
 apiRouter.use("/orders", ordersRoutes);
 apiRouter.use("/mpesa-credentials", mpesaCredentialsRoutes);
+apiRouter.use("/analytics", analyticsRoutes);
 app.use("/api/v1", apiRouter);
 
 app.use((req: Request, _res: Response, next: NextFunction) => {

@@ -18,13 +18,7 @@ export interface Order {
     customer_email: string | null;
     delivery_location: string;
     notes: string | null;
-    status:
-        | "pending"
-        | "confirmed"
-        | "assigned"
-        | "out_for_delivery"
-        | "delivered"
-        | "cancelled";
+    status: "pending" | "confirmed" | "assigned" | "out_for_delivery" | "delivered" | "cancelled";
     payment_method: string;
     payment_status: "pending" | "paid" | "failed";
     total: string;
@@ -52,6 +46,7 @@ export interface OrderItem {
     product_id: string;
     product_name: string;
     unit_price: string;
+    cost_price: string;
     quantity: number;
     subtotal: string;
 }
@@ -167,6 +162,11 @@ export async function insertOrderTransactional(
         deliveryConfirmationCode?: string | null;
     }
 ): Promise<string> {
+    const locationCapturedAt =
+        data.customerLat !== null && data.customerLat !== undefined
+            ? new Date()
+            : null;
+
     const result = await client.query<{ id: string }>(
         `INSERT INTO orders (
        org_id, store_id, customer_name, customer_phone, customer_email,
@@ -179,8 +179,8 @@ export async function insertOrderTransactional(
        $1, $2, $3, $4, $5,
        $6, $7, $8, $9,
        $10, $11, $12, $13,
-       $14, (CASE WHEN $11 IS NOT NULL THEN NOW() ELSE NULL END), $15,
-       $16, $17
+       $14, $15, $16,
+       $17, $18
      )
      RETURNING id`,
         [
@@ -198,6 +198,7 @@ export async function insertOrderTransactional(
             data.customerLng ?? null,
             data.locationSource ?? null,
             data.locationAccuracyM ?? null,
+            locationCapturedAt,
             data.deliveryFee ?? 0,
             data.deliveryFeeStatus ?? "known",
             data.deliveryConfirmationCode ?? null
@@ -226,18 +227,20 @@ export async function insertOrderItemTransactional(
         productId: string;
         productName: string;
         unitPrice: number;
+        costPrice?: number;
         quantity: number;
         subtotal: number;
     }
 ): Promise<void> {
     await client.query(
-        `INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity, subtotal)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+        `INSERT INTO order_items (order_id, product_id, product_name, unit_price, cost_price, quantity, subtotal)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [
             orderId,
             item.productId,
             item.productName,
             item.unitPrice,
+            item.costPrice ?? 0,
             item.quantity,
             item.subtotal
         ]
@@ -408,7 +411,7 @@ export async function getOrderById(
 
     const itemsResult = await query<OrderItem>(
         `SELECT id, order_id, product_id, product_name, unit_price::text AS unit_price,
-            quantity, subtotal::text AS subtotal
+            cost_price::text AS cost_price, quantity, subtotal::text AS subtotal
      FROM   order_items
      WHERE  order_id = $1`,
         [orderId.trim()]
@@ -440,12 +443,7 @@ export async function updateOrderStatus(
             [orgId, orderId.trim(), status]
         );
 
-        await insertOrderStatusHistoryTransactional(
-            client,
-            orderId.trim(),
-            status,
-            "merchant"
-        );
+        await insertOrderStatusHistoryTransactional(client, orderId.trim(), status, "merchant");
 
         await client.query("COMMIT");
         return getOrderById(orgId, orderId);
@@ -638,12 +636,7 @@ export async function assignRiderToOrders(
         );
 
         for (const order of result.rows) {
-            await insertOrderStatusHistoryTransactional(
-                client,
-                order.id,
-                "assigned",
-                "merchant"
-            );
+            await insertOrderStatusHistoryTransactional(client, order.id, "assigned", "merchant");
         }
 
         await client.query("COMMIT");
@@ -655,10 +648,6 @@ export async function assignRiderToOrders(
         client.release();
     }
 }
-
-// ---------------------------------------------------------------------------
-// Delivery Handover Proof & Cash Reconciliation Queries
-// ---------------------------------------------------------------------------
 
 export async function completeOrderDeliveryTransactional(
     orgId: string,
@@ -688,16 +677,9 @@ export async function completeOrderDeliveryTransactional(
         }
 
         // Validate 4-digit confirmation code if this is a doorstep delivery
-        if (
-            order.delivery_type === "delivery" &&
-            order.delivery_confirmation_code
-        ) {
-            const expected = normalizeDeliveryConfirmationCode(
-                order.delivery_confirmation_code
-            );
-            const provided = normalizeDeliveryConfirmationCode(
-                input.confirmationCode || ""
-            );
+        if (order.delivery_type === "delivery" && order.delivery_confirmation_code) {
+            const expected = normalizeDeliveryConfirmationCode(order.delivery_confirmation_code);
+            const provided = normalizeDeliveryConfirmationCode(input.confirmationCode || "");
 
             if (!provided || provided !== expected) {
                 throw new AppError(
@@ -709,17 +691,11 @@ export async function completeOrderDeliveryTransactional(
 
         const isCOD = order.payment_method === "mpesa_cash";
         const orderTotalNum = parseFloat(order.total);
-        const collectedAmount =
-            input.amountCollected !== undefined
-                ? input.amountCollected
-                : isCOD
-                  ? orderTotalNum
-                  : orderTotalNum;
-        const collector =
-            input.collectedBy?.trim() || order.rider_name || "merchant";
+        const collectedAmount = input.amountCollected !== undefined ? input.amountCollected : (isCOD ? orderTotalNum : orderTotalNum);
+        const collector = input.collectedBy?.trim() || order.rider_name || "merchant";
 
         // Update Order to Delivered
-        await client.query<Order>(
+        await client.query(
             `UPDATE orders
        SET    status           = 'delivered',
               delivered_at     = NOW(),
@@ -727,16 +703,7 @@ export async function completeOrderDeliveryTransactional(
               collected_by     = $4,
               payment_status   = (CASE WHEN $5 = TRUE THEN 'paid' ELSE payment_status END),
               updated_at       = NOW()
-       WHERE  org_id = $1 AND id = $2
-       RETURNING id, org_id, store_id, customer_name, customer_phone, customer_email,
-                 delivery_location, notes, status, payment_method, payment_status,
-                 total::text AS total, delivery_type, customer_lat::text AS customer_lat,
-                 customer_lng::text AS customer_lng, location_source,
-                 location_accuracy_m::text AS location_accuracy_m, location_captured_at,
-                 rider_name, rider_phone, delivery_fee::text AS delivery_fee,
-                 delivery_fee_status, delivery_confirmation_code,
-                 amount_collected::text AS amount_collected, collected_by, delivered_at,
-                 created_at, updated_at`,
+       WHERE  org_id = $1 AND id = $2`,
             [
                 orgId,
                 orderId.trim(),
@@ -746,15 +713,8 @@ export async function completeOrderDeliveryTransactional(
             ]
         );
 
-        //    const updatedOrder = updateRes.rows[0];
-
         // Audit Trail entry
-        await insertOrderStatusHistoryTransactional(
-            client,
-            orderId.trim(),
-            "delivered",
-            collector
-        );
+        await insertOrderStatusHistoryTransactional(client, orderId.trim(), "delivered", collector);
 
         // If Cash on Delivery was collected, record into financial ledger
         if (isCOD && collectedAmount > 0 && order.customer_phone) {
@@ -868,4 +828,5 @@ export async function getCashReconciliationSummary(
         variance,
         unreconciled_count: parseInt(row?.unreconciled_count || "0", 10)
     };
+	
 }

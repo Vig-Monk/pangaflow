@@ -1,21 +1,15 @@
 // =============================================================================
-// src/modules/transactions/transactions.routes.ts
+// src/modules/analytics/analytics.routes.ts
 // =============================================================================
 
 import { Router } from 'express';
 import { verifyToken } from '../../middleware/auth';
-import {
-  ledgerHandler,
-  recordHandler,
-  smartSaleHandler,
-} from './transactions.controller';
+import { getAnalyticsOverviewHandler } from './analytics.controller';
 
 const router = Router();
 
 router.use(verifyToken);
 
-router.post('/smart-sale',       smartSaleHandler);
-router.post('/',                 recordHandler);
-router.get('/:customerId',       ledgerHandler);
+router.get('/overview', getAnalyticsOverviewHandler);
 
 export default router;

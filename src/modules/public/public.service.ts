@@ -24,9 +24,9 @@ export interface LocationSearchResult {
 }
 
 const nominatimCache = new Map<string, { data: LocationSearchResult[]; expiresAt: number }>();
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const CACHE_TTL_MS = 60 * 60 * 1000;
 let lastNominatimCallTime = 0;
-const NOMINATIM_MIN_INTERVAL_MS = 1000; // 1 req/sec max per OSM policy
+const NOMINATIM_MIN_INTERVAL_MS = 1000;
 
 async function fetchNominatimWithRateLimit(searchQuery: string): Promise<LocationSearchResult[]> {
   const cacheKey = searchQuery.trim().toLowerCase();
@@ -92,8 +92,6 @@ export async function searchDeliveryLocations(rawQuery: unknown): Promise<Locati
   }
 
   const queryText = parsed.data.q.trim();
-
-  // Tier 1: Local curated estates database
   const localEstates = await publicQueries.searchEstatesLocal(queryText);
   if (localEstates.length > 0) {
     return localEstates.map((estate) => ({
@@ -105,7 +103,6 @@ export async function searchDeliveryLocations(rawQuery: unknown): Promise<Locati
     }));
   }
 
-  // Tier 2: Nominatim fallback
   return fetchNominatimWithRateLimit(queryText);
 }
 
@@ -274,12 +271,39 @@ export async function placeOrder(
   try {
     await client.query('BEGIN');
 
+    // 1. Auto-Sync Shopper into Merchant's Customer CRM Directory
+    const existingCustomer = await client.query<{ id: string }>(
+      `SELECT id FROM customers WHERE org_id = $1 AND phone = $2 AND deleted_at IS NULL LIMIT 1`,
+      [store.org_id, customerData.customerPhone]
+    );
+
+    if (existingCustomer.rows.length === 0) {
+      await client.query(
+        `INSERT INTO customers (org_id, name, phone, address)
+         VALUES ($1, $2, $3, $4)`,
+        [
+          store.org_id,
+          customerData.customerName,
+          customerData.customerPhone,
+          customerData.deliveryLocation || null,
+        ]
+      );
+    }
+
+    // 2. Fetch Products, Inventory & Snapshot Real COGS (cost_price)
     let calculatedProductsSubtotal = 0;
     const itemsToInsert = [];
 
     for (const cartItem of items) {
-      const productRes = await client.query<{ id: string; name: string; price: string; status: string; stock: number }>(
-        `SELECT p.id, p.name, p.price::text AS price, p.status, i.stock
+      const productRes = await client.query<{
+        id: string;
+        name: string;
+        price: string;
+        cost_price: string | null;
+        status: string;
+        stock: number;
+      }>(
+        `SELECT p.id, p.name, p.price::text AS price, p.cost_price::text AS cost_price, p.status, i.stock
          FROM   products p
          INNER  JOIN inventory i ON i.product_id = p.id
          WHERE  p.id = $1 AND p.org_id = $2 AND p.deleted_at IS NULL`,
@@ -296,6 +320,7 @@ export async function placeOrder(
       }
 
       const unitPrice = parseFloat(product.price);
+      const costPrice = parseFloat(product.cost_price || '0');
       const subtotal = Math.round(unitPrice * cartItem.quantity * 100) / 100;
       calculatedProductsSubtotal += subtotal;
 
@@ -303,6 +328,7 @@ export async function placeOrder(
         productId: product.id,
         productName: product.name,
         unitPrice,
+        costPrice,
         quantity: cartItem.quantity,
         subtotal,
       });
@@ -310,7 +336,7 @@ export async function placeOrder(
 
     calculatedProductsSubtotal = Math.round(calculatedProductsSubtotal * 100) / 100;
 
-    // Server-Authoritative Delivery Fee & Verification Code Math
+    // 3. Server-Authoritative Delivery Fee Math
     const isDelivery = customerData.deliveryType !== 'pickup';
     let deliveryFee = 0;
     let deliveryFeeStatus: 'known' | 'needs_merchant_confirmation' = 'known';
@@ -360,6 +386,7 @@ export async function placeOrder(
 
     const finalOrderTotal = Math.round((calculatedProductsSubtotal + deliveryFee) * 100) / 100;
 
+    // 4. Insert Transactional Order
     const orderId = await ordersQueries.insertOrderTransactional(client, {
       orgId: store.org_id,
       storeId: store.id,
@@ -382,6 +409,7 @@ export async function placeOrder(
 
     await ordersQueries.insertOrderStatusHistoryTransactional(client, orderId, 'pending', 'system');
 
+    // 5. Insert Snapshot Line Items & Decrement Stock
     for (const item of itemsToInsert) {
       await ordersQueries.insertOrderItemTransactional(client, orderId, item);
 
@@ -391,6 +419,7 @@ export async function placeOrder(
       }
     }
 
+    // 6. Direct M-Pesa STK Trigger (If Selected)
     let checkoutRequestId: string | undefined;
 
     if (isDirectMpesa) {

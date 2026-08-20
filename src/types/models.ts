@@ -1,8 +1,6 @@
 // =============================================================================
 // src/types/models.ts
 // Canonical domain types — mirror the database schema field-for-field.
-// snake_case throughout: this is what the raw `pg` driver returns.
-// See README Section 22, "TypeScript ↔ Database Type Mapping".
 // =============================================================================
 
 // ---------------------------------------------------------------------------
@@ -10,7 +8,7 @@
 // ---------------------------------------------------------------------------
 
 export type BusinessType = 'core' | 'shop' | 'salon' | 'stays' | 'market';
-export type PlanName = 'free' | 'pro' | 'business';
+export type PlanName = 'free' | 'pro' | 'business' | 'lifetime';
 
 export interface Organization {
   id: string;
@@ -97,7 +95,7 @@ export interface Transaction {
   org_id: string;
   customer_id: string;
   type: TransactionType;
-  amount: string; // pg returns NUMERIC as string — parseFloat() where arithmetic is needed
+  amount: string;
   description: string | null;
   balance_after: string;
   created_by: string | null;

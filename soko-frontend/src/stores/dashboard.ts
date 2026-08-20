@@ -1,22 +1,15 @@
 // =============================================================================
-// src/stores/dashboard.ts
-// Built against the REAL FullDashboard shape (expenses.queries.ts,
-// Prompt 3.1) — see delivery note above for the field-name conflict
-// this resolves.
+// soko-frontend/src/stores/dashboard.ts
 // =============================================================================
 
 import { defineStore } from 'pinia';
 import { apiGet } from '@/services/apiClient';
 
-// ---------------------------------------------------------------------------
-// Types — exact mirror of the real backend interface. No invented fields.
-// ---------------------------------------------------------------------------
-
 export interface Transaction {
   id: string;
   org_id: string;
   customer_id: string;
-  customer_name?: string; // Add this line
+  customer_name?: string;
   type: 'sale' | 'payment' | 'adjustment';
   amount: string;
   description: string | null;
@@ -24,6 +17,28 @@ export interface Transaction {
   created_by: string | null;
   created_at: string;
 }
+
+export interface DebtorItem {
+  id: string;
+  name: string;
+  phone: string | null;
+  balance: string;
+  days_overdue: number;
+}
+
+export interface CriticalStockItem {
+  id: string;
+  name: string;
+  stock: number;
+  low_stock_at: number;
+}
+
+export interface OrdersQueueSummary {
+  pending_pack: number;
+  out_for_delivery: number;
+  today_completed: number;
+}
+
 export interface FullDashboard {
   today: {
     sales: string;
@@ -39,14 +54,12 @@ export interface FullDashboard {
   customers: {
     total: number;
     with_debt: number;
-    top_5_debtors: Array<{ id: string; name: string; balance: string }>;
+    top_5_debtors: DebtorItem[];
   };
+  orders_queue?: OrdersQueueSummary;
+  critical_stock?: CriticalStockItem[];
   recent_transactions: Transaction[];
 }
-
-// ---------------------------------------------------------------------------
-// Store
-// ---------------------------------------------------------------------------
 
 export const useDashboardStore = defineStore('dashboard', {
   state: () => ({
@@ -62,7 +75,7 @@ export const useDashboardStore = defineStore('dashboard', {
       try {
         this.summary = await apiGet<FullDashboard>('/dashboard/full');
       } catch (err) {
-        this.error = err instanceof Error ? err.message : 'Failed to load dashboard';
+        this.error = err instanceof Error ? err.message : 'Failed to load dashboard summary';
       } finally {
         this.loading = false;
       }

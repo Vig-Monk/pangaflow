@@ -97,6 +97,12 @@ const routes: RouteRecordRaw[] = [
         meta: { requiresAuth: true, layout: "merchant" }
     },
     {
+        path: "/admin",
+        name: "admin-console",
+        component: () => import("@/views/AdminConsoleView.vue"),
+        meta: { requiresAuth: false, layout: "admin" }
+    },
+    {
         path: "/store/:storeSlug",
         name: "storefront-home",
         component: () => import("@/views/storefront/StoreHomeView.vue"),
