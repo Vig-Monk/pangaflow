@@ -57,6 +57,7 @@ const description = ref('');
 const paymentMode = ref<PaymentMode>('credit');
 const mpesaRef = ref('');
 const stkPhone = ref('');
+const createdCustomerId = ref('');
 
 // UI & Async State
 const isSubmitting = ref(false);
@@ -92,6 +93,7 @@ watch(
   (isOpen) => {
     if (isOpen) {
       resetForm();
+      customersStore.fetchList({ limit: 100 });
     } else {
       stopStkTimers();
     }
@@ -121,6 +123,7 @@ function resetForm(): void {
   paymentMode.value = 'credit';
   mpesaRef.value = '';
   stkPhone.value = selectedCustomerObject.value?.phone || '';
+  createdCustomerId.value = '';
   isSubmitting.value = false;
   isAwaitingStk.value = false;
   stkFailed.value = false;
@@ -159,8 +162,9 @@ function startStkPolling(checkoutRequestId: string): void {
       if (status === 'completed') {
         stopStkTimers();
         isAwaitingStk.value = false;
+        await customersStore.fetchList({ page: 1 });
         pushToast({ message: 'M-Pesa payment received & sale completed!', variant: 'success' });
-        emit('success', { customerId: customerId.value, amount: amount.value });
+        emit('success', { customerId: createdCustomerId.value || customerId.value, amount: amount.value });
         emit('close');
       } else if (status === 'failed') {
         stopStkTimers();
@@ -203,6 +207,7 @@ async function handleSubmit(): Promise<void> {
     };
 
     const result = await apiPost<any>('/transactions/smart-sale', payload);
+    createdCustomerId.value = result.customerId;
 
     if (paymentMode.value === 'mpesa_stk' && result.checkoutRequestId) {
       isSubmitting.value = false;
@@ -210,6 +215,9 @@ async function handleSubmit(): Promise<void> {
       pushToast({ message: result.customerMessage || 'M-Pesa prompt sent to customer phone', variant: 'info' });
       return;
     }
+
+    // Refresh customers list immediately so newly created customer is in the store
+    await customersStore.fetchList({ page: 1 });
 
     const successMsg =
       paymentMode.value === 'credit'

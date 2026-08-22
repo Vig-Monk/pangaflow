@@ -83,13 +83,13 @@ function handleRowClick(row: Customer): void {
 }
 
 function handleSearch(query: string): void {
-  if (query.length === 0) {
+  if (!query || query.trim().length === 0) {
     isSearchMode.value = false;
     customersStore.fetchList({ page: 1 });
     return;
   }
   isSearchMode.value = true;
-  customersStore.search(query);
+  customersStore.search(query.trim());
 }
 
 const displayedRows = computed<Customer[]>(() =>
@@ -159,6 +159,11 @@ async function executeDeleteCustomer(): Promise<void> {
 
 function handleDebtSettled(): void {
   customersStore.fetchList({ page: customersStore.page });
+}
+
+function handleSmartSaleSuccess(): void {
+  isSearchMode.value = false;
+  customersStore.fetchList({ page: 1 });
 }
 </script>
 
@@ -289,7 +294,7 @@ function handleDebtSettled(): void {
     <SmartSaleModal
       :open="showSmartSaleModal"
       @close="showSmartSaleModal = false"
-      @success="() => customersStore.fetchList({ page: 1 })"
+      @success="handleSmartSaleSuccess"
     />
 
     <UpgradeModal

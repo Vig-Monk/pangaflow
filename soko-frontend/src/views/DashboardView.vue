@@ -8,7 +8,6 @@ import { computed, onMounted, ref } from 'vue';
 import { useDashboardStore } from '@/stores/dashboard';
 import { useCustomersStore } from '@/stores/customers';
 import { useStoreSettingsStore } from '@/stores/store';
-//import StatCard from '@/components/ledger/StatCard.vue';
 import LedgerRow from '@/components/ledger/LedgerRow.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';

@@ -1,7 +1,5 @@
 // =============================================================================
-// src/stores/customers.ts
-// LimitReachedDetails matches the REAL checkLimit.ts payload — see
-// delivery note above for the exact field-name conflict this resolves.
+// soko-frontend/src/stores/customers.ts
 // =============================================================================
 
 import { defineStore } from "pinia";
@@ -13,10 +11,6 @@ import {
     apiDelete,
     ApiError
 } from "@/services/apiClient";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export interface Customer {
     id: string;
@@ -31,7 +25,7 @@ export interface Customer {
     created_at: string;
 }
 
-export type PlanName = "free" | "pro" | "business";
+export type PlanName = "free" | "pro" | "business" | "lifetime";
 
 export interface LimitReachedDetails {
     currentPlan: PlanName;
@@ -55,13 +49,6 @@ export interface ListCustomersParams {
     includeArchived?: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Type guard — confirms an unknown ApiError.details actually matches
-// LimitReachedDetails's shape before the store trusts it as one. A 403
-// can come from other causes too — this guard prevents mis-typing an
-// unrelated 403's details as a plan-limit payload.
-// ---------------------------------------------------------------------------
-
 function isLimitReachedDetails(value: unknown): value is LimitReachedDetails {
     if (typeof value !== "object" || value === null) return false;
     const v = value as Record<string, unknown>;
@@ -72,10 +59,6 @@ function isLimitReachedDetails(value: unknown): value is LimitReachedDetails {
         Array.isArray(v.upgradeOptions)
     );
 }
-
-// ---------------------------------------------------------------------------
-// Store
-// ---------------------------------------------------------------------------
 
 export const useCustomersStore = defineStore("customers", {
     state: () => ({
@@ -100,7 +83,7 @@ export const useCustomersStore = defineStore("customers", {
                 );
                 this.list = data;
                 this.page = meta.page;
-                this.total = meta.totalItems; // NOW actually set
+                this.total = meta.totalItems;
             } catch (err) {
                 this.error =
                     err instanceof Error
@@ -112,10 +95,14 @@ export const useCustomersStore = defineStore("customers", {
         },
 
         async search(query: string): Promise<void> {
+            if (!query || query.trim().length === 0) {
+                this.searchResults = [];
+                return;
+            }
             try {
                 this.searchResults = await apiGet<Customer[]>(
                     "/customers/search",
-                    { q: query }
+                    { q: query.trim() }
                 );
             } catch (err) {
                 this.error =
@@ -144,7 +131,8 @@ export const useCustomersStore = defineStore("customers", {
 
             try {
                 const customer = await apiPost<Customer>("/customers", body);
-                this.list = [...this.list, customer];
+                this.list = [customer, ...this.list];
+                this.total += 1;
                 return customer;
             } catch (err) {
                 if (
@@ -177,11 +165,13 @@ export const useCustomersStore = defineStore("customers", {
         async archive(id: string): Promise<void> {
             await apiPatch(`/customers/${id}/archive`);
             this.list = this.list.filter(c => c.id !== id);
+            this.total = Math.max(0, this.total - 1);
         },
 
         async remove(id: string): Promise<void> {
             await apiDelete(`/customers/${id}`);
             this.list = this.list.filter(c => c.id !== id);
+            this.total = Math.max(0, this.total - 1);
         }
     }
 });
