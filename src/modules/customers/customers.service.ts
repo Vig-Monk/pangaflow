@@ -22,19 +22,19 @@ import {
 
 export const CreateCustomerSchema = z.object({
   name:     z.string().min(1, 'Customer name is required').max(200),
-  phone:    z.string().max(20).optional(),
+  phone:    z.string().max(20).optional().or(z.literal('')).transform(v => (v === '' ? undefined : v)),
   email:    z.string().email('Invalid email').optional().or(z.literal('')).transform(v => (v === '' ? undefined : v)),
-  address:  z.string().max(500).optional(),
-  notes:    z.string().max(2000).optional(),
+  address:  z.string().max(500).optional().or(z.literal('')).transform(v => (v === '' ? undefined : v)),
+  notes:    z.string().max(2000).optional().or(z.literal('')).transform(v => (v === '' ? undefined : v)),
   metadata: z.record(z.unknown()).optional(),
 });
 
 export const UpdateCustomerSchema = z.object({
   name:     z.string().min(1).max(200).optional(),
-  phone:    z.string().max(20).nullable().optional(),
+  phone:    z.string().max(20).nullable().optional().or(z.literal('')).transform(v => (v === '' ? null : v)),
   email:    z.string().email('Invalid email').nullable().optional().or(z.literal('')).transform(v => (v === '' ? null : v)),
-  address:  z.string().max(500).nullable().optional(),
-  notes:    z.string().max(2000).nullable().optional(),
+  address:  z.string().max(500).nullable().optional().or(z.literal('')).transform(v => (v === '' ? null : v)),
+  notes:    z.string().max(2000).nullable().optional().or(z.literal('')).transform(v => (v === '' ? null : v)),
   metadata: z.record(z.unknown()).optional(),
 });
 

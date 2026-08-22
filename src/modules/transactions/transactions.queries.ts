@@ -69,15 +69,26 @@ interface TopDebtorRow {
   balance: string;
 }
 
+function normalizePhone(p?: string | null): string | null {
+  if (!p) return null;
+  const digits = p.replace(/\D/g, '');
+  if (digits.startsWith('254') && digits.length === 12) return `0${digits.slice(3)}`;
+  if ((digits.startsWith('7') || digits.startsWith('1')) && digits.length === 9) return `0${digits}`;
+  if ((digits.startsWith('07') || digits.startsWith('01')) && digits.length === 10) return digits;
+  return p.trim() || null;
+}
+
 export async function findOrCreateCustomerTransactional(
   client: PoolClient,
   orgId: string,
   data: { name: string; phone?: string | null; address?: string | null }
 ): Promise<{ id: string; name: string; phone: string | null }> {
-  if (data.phone && data.phone.trim()) {
+  const cleanPhone = normalizePhone(data.phone);
+
+  if (cleanPhone) {
     const existing = await client.query<{ id: string; name: string; phone: string | null }>(
       `SELECT id, name, phone FROM customers WHERE org_id = $1 AND phone = $2 AND deleted_at IS NULL LIMIT 1`,
-      [orgId, data.phone.trim()]
+      [orgId, cleanPhone]
     );
     if (existing.rows.length > 0) {
       return existing.rows[0];
@@ -88,7 +99,7 @@ export async function findOrCreateCustomerTransactional(
     `INSERT INTO customers (org_id, name, phone, address)
      VALUES ($1, $2, $3, $4)
      RETURNING id, name, phone`,
-    [orgId, data.name.trim(), data.phone?.trim() || null, data.address?.trim() || null]
+    [orgId, data.name.trim(), cleanPhone, data.address?.trim() || null]
   );
   return newCust.rows[0];
 }

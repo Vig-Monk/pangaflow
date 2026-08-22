@@ -11,10 +11,10 @@ export interface CustomerWithBalance extends Customer {
 
 export interface CreateCustomerInput {
   name: string;
-  phone?: string;
-  email?: string;
-  address?: string;
-  notes?: string;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  notes?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -39,19 +39,21 @@ export interface PaginatedCustomers {
   total: number;
 }
 
-const BALANCE_SUBQUERY = `
+const BALANCE_EXPRESSION = `
   COALESCE(
     (
-      SELECT t.balance_after::text
+      SELECT t.balance_after::NUMERIC
       FROM   transactions t
       WHERE  t.customer_id = c.id
         AND  t.org_id      = c.org_id
       ORDER  BY t.created_at DESC
       LIMIT  1
     ),
-    '0.00'
-  ) AS current_balance
+    0.00
+  )
 `;
+
+const BALANCE_SUBQUERY = `(${BALANCE_EXPRESSION})::text AS current_balance`;
 
 export async function listCustomers(
   orgId: string,
@@ -102,7 +104,7 @@ export async function listCustomers(
        ${BALANCE_SUBQUERY}
      FROM   customers c
      WHERE  ${whereClause}
-     ORDER  BY (CASE WHEN (${BALANCE_SUBQUERY})::NUMERIC > 0 THEN 0 ELSE 1 END), c.name ASC
+     ORDER  BY (CASE WHEN (${BALANCE_EXPRESSION}) > 0 THEN 0 ELSE 1 END), c.created_at DESC, c.name ASC
      LIMIT  $${paramIndex} OFFSET $${paramIndex + 1}`,
     dataParams
   );
@@ -146,10 +148,10 @@ export async function createCustomer(
     [
       orgId,
       data.name.trim(),
-      data.phone?.trim() ?? null,
-      data.email?.trim() ?? null,
-      data.address?.trim() ?? null,
-      data.notes?.trim() ?? null,
+      data.phone?.trim() || null,
+      data.email?.trim() || null,
+      data.address?.trim() || null,
+      data.notes?.trim() || null,
       JSON.stringify(data.metadata ?? {}),
     ]
   );
@@ -193,7 +195,7 @@ export async function updateCustomer(
 
   const result = await query<CustomerWithBalance>(
     `UPDATE customers c
-     SET    ${setClauses.join(', ')}
+     SET    ${setClauses.join(', ')}, updated_at = NOW()
      WHERE  c.org_id     = $1
        AND  c.id         = $2
        AND  c.deleted_at IS NULL
@@ -214,7 +216,7 @@ export async function archiveCustomer(
 ): Promise<void> {
   await query(
     `UPDATE customers
-     SET    is_archived = TRUE
+     SET    is_archived = TRUE, updated_at = NOW()
      WHERE  org_id      = $1
        AND  id          = $2
        AND  deleted_at  IS NULL`,
@@ -222,24 +224,16 @@ export async function archiveCustomer(
   );
 }
 
-/**
- * Intelligent Deletion Guard:
- * - If customer has 0 transactions/payments: Hard-deletes cleanly.
- * - If customer has financial transaction history: Soft-deletes (deleted_at = NOW())
- *   to preserve historical financial accuracy while hiding them from active lists.
- */
 export async function deleteCustomer(
   orgId: string,
   customerId: string
 ): Promise<{ deleted: boolean; permanent: boolean }> {
-  // 1. Check if customer has any transactions
   const txCheck = await query<{ count: string }>(
     `SELECT COUNT(*) AS count FROM transactions WHERE org_id = $1 AND customer_id = $2`,
     [orgId, customerId]
   );
   const txCount = parseInt(txCheck.rows[0]?.count || '0', 10);
 
-  // 2. Check if customer is linked to any M-Pesa payments
   const mpesaCheck = await query<{ count: string }>(
     `SELECT COUNT(*) AS count FROM mpesa_transactions WHERE org_id = $1 AND customer_id = $2`,
     [orgId, customerId]
@@ -247,17 +241,15 @@ export async function deleteCustomer(
   const mpesaCount = parseInt(mpesaCheck.rows[0]?.count || '0', 10);
 
   if (txCount === 0 && mpesaCount === 0) {
-    // Permanent clean delete if created by accident with zero history
     await query(
       `DELETE FROM customers WHERE org_id = $1 AND id = $2`,
       [orgId, customerId]
     );
     return { deleted: true, permanent: true };
   } else {
-    // Soft delete to protect financial ledger integrity
     await query(
       `UPDATE customers
-       SET    deleted_at = NOW()
+       SET    deleted_at = NOW(), updated_at = NOW()
        WHERE  org_id     = $1
          AND  id         = $2
          AND  deleted_at IS NULL`,
@@ -286,7 +278,7 @@ export async function searchCustomers(
               c.phone ILIKE $2 OR
               c.email ILIKE $2
             )
-     ORDER  BY (CASE WHEN (${BALANCE_SUBQUERY})::NUMERIC > 0 THEN 0 ELSE 1 END), c.name ASC
+     ORDER  BY (CASE WHEN (${BALANCE_EXPRESSION}) > 0 THEN 0 ELSE 1 END), c.created_at DESC, c.name ASC
      LIMIT  20`,
     [orgId, `%${searchQuery.trim()}%`]
   );
