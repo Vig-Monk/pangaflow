@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // =============================================================================
-// KauntaOS-frontend/src/components/landing/LandingNav.vue
+// soko-frontend/src/components/landing/LandingNav.vue
 // Sticky glassmorphic navigation with anchor scrolling and auth state handling.
 // =============================================================================
 
@@ -28,7 +28,7 @@ function scrollToSection(id: string): void {
         <div class="brand-icon">
           <Store :size="18" />
         </div>
-        <span class="brand-name">KauntaOS<span class="brand-dot">.</span></span>
+        <span class="brand-name">SOKO<span class="brand-dot">.</span></span>
       </a>
 
       <!-- Desktop Anchor Links -->
@@ -91,4 +91,158 @@ function scrollToSection(id: string): void {
   border-bottom: 1px solid #1A2622;
 }
 
-.nav-con
+.nav-container {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 14px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.brand-block {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}
+
+.brand-icon {
+  width: 32px;
+  height: 32px;
+  background: var(--brand-primary, #D91E4E);
+  color: #FFFFFF;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.brand-name {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 800;
+  color: #F3F6F4;
+  letter-spacing: -0.02em;
+}
+
+.brand-dot { color: var(--brand-primary, #D91E4E); }
+
+.desktop-nav {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+@media (max-width: 860px) {
+  .desktop-nav { display: none; }
+}
+
+.nav-anchor {
+  background: transparent;
+  border: none;
+  font-size: 13px;
+  font-weight: 600;
+  color: #94A3B8;
+  cursor: pointer;
+  transition: color 120ms ease;
+  padding: 0;
+}
+.nav-anchor:hover { color: #F3F6F4; }
+
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.login-link {
+  font-size: 13px;
+  font-weight: 600;
+  color: #F3F6F4;
+  text-decoration: none;
+  transition: color 120ms ease;
+}
+.login-link:hover { color: var(--brand-primary, #D91E4E); }
+
+.btn-cta, .btn-dashboard {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--brand-primary, #D91E4E);
+  color: #FFFFFF;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 16px;
+  border-radius: 8px;
+  transition: transform 120ms ease, opacity 120ms ease;
+}
+.btn-cta:hover, .btn-dashboard:hover {
+  transform: translateY(-1px);
+  opacity: 0.95;
+}
+
+.mobile-toggle-btn {
+  display: none;
+  background: transparent;
+  border: none;
+  color: #F3F6F4;
+  cursor: pointer;
+  padding: 4px;
+}
+
+@media (max-width: 860px) {
+  .mobile-toggle-btn { display: flex; }
+  .login-link, .btn-cta { display: none; }
+}
+
+.mobile-drawer {
+  background: #0E1614;
+  border-bottom: 1px solid #1A2622;
+  padding: 16px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.mobile-nav-link {
+  background: transparent;
+  border: none;
+  color: #E2E8F0;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.mobile-drawer-auth {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid #1A2622;
+}
+
+.mobile-login-btn {
+  text-align: center;
+  color: #94A3B8;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 8px;
+}
+
+.mobile-cta-btn {
+  background: var(--brand-primary, #D91E4E);
+  color: #FFFFFF;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+  padding: 12px;
+  border-radius: 8px;
+}
+</style>
