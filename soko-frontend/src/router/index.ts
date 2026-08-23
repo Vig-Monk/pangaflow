@@ -7,6 +7,12 @@ import { useAuthStore } from "@/stores/auth";
 
 const routes: RouteRecordRaw[] = [
     {
+        path: "/",
+        name: "landing",
+        component: () => import("@/views/LandingView.vue"),
+        meta: { requiresAuth: false, layout: "public" }
+    },
+    {
         path: "/login",
         name: "login",
         component: () => import("@/views/LoginView.vue"),
@@ -17,10 +23,6 @@ const routes: RouteRecordRaw[] = [
         name: "register",
         component: () => import("@/views/RegisterView.vue"),
         meta: { requiresAuth: false, layout: "auth" }
-    },
-    {
-        path: "/",
-        redirect: "/dashboard"
     },
     {
         path: "/dashboard",
@@ -103,6 +105,12 @@ const routes: RouteRecordRaw[] = [
         meta: { requiresAuth: false, layout: "admin" }
     },
     {
+        path: "/analytics",
+        name: "analytics",
+        component: () => import("@/views/AnalyticsView.vue"),
+        meta: { requiresAuth: true, layout: "merchant" }
+    },
+    {
         path: "/store/:storeSlug",
         name: "storefront-home",
         component: () => import("@/views/storefront/StoreHomeView.vue"),
@@ -152,13 +160,19 @@ const routes: RouteRecordRaw[] = [
     },
     {
         path: "/:pathMatch(.*)*",
-        redirect: "/dashboard"
+        redirect: "/"
     }
 ];
 
 const router = createRouter({
     history: createWebHistory(),
-    routes
+    routes,
+    scrollBehavior(to, from, savedPosition) {
+        if (savedPosition) {
+            return savedPosition;
+        }
+        return { top: 0 };
+    }
 });
 
 router.beforeEach(to => {

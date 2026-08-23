@@ -137,7 +137,7 @@ export async function verifyCredentials(
       },
       phone: parsed.data.phone,
       amount: 1,
-      accountReference: 'SOKO-VERIFY',
+      accountReference: 'KAUNTAOS-VERIFY',
       transactionDesc: 'Verify Till',
       callbackUrl,
     });
@@ -150,7 +150,7 @@ export async function verifyCredentials(
       merchantRequestId: stkResult.merchantRequestId,
       phone: parsed.data.phone,
       amount: 1,
-      accountReference: 'SOKO-VERIFY',
+      accountReference: 'KAUNTAOS-VERIFY',
       transactionDesc: 'Verify Till',
     });
 

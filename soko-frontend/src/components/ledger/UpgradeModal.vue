@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/components/ledger/UpgradeModal.vue
+// KauntaOS-frontend/src/components/ledger/UpgradeModal.vue
 // Manual M-Pesa upgrade modal with 1-tap WhatsApp verification relay.
 // =============================================================================
 
@@ -39,7 +39,7 @@ const isPhoneCopied = ref(false);
 
 // Owner Payment Details (Configurable)
 const PAYMENT_PHONE = '0712345678';
-const PAYMENT_NAME = 'Soko Platform Operations';
+const PAYMENT_NAME = 'KauntaOS Platform Operations';
 
 interface TierOption {
   plan: PlanName;
@@ -103,7 +103,7 @@ const whatsappActivationUrl = computed(() => {
   const code = mpesaCodeInput.value.trim().toUpperCase() || '[M-PESA REF CODE]';
 
   const message = [
-    `*⭐ SOKO PLAN UPGRADE REQUEST*`,
+    `*⭐ KauntaOS PLAN UPGRADE REQUEST*`,
     `--------------------------------`,
     `*Store:* ${storeName}`,
     `*Selected Plan:* ${tierName} (${price})`,
@@ -118,7 +118,7 @@ const whatsappActivationUrl = computed(() => {
 </script>
 
 <template>
-  <Modal :open="open" title="Upgrade Your Soko Plan" @close="emit('close')">
+  <Modal :open="open" title="Upgrade Your KauntaOS Plan" @close="emit('close')">
     <div class="upgrade-modal-content">
       <!-- Plan Selector Tabs -->
       <div class="plan-tabs-row">

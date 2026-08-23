@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/views/CustomerDetailView.vue
+// kauntaOS -frontend/src/views/CustomerDetailView.vue
 // Customer credit ledger with SmartSaleModal, SettleDebtModal & Customer Deletion.
 // =============================================================================
 
@@ -71,7 +71,7 @@ const whatsappStatementUrl = computed(() => {
   const phone = cleanDigits.startsWith('0') ? `254${cleanDigits.slice(1)}` : cleanDigits;
 
   const lines = [
-    `*📋 SOKO CUSTOMER STATEMENT — ${customer.value.name.toUpperCase()}*`,
+    `*📋 kauntaOS  CUSTOMER STATEMENT — ${customer.value.name.toUpperCase()}*`,
     `--------------------------------`,
     `*Current Balance:* KES ${Math.abs(balanceNumber.value).toLocaleString('en-KE')} (${hasDebt.value ? 'OWES' : 'CLEARED / PAID UP'})`,
     `*Total Transactions:* ${ledgerStore.total}`,

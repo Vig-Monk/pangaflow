@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/views/AdminConsoleView.vue
-// Soko Owner Console — Platform KPIs, Account Management, Tier Actions & Demo Purge.
+// KauntaOS-frontend/src/views/AdminConsoleView.vue
+// KauntaOS Owner Console — Platform KPIs, Account Management, Tier Actions & Demo Purge.
 // =============================================================================
 
 import { onMounted, ref, computed } from 'vue';
@@ -56,7 +56,7 @@ const { push: pushToast } = useToast();
 const API_BASE_URL: string =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:3000/api/v1';
 
-const ADMIN_STORAGE_KEY = 'soko_admin_secret';
+const ADMIN_STORAGE_KEY = 'KauntaOS_admin_secret';
 
 // Authentication State
 const adminSecret = ref<string>(sessionStorage.getItem(ADMIN_STORAGE_KEY) || '');
@@ -295,7 +295,7 @@ const columns: DataTableColumn<OrganizationAdminRow>[] = [
           <div class="shield-badge">
             <Key :size="28" />
           </div>
-          <h1 class="auth-title">Soko Control Console</h1>
+          <h1 class="auth-title">KauntaOS Control Console</h1>
           <p class="auth-subtitle">Owner access to manage subscriptions, licenses, and accounts.</p>
         </div>
 
@@ -339,7 +339,7 @@ const columns: DataTableColumn<OrganizationAdminRow>[] = [
             <Crown :size="18" />
           </div>
           <div>
-            <h1 class="console-title">Soko Platform Console</h1>
+            <h1 class="console-title">KauntaOS Platform Console</h1>
             <span class="access-tag">Superadmin • Full Access</span>
           </div>
         </div>

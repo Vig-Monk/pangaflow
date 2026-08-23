@@ -1,163 +1,51 @@
 /* =============================================================================
-   src/styles/main.css
-   Global design system — Soko Lite mobile-first.
-   Imported once in main.ts. Every component uses these variables directly;
-   none are redefined locally.
+   Scroll Reveal Animation Primitives
    ============================================================================= */
 
-:root {
-  --bg-primary: #0F172A;
-  --bg-surface: #1E293B;
-  --bg-elevated: #334155;
-  --color-teal: #0D9488;
-  --color-teal-light: #CCFBF1;
-  --color-amber: #D97706;
-  --color-danger: #DC2626;
-  --color-text: #F8FAFC;
-  --color-muted: #94A3B8;
-  --radius: 12px;
-  --touch-min: 48px;
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: opacity, transform;
 }
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+[data-reveal].is-revealed {
+  opacity: 1;
+  transform: translateY(0);
 }
 
-html, body, #app {
-  height: 100%;
+[data-reveal="zoom"] {
+  transform: scale(0.94);
 }
 
-body {
-  background: var(--bg-primary);
-  color: var(--color-text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  font-size: 16px;
-  line-height: 1.5;
-  /* Prevent iOS/Android double-tap zoom on repeated taps — important on
-     small screens where buttons are close together */
-  touch-action: manipulation;
-  -webkit-tap-highlight-color: transparent;
+[data-reveal="zoom"].is-revealed {
+  opacity: 1;
+  transform: scale(1);
 }
 
-button, input, select, textarea {
-  font: inherit;
-  color: inherit;
+[data-reveal="left"] {
+  transform: translateX(-24px);
 }
 
-/* -----------------------------------------------------------------------
-   Touch targets — every interactive element meets --touch-min (48px).
-   This is not optional on a KES 5,000 Android phone with a small screen
-   and imprecise capacitive touch.
-   ----------------------------------------------------------------------- */
-
-button, .btn, input, select, .touchable {
-  min-height: var(--touch-min);
+[data-reveal="left"].is-revealed {
+  opacity: 1;
+  transform: translateX(0);
 }
 
-button {
-  border: none;
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition: opacity 0.15s ease, transform 0.1s ease;
+[data-reveal="right"] {
+  transform: translateX(24px);
 }
 
-button:active {
-  transform: scale(0.97);
+[data-reveal="right"].is-revealed {
+  opacity: 1;
+  transform: translateX(0);
 }
 
-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  transform: none;
-}
-
-/* -----------------------------------------------------------------------
-   Reusable utility classes — used across views instead of duplicating
-   inline styles for the same recurring patterns.
-   ----------------------------------------------------------------------- */
-
-.btn-primary {
-  background: var(--color-teal);
-  color: var(--color-text);
-  font-weight: 600;
-  padding: 0 20px;
-}
-
-.btn-primary:hover:not(:disabled) {
-  opacity: 0.9;
-}
-
-.btn-danger {
-  background: var(--color-danger);
-  color: var(--color-text);
-  font-weight: 600;
-  padding: 0 20px;
-}
-
-.btn-secondary {
-  background: var(--bg-elevated);
-  color: var(--color-text);
-  font-weight: 500;
-  padding: 0 20px;
-}
-
-.card {
-  background: var(--bg-surface);
-  border-radius: var(--radius);
-  padding: 16px;
-}
-
-.input-field {
-  background: var(--bg-elevated);
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  color: var(--color-text);
-  padding: 0 16px;
-  width: 100%;
-}
-
-.input-field:focus {
-  outline: none;
-  border-color: var(--color-teal);
-}
-
-.input-field::placeholder {
-  color: var(--color-muted);
-}
-
-.text-muted {
-  color: var(--color-muted);
-}
-
-.text-danger {
-  color: var(--color-danger);
-}
-
-.text-teal {
-  color: var(--color-teal);
-}
-
-.text-amber {
-  color: var(--color-amber);
-}
-
-a {
-  color: var(--color-teal-light);
-  text-decoration: none;
-}
-
-/* -----------------------------------------------------------------------
-   Scrollbar — thin, dark, unobtrusive. Most target devices are touch-only
-   so this rarely renders, but keeps desktop dev/testing consistent.
-   ----------------------------------------------------------------------- */
-
-::-webkit-scrollbar {
-  width: 6px;
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--bg-elevated);
-  border-radius: 3px;
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal] {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
 }

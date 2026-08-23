@@ -1,5 +1,5 @@
 // =============================================================================
-// soko-frontend/src/stores/cart.ts
+// kauntaos-frontend/src/stores/cart.ts
 // =============================================================================
 
 import { defineStore } from 'pinia';
@@ -29,8 +29,8 @@ export interface CheckoutDraftState {
   paymentMethod: string;
 }
 
-const CART_PREFIX = 'soko_cart_';
-const CHECKOUT_PREFIX = 'soko_checkout_state_';
+const CART_PREFIX = 'kauntaos_cart_';
+const CHECKOUT_PREFIX = 'kauntaos_checkout_state_';
 
 function getCartStorageKey(slug: string): string {
   return `${CART_PREFIX}${slug.toLowerCase().trim()}`;

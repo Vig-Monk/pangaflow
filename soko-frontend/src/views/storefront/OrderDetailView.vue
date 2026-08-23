@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/views/storefront/OrderDetailView.vue
+// KauntaOS-frontend/src/views/storefront/OrderDetailView.vue
 // Complete merchant dispatch & handover: Rider Assignment, WhatsApp Relay, and Proof-of-Delivery Verification.
 // =============================================================================
 
@@ -141,7 +141,7 @@ function buildRiderWhatsAppPayload(): string {
   const collectAmount = isPaid ? '0 (PAID ONLINE)' : `KES ${Number(order.value.total).toLocaleString('en-KE')}`;
 
   const lines = [
-    `*📦 SOKO DELIVERY DISPATCH — #${order.value.id.slice(0, 8).toUpperCase()}*`,
+    `*📦 KauntaOS DELIVERY DISPATCH — #${order.value.id.slice(0, 8).toUpperCase()}*`,
     `--------------------------------`,
     `*Customer:* ${order.value.customer_name}`,
     `*Phone:* ${order.value.customer_phone}`,

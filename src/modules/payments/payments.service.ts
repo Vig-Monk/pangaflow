@@ -108,7 +108,7 @@ async function initiateMpesaPayment(
         phone: input.phone,
         amount: input.amount,
         accountReference: input.customerId,
-        transactionDesc: "Soko payment",
+        transactionDesc: "KauntaOS payment",
         callbackUrl
     });
 
@@ -125,7 +125,7 @@ async function initiateMpesaPayment(
             phone: input.phone,
             amount: input.amount,
             accountReference: input.customerId,
-            transactionDesc: "Soko payment"
+            transactionDesc: "KauntaOS payment"
         });
 
         await client.query("COMMIT");
@@ -161,7 +161,7 @@ export async function handleMpesaCallback(
         return;
     }
 
-    const isVerification = existing.account_reference === "SOKO-VERIFY";
+    const isVerification = existing.account_reference === "KAUNTAOS -VERIFY";
     const client = await pool.connect();
 
     try {

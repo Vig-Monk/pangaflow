@@ -5,8 +5,8 @@
 // implementation of "how tokens are read/written," not two.
 // =============================================================================
 
-const ACCESS_TOKEN_KEY = 'soko_access_token';
-const REFRESH_TOKEN_KEY = 'soko_refresh_token';
+const ACCESS_TOKEN_KEY = 'kauntaos_access_token';
+const REFRESH_TOKEN_KEY = 'kauntaos_refresh_token';
 
 export function getAccessToken(): string | null {
   return localStorage.getItem(ACCESS_TOKEN_KEY);

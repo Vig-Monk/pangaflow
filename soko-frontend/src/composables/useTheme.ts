@@ -9,7 +9,7 @@ import { ref, Ref } from 'vue';
 
 export type Theme = 'light' | 'dark';
 
-const STORAGE_KEY = 'soko-theme';
+const STORAGE_KEY = 'kauntaos-theme';
 
 // ---------------------------------------------------------------------------
 // Module-level, not per-component-instance state.

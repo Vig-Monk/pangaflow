@@ -1,5 +1,5 @@
 {
-  "name": "soko-api",
+  "name": "kauntaos-api",
   "version": "1.0.0",
   "description": "Production-grade multi-tenant SaaS API",
   "main": "dist/server.js",

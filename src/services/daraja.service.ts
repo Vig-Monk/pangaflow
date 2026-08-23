@@ -197,8 +197,8 @@ export async function stkPush(input: StkPushInput): Promise<StkPushResult> {
 
   // Safaricom strictly enforces <= 12 characters for AccountReference and <= 13 for TransactionDesc
   const sanitizedRef =
-    input.accountReference.replace(/[^a-zA-Z0-9]/g, '').slice(0, 12).toUpperCase() || 'SOKO';
-  const sanitizedDesc = input.transactionDesc.slice(0, 13) || 'Soko Payment';
+    input.accountReference.replace(/[^a-zA-Z0-9]/g, '').slice(0, 12).toUpperCase() || 'kauntaos';
+  const sanitizedDesc = input.transactionDesc.slice(0, 13) || 'kauntaos Payment';
 
   try {
     const response = await axios.post<DarajaStkPushRawResponse>(

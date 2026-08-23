@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/views/storefront/OrderConfirmationView.vue
+// KauntaOS-frontend/src/views/storefront/OrderConfirmationView.vue
 // Live customer tracking: 60s M-Pesa countdown, NATO phonetic code & WhatsApp relay.
 // =============================================================================
 
@@ -147,7 +147,7 @@ const whatsappShareUrl = computed(() => {
   if (!orderDetails.value) return '#';
   const url = typeof window !== 'undefined' ? window.location.href : '';
   const message = [
-    `*📦 Soko Order #${orderDetails.value.orderId.slice(0, 8).toUpperCase()}*`,
+    `*📦 KauntaOS Order #${orderDetails.value.orderId.slice(0, 8).toUpperCase()}*`,
     `Customer: ${orderDetails.value.customerName}`,
     `Total: KES ${Number(orderDetails.value.total).toLocaleString('en-KE')}`,
     `Status: ${orderDetails.value.status.toUpperCase()}`,

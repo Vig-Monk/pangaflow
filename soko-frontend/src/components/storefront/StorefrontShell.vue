@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/components/storefront/StorefrontShell.vue
+// KauntaOS-frontend/src/components/storefront/StorefrontShell.vue
 // Storefront shell with slide-over cart drawer overlay.
 // =============================================================================
 
@@ -17,7 +17,7 @@ const cartStore = useCartStore();
 
 const isCartDrawerOpen = ref(false);
 
-const storeName = computed(() => storeSettingsStore.settings?.name ?? 'Soko Shop');
+const storeName = computed(() => storeSettingsStore.settings?.name ?? 'KauntaOS Shop');
 const storeLogo = computed(() => storeSettingsStore.settings?.logo_url);
 const storeSlug = computed(() => (route.params.storeSlug as string || '').toLowerCase().trim());
 
@@ -64,7 +64,7 @@ function openCartDrawer(): void {
 
     <footer class="storefront-footer">
       <div class="footer-content">
-        <p class="powered-by">Powered by <strong>Soko</strong></p>
+        <p class="powered-by">Powered by <strong>KauntaOS</strong></p>
       </div>
     </footer>
 

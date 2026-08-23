@@ -130,7 +130,7 @@ export async function generateUploadSignature(
     folderType: "products" | "store" = "products"
 ): Promise<SignatureResult> {
     const timestamp = Math.round(new Date().getTime() / 1000);
-    const folder = `soko/${orgId}/${folderType}`;
+    const folder = `kauntaos/${orgId}/${folderType}`;
 
     const paramsToSign = { timestamp, folder };
     const signature = cloudinary.utils.api_sign_request(

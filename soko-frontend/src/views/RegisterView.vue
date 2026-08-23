@@ -72,7 +72,7 @@ async function handleSubmit(): Promise<void> {
 <template>
   <div class="auth-page">
     <div class="auth-card">
-      <h1 class="auth-title">Soko</h1>
+      <h1 class="auth-title">KauntaOS</h1>
       <p class="auth-subtitle">Create your business account</p>
 
       <form class="auth-form" @submit.prevent="handleSubmit">

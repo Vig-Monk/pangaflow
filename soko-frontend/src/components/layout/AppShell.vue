@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // =============================================================================
-// soko-frontend/src/components/layout/AppShell.vue
+// KauntaOS-frontend/src/components/layout/AppShell.vue
 // =============================================================================
 
 import { computed, ref, onMounted } from 'vue';
@@ -31,7 +31,7 @@ const authStore = useAuthStore();
 const storeSettingsStore = useStoreSettingsStore();
 const { theme, toggle } = useTheme();
 
-const orgName = computed<string>(() => authStore.org?.name ?? 'Soko');
+const orgName = computed<string>(() => authStore.org?.name ?? 'KauntaOS');
 const userInitial = computed<string>(() => (authStore.user?.name?.charAt(0) ?? '?').toUpperCase());
 
 const showMobileMenu = ref(false);
