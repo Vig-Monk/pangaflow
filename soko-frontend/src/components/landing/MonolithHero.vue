@@ -4,7 +4,7 @@
 // Minimalist, high-converting hero stage with pure CSS "UI-As-Art" dual viewport.
 // =============================================================================
 
-import { ref } from 'vue';
+//import { ref } from 'vue';
 import {
   ArrowRight,
   MessageSquare,
