@@ -1,61 +1,57 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/components/landing/LandingNav.vue
-// Sticky glassmorphic navigation with anchor scrolling and auth state handling.
+// Minimal, clean navigation bar with logo, anchor links, and primary CTA.
 // =============================================================================
 
 import { ref } from 'vue';
 import { useAuthStore } from '@/stores/auth';
-import { Store, Menu, X, ArrowRight, Sparkles } from 'lucide-vue-next';
+import { Menu, X, ArrowRight } from 'lucide-vue-next';
 
 const authStore = useAuthStore();
 const isMobileMenuOpen = ref(false);
 
 function scrollToSection(id: string): void {
   isMobileMenuOpen.value = false;
-  const element = document.getElementById(id);
-  if (element) {
-    element.scrollIntoView({ behavior: 'smooth' });
+  const el = document.getElementById(id);
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth' });
   }
 }
 </script>
 
 <template>
-  <header class="landing-nav-wrap">
+  <header class="minimal-nav">
     <div class="nav-container">
       <!-- Brand Logo -->
-      <a href="#" class="brand-block" @click.prevent="scrollToSection('hero')">
-        <div class="brand-icon">
-          <Store :size="18" />
-        </div>
-        <span class="brand-name">SOKO<span class="brand-dot">.</span></span>
+      <a href="#" class="brand-link" @click.prevent="scrollToSection('hero')">
+        <span class="brand-name">Soko</span>
       </a>
 
       <!-- Desktop Anchor Links -->
-      <nav class="desktop-nav">
-        <button type="button" class="nav-anchor" @click="scrollToSection('features')">Features</button>
-        <button type="button" class="nav-anchor" @click="scrollToSection('architecture')">M-Pesa Architecture</button>
-        <button type="button" class="nav-anchor" @click="scrollToSection('roi')">ROI Calculator</button>
-        <button type="button" class="nav-anchor" @click="scrollToSection('pricing')">Pricing</button>
-        <button type="button" class="nav-anchor" @click="scrollToSection('faq')">FAQ</button>
+      <nav class="nav-links">
+        <button type="button" class="nav-link" @click="scrollToSection('capabilities')">Features</button>
+        <button type="button" class="nav-link" @click="scrollToSection('showcase')">Product</button>
+        <button type="button" class="nav-link" @click="scrollToSection('pricing')">Pricing</button>
+        <button type="button" class="nav-link" @click="scrollToSection('faq')">FAQ</button>
       </nav>
 
-      <!-- Desktop Auth Actions -->
+      <!-- Desktop Actions -->
       <div class="nav-actions">
-        <RouterLink v-if="authStore.isAuthenticated" :to="{ name: 'dashboard' }" class="btn-dashboard">
-          <Sparkles :size="14" /> Open Dashboard
+        <RouterLink v-if="authStore.isAuthenticated" :to="{ name: 'dashboard' }" class="btn-primary-nav">
+          Open dashboard <ArrowRight :size="14" />
         </RouterLink>
         <template v-else>
-          <RouterLink :to="{ name: 'login' }" class="login-link">Log In</RouterLink>
-          <RouterLink :to="{ name: 'register' }" class="btn-cta">
-            Start Free <ArrowRight :size="14" />
+          <RouterLink :to="{ name: 'login' }" class="login-link">Log in</RouterLink>
+          <RouterLink :to="{ name: 'register' }" class="btn-primary-nav">
+            Get started
           </RouterLink>
         </template>
 
         <!-- Mobile Toggle Button -->
         <button
           type="button"
-          class="mobile-toggle-btn"
+          class="mobile-toggle"
           aria-label="Toggle navigation menu"
           @click="isMobileMenuOpen = !isMobileMenuOpen"
         >
@@ -65,16 +61,15 @@ function scrollToSection(id: string): void {
     </div>
 
     <!-- Mobile Drawer -->
-    <div v-if="isMobileMenuOpen" class="mobile-drawer">
-      <button type="button" class="mobile-nav-link" @click="scrollToSection('features')">Features</button>
-      <button type="button" class="mobile-nav-link" @click="scrollToSection('architecture')">M-Pesa Architecture</button>
-      <button type="button" class="mobile-nav-link" @click="scrollToSection('roi')">ROI Calculator</button>
-      <button type="button" class="mobile-nav-link" @click="scrollToSection('pricing')">Pricing</button>
-      <button type="button" class="mobile-nav-link" @click="scrollToSection('faq')">FAQ</button>
-      <div class="mobile-drawer-auth">
-        <RouterLink v-if="!authStore.isAuthenticated" :to="{ name: 'login' }" class="mobile-login-btn">Log In</RouterLink>
-        <RouterLink :to="{ name: authStore.isAuthenticated ? 'dashboard' : 'register' }" class="mobile-cta-btn">
-          {{ authStore.isAuthenticated ? 'Open Dashboard' : 'Create Free Store' }}
+    <div v-if="isMobileMenuOpen" class="mobile-menu">
+      <button type="button" class="mobile-link" @click="scrollToSection('capabilities')">Features</button>
+      <button type="button" class="mobile-link" @click="scrollToSection('showcase')">Product</button>
+      <button type="button" class="mobile-link" @click="scrollToSection('pricing')">Pricing</button>
+      <button type="button" class="mobile-link" @click="scrollToSection('faq')">FAQ</button>
+      <div class="mobile-actions">
+        <RouterLink v-if="!authStore.isAuthenticated" :to="{ name: 'login' }" class="mobile-login">Log in</RouterLink>
+        <RouterLink :to="{ name: authStore.isAuthenticated ? 'dashboard' : 'register' }" class="btn-primary-nav full-width">
+          {{ authStore.isAuthenticated ? 'Open dashboard' : 'Get started' }}
         </RouterLink>
       </div>
     </div>
@@ -82,167 +77,150 @@ function scrollToSection(id: string): void {
 </template>
 
 <style scoped>
-.landing-nav-wrap {
+.minimal-nav {
   position: sticky;
   top: 0;
   z-index: 100;
-  background: rgba(9, 13, 12, 0.85);
-  backdrop-filter: blur(16px);
-  border-bottom: 1px solid #1A2622;
+  background: rgba(250, 250, 248, 0.92);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--landing-border, #E8E4E0);
 }
 
 .nav-container {
-  max-width: 1240px;
+  max-width: 1140px;
   margin: 0 auto;
-  padding: 14px 20px;
+  padding: 16px 24px;
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
-.brand-block {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.brand-link {
   text-decoration: none;
-}
-
-.brand-icon {
-  width: 32px;
-  height: 32px;
-  background: var(--brand-primary, #D91E4E);
-  color: #FFFFFF;
-  border-radius: 8px;
   display: flex;
   align-items: center;
-  justify-content: center;
 }
 
 .brand-name {
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 800;
-  color: #F3F6F4;
+  font-family: var(--font-display, 'Fraunces', serif);
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--landing-text, #171514);
   letter-spacing: -0.02em;
 }
 
-.brand-dot { color: var(--brand-primary, #D91E4E); }
-
-.desktop-nav {
+.nav-links {
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: 32px;
 }
 
-@media (max-width: 860px) {
-  .desktop-nav { display: none; }
+@media (max-width: 768px) {
+  .nav-links { display: none; }
 }
 
-.nav-anchor {
+.nav-link {
   background: transparent;
   border: none;
-  font-size: 13px;
-  font-weight: 600;
-  color: #94A3B8;
+  font-family: var(--font-body, 'IBM Plex Sans', sans-serif);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--landing-muted, #6F6A67);
   cursor: pointer;
-  transition: color 120ms ease;
   padding: 0;
+  transition: color 150ms ease;
 }
-.nav-anchor:hover { color: #F3F6F4; }
+.nav-link:hover { color: var(--landing-text, #171514); }
 
 .nav-actions {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 20px;
 }
 
 .login-link {
-  font-size: 13px;
-  font-weight: 600;
-  color: #F3F6F4;
+  font-family: var(--font-body, 'IBM Plex Sans', sans-serif);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--landing-text, #171514);
   text-decoration: none;
-  transition: color 120ms ease;
+  transition: color 150ms ease;
 }
-.login-link:hover { color: var(--brand-primary, #D91E4E); }
+.login-link:hover { color: var(--landing-brand, #D91E4E); }
 
-.btn-cta, .btn-dashboard {
+.btn-primary-nav {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  background: var(--brand-primary, #D91E4E);
+  background: var(--landing-brand, #D91E4E);
   color: #FFFFFF;
   text-decoration: none;
-  font-size: 13px;
-  font-weight: 700;
-  padding: 8px 16px;
+  font-family: var(--font-body, 'IBM Plex Sans', sans-serif);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 8px 18px;
   border-radius: 8px;
-  transition: transform 120ms ease, opacity 120ms ease;
+  transition: opacity 150ms ease, transform 150ms ease;
 }
-.btn-cta:hover, .btn-dashboard:hover {
+.btn-primary-nav:hover {
+  opacity: 0.92;
   transform: translateY(-1px);
-  opacity: 0.95;
 }
 
-.mobile-toggle-btn {
+.mobile-toggle {
   display: none;
   background: transparent;
   border: none;
-  color: #F3F6F4;
+  color: var(--landing-text, #171514);
   cursor: pointer;
   padding: 4px;
 }
 
-@media (max-width: 860px) {
-  .mobile-toggle-btn { display: flex; }
-  .login-link, .btn-cta { display: none; }
+@media (max-width: 768px) {
+  .mobile-toggle { display: flex; }
+  .login-link, .nav-actions .btn-primary-nav { display: none; }
 }
 
-.mobile-drawer {
-  background: #0E1614;
-  border-bottom: 1px solid #1A2622;
-  padding: 16px 20px 24px;
+.mobile-menu {
+  background: var(--landing-surface, #FFFFFF);
+  border-bottom: 1px solid var(--landing-border, #E8E4E0);
+  padding: 20px 24px;
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
-.mobile-nav-link {
+.mobile-link {
   background: transparent;
   border: none;
-  color: #E2E8F0;
-  font-size: 15px;
-  font-weight: 600;
+  font-family: var(--font-body, 'IBM Plex Sans', sans-serif);
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--landing-text, #171514);
   text-align: left;
   cursor: pointer;
   padding: 4px 0;
 }
 
-.mobile-drawer-auth {
+.mobile-actions {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   margin-top: 8px;
-  padding-top: 12px;
-  border-top: 1px solid #1A2622;
+  padding-top: 16px;
+  border-top: 1px solid var(--landing-border, #E8E4E0);
 }
 
-.mobile-login-btn {
+.mobile-login {
   text-align: center;
-  color: #94A3B8;
-  font-size: 14px;
-  font-weight: 600;
+  color: var(--landing-muted, #6F6A67);
+  font-family: var(--font-body, 'IBM Plex Sans', sans-serif);
+  font-size: 15px;
+  font-weight: 500;
   text-decoration: none;
   padding: 8px;
 }
 
-.mobile-cta-btn {
-  background: var(--brand-primary, #D91E4E);
-  color: #FFFFFF;
-  text-align: center;
-  font-size: 14px;
-  font-weight: 700;
-  text-decoration: none;
-  padding: 12px;
-  border-radius: 8px;
-}
+.full-width { width: 100%; }
 </style>

@@ -250,7 +250,7 @@ const whatsappConciergeUrl =
   gap: 6px;
   background: rgba(245, 158, 11, 0.1);
   border: 1px solid rgba(245, 158, 11, 0.25);
-  color: #FBBF24;
+  color: #ffffff;
   font-size: 11px;
   font-weight: 700;
   padding: 4px 12px;
