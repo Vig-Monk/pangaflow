@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/components/storefront/CartDrawer.vue
-// Slide-over cart drawer (desktop right / mobile bottom sheet) with live steppers.
+// Simplified customer slide-over cart drawer with clean dividers and typography.
 // =============================================================================
 
 import { computed } from 'vue';
@@ -9,13 +9,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useCartStore } from '@/stores/cart';
 import QuantityStepper from '@/components/ui/QuantityStepper.vue';
 import Button from '@/components/ui/Button.vue';
-import {
-  ShoppingBag,
-  X,
-  Trash2,
-  ArrowRight,
-  ShieldCheck,
-} from 'lucide-vue-next';
+import { X, Trash2, ArrowRight } from 'lucide-vue-next';
 
 interface Props {
   open: boolean;
@@ -58,67 +52,42 @@ function handleProceedToCheckout(): void {
   <Teleport to="body">
     <Transition name="drawer-fade">
       <div v-if="open" class="drawer-backdrop" @click.self="emit('close')">
-        <div
-          class="cart-drawer-panel"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Shopping Cart"
-        >
+        <div class="drawer-panel" role="dialog" aria-modal="true" aria-label="Shopping cart">
           <!-- Header -->
           <header class="drawer-header">
-            <div class="header-title-row">
-              <ShoppingBag :size="20" class="text-ink" />
-              <h2 class="drawer-title">Your Cart</h2>
-              <span v-if="cartStore.totalItems > 0" class="items-count-badge tabular-figure">
-                {{ cartStore.totalItems }}
-              </span>
-            </div>
-            <button
-              type="button"
-              class="close-btn"
-              aria-label="Close cart"
-              @click="emit('close')"
-            >
+            <h2 class="drawer-title">Your Cart ({{ cartStore.totalItems }})</h2>
+            <button type="button" class="close-btn" aria-label="Close cart" @click="emit('close')">
               <X :size="20" />
             </button>
           </header>
 
           <!-- Empty State -->
-          <div v-if="cartStore.isEmpty" class="drawer-empty-state">
-            <div class="empty-icon-wrap">
-              <ShoppingBag :size="40" class="text-muted" />
-            </div>
-            <h3 class="empty-title">Your cart is empty</h3>
-            <p class="empty-desc">Explore products in our catalog and add items you want to purchase.</p>
+          <div v-if="cartStore.isEmpty" class="drawer-empty">
+            <p class="empty-title">Your cart is empty</p>
+            <p class="empty-sub">Explore our catalog and add items you want to purchase.</p>
             <Button variant="secondary" size="md" @click="emit('close')">
-              Start Shopping
+              Start shopping
             </Button>
           </div>
 
-          <!-- Cart Items List -->
+          <!-- Items List -->
           <template v-else>
             <div class="drawer-items-list">
               <div
                 v-for="item in cartStore.items"
                 :key="item.product_id"
-                class="drawer-item"
+                class="cart-item-row"
               >
-                <div class="item-thumb">
-                  <img
-                    v-if="item.image_url"
-                    :src="item.image_url"
-                    :alt="item.name"
-                    class="thumb-img"
-                  />
-                  <ShoppingBag v-else :size="20" class="text-muted" />
+                <div class="item-thumb-box">
+                  <img v-if="item.image_url" :src="item.image_url" :alt="item.name" class="thumb-img" />
                 </div>
 
-                <div class="item-info">
-                  <div class="item-title-row">
-                    <h4 class="item-name">{{ item.name }}</h4>
+                <div class="item-info-col">
+                  <div class="item-header-row">
+                    <span class="item-name">{{ item.name }}</span>
                     <button
                       type="button"
-                      class="item-delete-btn"
+                      class="remove-btn"
                       title="Remove item"
                       @click="handleRemoveItem(item.product_id)"
                     >
@@ -126,16 +95,16 @@ function handleProceedToCheckout(): void {
                     </button>
                   </div>
 
-                  <p class="item-price tabular-figure">{{ formatCurrency(item.price) }}</p>
+                  <span class="item-unit-price font-mono">{{ formatCurrency(item.price) }}</span>
 
-                  <div class="item-actions">
+                  <div class="item-actions-row">
                     <QuantityStepper
                       :model-value="item.quantity"
                       size="sm"
                       :max="10"
                       @update:model-value="(qty) => handleQuantityChange(item.product_id, qty)"
                     />
-                    <span class="item-line-total tabular-figure font-semibold">
+                    <span class="item-subtotal font-mono">
                       {{ formatCurrency(item.price * item.quantity) }}
                     </span>
                   </div>
@@ -143,27 +112,20 @@ function handleProceedToCheckout(): void {
               </div>
             </div>
 
-            <!-- Footer & Checkout CTA -->
+            <!-- Footer -->
             <footer class="drawer-footer">
               <div class="subtotal-row">
                 <span class="subtotal-label">Subtotal</span>
-                <span class="subtotal-val tabular-figure text-ink">{{ formatCurrency(cartStore.subtotal) }}</span>
+                <span class="subtotal-val font-mono">{{ formatCurrency(cartStore.subtotal) }}</span>
               </div>
-
-              <p class="delivery-hint">Delivery options and fees confirmed at checkout.</p>
-
-              <div class="trust-line">
-                <ShieldCheck :size="14" class="text-teal" />
-                <span>Direct merchant transaction with live tracking</span>
-              </div>
-
+              <p class="delivery-notice">Delivery options and fees confirmed at checkout.</p>
               <Button
                 variant="primary"
                 size="lg"
                 class="checkout-action-btn"
                 @click="handleProceedToCheckout"
               >
-                Proceed to Checkout <ArrowRight :size="16" />
+                Proceed to checkout <ArrowRight :size="16" />
               </Button>
             </footer>
           </template>
@@ -181,31 +143,24 @@ function handleProceedToCheckout(): void {
   backdrop-filter: blur(2px);
   display: flex;
   justify-content: flex-end;
-  z-index: 1000;
+  z-index: 200;
 }
 
-@media (max-width: 640px) {
-  .drawer-backdrop {
-    align-items: flex-end;
-  }
-}
-
-.cart-drawer-panel {
-  background: var(--color-surface);
+.drawer-panel {
+  background: var(--store-surface, #FFFFFF);
+  color: var(--store-text, #171514);
   width: 100%;
   max-width: 420px;
   height: 100%;
   display: flex;
   flex-direction: column;
-  box-shadow: var(--shadow-lg);
-  overflow: hidden;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.16);
+  transition: background 200ms ease;
 }
 
 @media (max-width: 640px) {
-  .cart-drawer-panel {
+  .drawer-panel {
     max-width: 100%;
-    height: 85vh;
-    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   }
 }
 
@@ -213,114 +168,75 @@ function handleProceedToCheckout(): void {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.header-title-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--store-border, #E8E4E0);
 }
 
 .drawer-title {
-  font-family: var(--font-display);
-  font-size: var(--text-lg);
-  font-weight: 700;
-  color: var(--color-text);
-}
-
-.items-count-badge {
-  background: var(--color-ink);
-  color: var(--color-text-inverse);
-  font-size: 11px;
-  font-weight: 700;
-  padding: 1px 7px;
-  border-radius: var(--radius-full);
+  font-family: var(--font-display, 'Fraunces', Georgia, serif);
+  font-size: 18px;
+  font-weight: 600;
 }
 
 .close-btn {
   background: transparent;
   border: none;
-  color: var(--color-text-muted);
+  color: var(--store-text-muted, #8B8581);
   cursor: pointer;
-  padding: var(--space-1);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
+  padding: 4px;
 }
+
 .close-btn:hover {
-  background: var(--color-bg);
-  color: var(--color-text);
+  color: var(--store-text, #171514);
 }
 
 /* Empty State */
-.drawer-empty-state {
+.drawer-empty {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: var(--space-8);
-  gap: var(--space-3);
-}
-
-.empty-icon-wrap {
-  width: 72px;
-  height: 72px;
-  background: var(--color-bg);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: var(--space-2);
+  padding: 40px 24px;
+  gap: 12px;
 }
 
 .empty-title {
-  font-size: var(--text-base);
-  font-weight: 700;
-  color: var(--color-text);
+  font-size: 16px;
+  font-weight: 600;
 }
 
-.empty-desc {
-  font-size: var(--text-xs);
-  color: var(--color-text-muted);
-  line-height: var(--leading-relaxed);
+.empty-sub {
+  font-size: 13px;
+  color: var(--store-text-secondary, #6F6A67);
   max-width: 260px;
+  line-height: 1.5;
+  margin-bottom: 12px;
 }
 
 /* Items List */
 .drawer-items-list {
   flex: 1;
   overflow-y: auto;
-  padding: var(--space-4) var(--space-5);
+  padding: 16px 24px;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
 }
 
-.drawer-item {
+.cart-item-row {
   display: flex;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  align-items: center;
+  gap: 16px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--store-border, #E8E4E0);
 }
 
-.item-thumb {
-  width: 60px;
-  height: 60px;
-  background: var(--color-surface);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border);
+.item-thumb-box {
+  width: 64px;
+  height: 64px;
+  background-color: var(--store-soft, #F4F1EE);
+  border-radius: 8px;
   overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
 }
 
@@ -330,113 +246,104 @@ function handleProceedToCheckout(): void {
   object-fit: cover;
 }
 
-.item-info {
+.item-info-col {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
 }
 
-.item-title-row {
+.item-header-row {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: var(--space-2);
+  gap: 8px;
 }
 
 .item-name {
-  font-size: var(--text-xs);
-  font-weight: 700;
-  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.item-delete-btn {
+.remove-btn {
   background: transparent;
   border: none;
-  color: var(--color-text-muted);
+  color: var(--store-text-muted, #8B8581);
   cursor: pointer;
   padding: 0;
 }
-.item-delete-btn:hover {
-  color: var(--color-market-clay);
+
+.remove-btn:hover {
+  color: var(--store-accent, #D91E4E);
 }
 
-.item-price {
-  font-size: 11px;
-  color: var(--color-text-muted);
+.item-unit-price {
+  font-size: 12px;
+  color: var(--store-text-secondary, #6F6A67);
 }
 
-.item-actions {
+.item-actions-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 4px;
+  margin-top: 6px;
 }
 
-.item-line-total {
-  font-size: var(--text-xs);
-  color: var(--color-text);
+.item-subtotal {
+  font-size: 13px;
+  font-weight: 600;
 }
 
 /* Footer */
 .drawer-footer {
-  padding: var(--space-4) var(--space-5);
-  background: var(--color-surface);
-  border-top: 1px solid var(--color-border);
+  padding: 20px 24px;
+  border-top: 1px solid var(--store-border, #E8E4E0);
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: 12px;
 }
 
 .subtotal-row {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: baseline;
 }
 
 .subtotal-label {
-  font-size: var(--text-sm);
-  color: var(--color-text-muted);
-  font-weight: 600;
+  font-size: 14px;
+  color: var(--store-text-secondary, #6F6A67);
 }
 
 .subtotal-val {
-  font-size: var(--text-lg);
-  font-weight: 800;
+  font-size: 18px;
+  font-weight: 600;
 }
 
-.delivery-hint {
-  font-size: 11px;
-  color: var(--color-text-muted);
-}
-
-.trust-line {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: 11px;
-  color: var(--color-text-muted);
-  margin-top: 2px;
+.delivery-notice {
+  font-size: 12px;
+  color: var(--store-text-muted, #8B8581);
 }
 
 .checkout-action-btn {
   width: 100%;
-  margin-top: var(--space-2);
+  background-color: var(--store-accent, #D91E4E);
+  color: #FFFFFF;
+  border-radius: 10px;
 }
 
 /* Animations */
 .drawer-fade-enter-active,
 .drawer-fade-leave-active {
-  transition: opacity var(--duration-base) var(--ease-standard);
+  transition: opacity 200ms ease;
 }
 
-.drawer-fade-enter-active .cart-drawer-panel,
-.drawer-fade-leave-active .cart-drawer-panel {
-  transition: transform var(--duration-base) var(--ease-standard);
+.drawer-fade-enter-active .drawer-panel,
+.drawer-fade-leave-active .drawer-panel {
+  transition: transform 250ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .drawer-fade-enter-from,
@@ -444,16 +351,7 @@ function handleProceedToCheckout(): void {
   opacity: 0;
 }
 
-.drawer-fade-enter-from .cart-drawer-panel {
+.drawer-fade-enter-from .drawer-panel {
   transform: translateX(100%);
 }
-
-@media (max-width: 640px) {
-  .drawer-fade-enter-from .cart-drawer-panel {
-    transform: translateY(100%);
-  }
-}
-
-.text-teal { color: var(--color-ledger-green); }
-.text-ink { color: var(--color-ink); }
 </style>

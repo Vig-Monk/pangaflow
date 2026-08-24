@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/views/storefront/CartView.vue
-// Full-page cart review with interactive QuantityStepper controls.
+// Full cart page with clean item dividers, clear subtotal, and primary checkout action.
 // =============================================================================
 
 import { computed } from 'vue';
@@ -10,7 +10,7 @@ import { useCartStore } from '@/stores/cart';
 import QuantityStepper from '@/components/ui/QuantityStepper.vue';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
-import { ShoppingBag, Trash2, ArrowRight } from 'lucide-vue-next';
+import { Trash2, ArrowRight } from 'lucide-vue-next';
 
 const route = useRoute();
 const router = useRouter();
@@ -40,56 +40,58 @@ function handleProceedToCheckout(): void {
 </script>
 
 <template>
-  <div class="store-cart-page">
-    <div class="cart-container">
-      <header class="cart-header">
-        <h1 class="page-title">Your Cart</h1>
+  <div class="store-cart-view">
+    <div class="cart-page-container">
+      <header class="cart-page-header">
+        <h1 class="cart-title">Your Cart</h1>
       </header>
 
-      <!-- Cart Empty State -->
-      <div v-if="cartStore.isEmpty" class="empty-wrap">
+      <!-- Empty State -->
+      <div v-if="cartStore.isEmpty" class="empty-container">
         <EmptyState
           title="Your cart is empty"
-          description="Explore our storefront catalog and add items you want to purchase to your shopping cart."
-          action-label="Continue Shopping"
+          description="Explore our catalog and add items you want to purchase."
+          action-label="Continue shopping"
           :on-action="handleContinueShopping"
         />
       </div>
 
-      <div v-else class="cart-layout">
-        <!-- Interactive Cart List -->
-        <div class="cart-items-column">
-          <div class="items-list">
-            <div v-for="item in cartStore.items" :key="item.product_id" class="item-card card">
-              <div class="item-card__media">
-                <img v-if="item.image_url" :src="item.image_url" :alt="item.name" class="item-img" />
-                <div v-else class="item-placeholder">
-                  <ShoppingBag :size="24" class="text-muted" />
-                </div>
+      <!-- Active Cart -->
+      <div v-else class="cart-layout-grid">
+        <!-- Items Column -->
+        <div class="items-column">
+          <div
+            v-for="item in cartStore.items"
+            :key="item.product_id"
+            class="cart-row"
+          >
+            <div class="thumb-frame">
+              <img v-if="item.image_url" :src="item.image_url" :alt="item.name" class="thumb-img" />
+            </div>
+
+            <div class="item-main">
+              <div class="item-title-row">
+                <span class="item-name">{{ item.name }}</span>
+                <button
+                  type="button"
+                  class="remove-action-btn"
+                  title="Remove item"
+                  @click="handleRemoveItem(item.product_id)"
+                >
+                  <Trash2 :size="15" />
+                </button>
               </div>
 
-              <div class="item-card__body">
-                <div class="item-details">
-                  <h3 class="item-name">{{ item.name }}</h3>
-                  <p class="item-unit-price tabular-figure">{{ formatCurrency(item.price) }}</p>
-                </div>
+              <span class="unit-price font-mono">{{ formatCurrency(item.price) }}</span>
 
-                <div class="item-actions-row">
-                  <QuantityStepper
-                    :model-value="item.quantity"
-                    size="sm"
-                    :max="10"
-                    @update:model-value="(qty) => handleQuantityChange(item.product_id, qty)"
-                  />
-                  
-                  <button type="button" class="remove-btn" @click="handleRemoveItem(item.product_id)">
-                    <Trash2 :size="14" /> Remove
-                  </button>
-                </div>
-              </div>
-
-              <div class="item-card__total">
-                <span class="item-total-price tabular-figure">
+              <div class="item-stepper-row">
+                <QuantityStepper
+                  :model-value="item.quantity"
+                  size="sm"
+                  :max="10"
+                  @update:model-value="(qty) => handleQuantityChange(item.product_id, qty)"
+                />
+                <span class="line-total font-mono">
                   {{ formatCurrency(item.price * item.quantity) }}
                 </span>
               </div>
@@ -97,32 +99,33 @@ function handleProceedToCheckout(): void {
           </div>
         </div>
 
-        <!-- Order Summary Panel -->
-        <div class="cart-summary-column">
-          <div class="summary-card card">
-            <h2 class="summary-title">Order Summary</h2>
-            
-            <div class="summary-rows">
-              <div class="summary-row">
-                <span>Total Items</span>
-                <span class="tabular-figure">{{ cartStore.totalItems }}</span>
+        <!-- Summary Column -->
+        <div class="summary-column">
+          <div class="summary-box">
+            <h2 class="summary-heading">Order summary</h2>
+
+            <div class="summary-details">
+              <div class="detail-line">
+                <span>Items ({{ cartStore.totalItems }})</span>
+                <span class="font-mono">{{ formatCurrency(cartStore.subtotal) }}</span>
               </div>
-              <div class="summary-row summary-row--bold">
+              <div class="detail-line">
+                <span>Delivery</span>
+                <span class="detail-sub">Calculated at checkout</span>
+              </div>
+              <div class="detail-line detail-line--total">
                 <span>Subtotal</span>
-                <span class="tabular-figure text-ink">{{ formatCurrency(cartStore.subtotal) }}</span>
+                <span class="font-mono total-amount">{{ formatCurrency(cartStore.subtotal) }}</span>
               </div>
             </div>
 
-            <div class="trust-delivery-note">
-              <p class="trust-text">Delivery options and final calculations confirmed at checkout.</p>
-            </div>
-
-            <Button variant="primary" size="lg" style="width: 100%;" @click="handleProceedToCheckout">
-              Proceed to Checkout <ArrowRight :size="18" />
-            </Button>
-            
-            <Button variant="ghost" size="md" style="width: 100%; margin-top: var(--space-2);" @click="handleContinueShopping">
-              Continue Shopping
+            <Button
+              variant="primary"
+              size="lg"
+              class="full-width"
+              @click="handleProceedToCheckout"
+            >
+              Proceed to checkout <ArrowRight :size="16" />
             </Button>
           </div>
         </div>
@@ -132,184 +135,177 @@ function handleProceedToCheckout(): void {
 </template>
 
 <style scoped>
-.store-cart-page {
-  padding: var(--space-8) var(--space-4);
+.store-cart-view {
   min-height: 80vh;
+  padding: 48px 24px 80px;
 }
 
-.cart-container {
-  max-width: 1000px;
+@media (max-width: 640px) {
+  .store-cart-view { padding: 24px 16px 60px; }
+}
+
+.cart-page-container {
+  max-width: 1040px;
   margin: 0 auto;
-}
-
-.cart-header {
-  margin-bottom: var(--space-6);
-}
-
-.page-title {
-  font-family: var(--font-display);
-  font-size: var(--text-2xl);
-  color: var(--color-text);
-}
-
-.empty-wrap {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-8) 0;
-}
-
-.cart-layout {
   display: flex;
-  gap: var(--space-6);
   flex-direction: column;
+  gap: 32px;
 }
 
-@media (min-width: 768px) {
-  .cart-layout {
-    flex-direction: row;
-    align-items: flex-start;
+.cart-title {
+  font-family: var(--font-display, 'Fraunces', Georgia, serif);
+  font-size: clamp(28px, 3.5vw, 36px);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.empty-container {
+  padding: 40px 0;
+}
+
+.cart-layout-grid {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 48px;
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .cart-layout-grid {
+    grid-template-columns: 1fr;
+    gap: 36px;
   }
 }
 
-.cart-items-column { flex: 1.5; }
-
-.items-list {
+/* Items */
+.items-column {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  border-top: 1px solid var(--store-border, #E8E4E0);
 }
 
-.item-card {
+.cart-row {
   display: flex;
-  gap: var(--space-4);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-4);
-  align-items: center;
+  gap: 20px;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--store-border, #E8E4E0);
 }
 
-.item-card__media {
-  width: 68px;
-  height: 68px;
-  background: var(--color-bg);
-  border-radius: var(--radius-sm);
+.thumb-frame {
+  width: 72px;
+  height: 72px;
+  background-color: var(--store-soft, #F4F1EE);
+  border-radius: 8px;
   overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
 }
 
-.item-img {
+.thumb-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.item-card__body {
+.item-main {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: 4px;
 }
 
-.item-details {
+.item-title-row {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  justify-content: space-between;
+  align-items: flex-start;
 }
 
 .item-name {
-  font-size: var(--text-sm);
-  font-weight: 700;
-  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 500;
 }
 
-.item-unit-price {
-  font-size: var(--text-xs);
-  color: var(--color-text-muted);
-}
-
-.item-actions-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-.remove-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+.remove-action-btn {
   background: transparent;
   border: none;
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  font-weight: 600;
+  color: var(--store-text-muted, #8B8581);
   cursor: pointer;
   padding: 0;
 }
-.remove-btn:hover { color: var(--color-market-clay); }
 
-.item-card__total {
-  font-size: var(--text-sm);
-  font-weight: 800;
-  color: var(--color-text);
-  white-space: nowrap;
+.remove-action-btn:hover {
+  color: var(--store-accent, #D91E4E);
 }
 
-.cart-summary-column { flex: 1; }
-
-.summary-card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-5);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
+.unit-price {
+  font-size: 13px;
+  color: var(--store-text-secondary, #6F6A67);
 }
 
-.summary-title {
-  font-family: var(--font-display);
-  font-size: var(--text-lg);
-  color: var(--color-text);
-  border-bottom: 1px solid var(--color-border);
-  padding-bottom: var(--space-2);
-}
-
-.summary-rows {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.summary-row {
+.item-stepper-row {
   display: flex;
   justify-content: space-between;
-  font-size: var(--text-sm);
-  color: var(--color-text-muted);
+  align-items: center;
+  margin-top: 8px;
 }
 
-.summary-row--bold {
-  font-size: var(--text-base);
-  font-weight: 800;
-  color: var(--color-text);
-  border-top: 1px solid var(--color-border);
-  padding-top: var(--space-3);
-  margin-top: var(--space-1);
+.line-total {
+  font-size: 14px;
+  font-weight: 600;
 }
 
-.text-ink { color: var(--color-ink); }
-
-.trust-delivery-note {
-  padding: var(--space-1) 0;
+/* Summary */
+.summary-column {
+  position: sticky;
+  top: 90px;
 }
 
-.trust-text {
-  font-size: var(--text-xs);
-  color: var(--color-text-muted);
-  line-height: var(--leading-normal);
+.summary-box {
+  background-color: var(--store-surface, #FFFFFF);
+  border: 1px solid var(--store-border, #E8E4E0);
+  border-radius: 16px;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.summary-heading {
+  font-family: var(--font-display, 'Fraunces', Georgia, serif);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.summary-details {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.detail-line {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  color: var(--store-text-secondary, #6F6A67);
+}
+
+.detail-sub {
+  font-size: 12px;
+  color: var(--store-text-muted, #8B8581);
+}
+
+.detail-line--total {
+  border-top: 1px solid var(--store-border, #E8E4E0);
+  padding-top: 16px;
+  margin-top: 4px;
+  color: var(--store-text, #171514);
+  font-weight: 600;
+}
+
+.total-amount {
+  font-size: 18px;
+}
+
+.full-width {
+  width: 100%;
 }
 </style>

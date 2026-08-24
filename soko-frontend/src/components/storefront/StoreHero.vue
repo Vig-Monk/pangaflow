@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/components/storefront/StoreHero.vue
+// Editorial brand introduction hero with generous whitespace and layout styles.
 // =============================================================================
 
 import type { StoreSettings } from '@/stores/store';
@@ -13,180 +14,175 @@ defineProps<Props>();
 </script>
 
 <template>
-  <div class="store-hero" :class="`hero--${settings?.hero_layout ?? 'editorial'}`">
-    
+  <div class="store-hero" :class="`hero-layout--${settings?.hero_layout || 'editorial'}`">
     <!-- 1. EDITORIAL LAYOUT -->
     <template v-if="!settings?.hero_layout || settings.hero_layout === 'editorial'">
-      <div class="hero-banner-wrap">
-        <div 
-          v-if="settings?.cover_image_url" 
-          class="hero-banner" 
-          :style="{ backgroundImage: `url(${settings.cover_image_url})` }" 
-        />
-        <div v-else class="hero-banner hero-banner--default" />
-        
-        <div class="hero-branding">
-          <h1 class="hero-headline">{{ settings?.hero_headline || settings?.name || 'Welcome to our Shop' }}</h1>
-          <p class="hero-subheadline">{{ settings?.hero_subheadline || settings?.description || 'Explore our exclusive selection of verified items.' }}</p>
-          <button v-if="settings?.hero_cta_label" class="hero-cta-btn" type="button">
-            {{ settings.hero_cta_label }}
-          </button>
+      <div class="editorial-container">
+        <div
+          v-if="settings?.cover_image_url"
+          class="cover-banner-frame"
+          :style="{ backgroundImage: `url(${settings.cover_image_url})` }"
+        >
+          <div class="cover-overlay"></div>
+          <div class="cover-content">
+            <h1 class="hero-title">{{ settings?.hero_headline || settings?.name || 'Welcome to our shop' }}</h1>
+            <p v-if="settings?.hero_subheadline || settings?.description" class="hero-desc">
+              {{ settings?.hero_subheadline || settings?.description }}
+            </p>
+          </div>
+        </div>
+        <div v-else class="editorial-text-only">
+          <h1 class="hero-title">{{ settings?.hero_headline || settings?.name || 'Welcome to our shop' }}</h1>
+          <p v-if="settings?.hero_subheadline || settings?.description" class="hero-desc">
+            {{ settings?.hero_subheadline || settings?.description }}
+          </p>
         </div>
       </div>
     </template>
 
     <!-- 2. SPLIT LAYOUT -->
     <template v-else-if="settings?.hero_layout === 'split'">
-      <div class="hero-split-container">
-        <div class="hero-split-content">
-          <h1 class="hero-headline">{{ settings?.hero_headline || settings?.name || 'Welcome to our Shop' }}</h1>
-          <p class="hero-subheadline">{{ settings?.hero_subheadline || settings?.description || 'Explore our collection.' }}</p>
-          <button v-if="settings?.hero_cta_label" class="hero-cta-btn" type="button">
-            {{ settings.hero_cta_label }}
-          </button>
+      <div class="split-container">
+        <div class="split-content">
+          <h1 class="hero-title">{{ settings?.hero_headline || settings?.name || 'Welcome to our shop' }}</h1>
+          <p v-if="settings?.hero_subheadline || settings?.description" class="hero-desc">
+            {{ settings?.hero_subheadline || settings?.description }}
+          </p>
         </div>
-        <div class="hero-split-media">
-          <img v-if="settings?.cover_image_url" :src="settings.cover_image_url" alt="Cover" class="split-img" />
-          <div v-else class="split-placeholder">🏪</div>
+        <div v-if="settings?.cover_image_url" class="split-image-frame">
+          <img :src="settings.cover_image_url" :alt="settings.name" class="split-img" />
         </div>
       </div>
     </template>
 
     <!-- 3. MINIMAL LAYOUT -->
     <template v-else-if="settings?.hero_layout === 'minimal'">
-      <div class="hero-minimal-container">
-        <h1 class="hero-headline">{{ settings?.hero_headline || settings?.name || 'Welcome to our Shop' }}</h1>
-        <p class="hero-subheadline">{{ settings?.hero_subheadline || settings?.description || 'Explore our collection.' }}</p>
-        <button v-if="settings?.hero_cta_label" class="hero-cta-btn hero-cta-btn--dark" type="button">
-          {{ settings.hero_cta_label }}
-        </button>
+      <div class="minimal-container">
+        <h1 class="hero-title">{{ settings?.hero_headline || settings?.name || 'Welcome to our shop' }}</h1>
+        <p v-if="settings?.hero_subheadline || settings?.description" class="hero-desc">
+          {{ settings?.hero_subheadline || settings?.description }}
+        </p>
       </div>
     </template>
 
     <!-- 4. PROMOTIONAL LAYOUT -->
     <template v-else-if="settings?.hero_layout === 'promotional'">
-      <div 
-        class="hero-promo-container" 
+      <div
+        class="promo-container"
         :style="settings?.cover_image_url ? { backgroundImage: `url(${settings.cover_image_url})` } : {}"
       >
-        <div class="promo-overlay">
-          <div class="promo-content">
-            <span class="promo-badge">Featured Shop</span>
-            <h1 class="hero-headline">{{ settings?.hero_headline || settings?.name || 'Welcome to our Shop' }}</h1>
-            <p class="hero-subheadline">{{ settings?.hero_subheadline || settings?.description || 'Explore our collection.' }}</p>
-            <button v-if="settings?.hero_cta_label" class="hero-cta-btn" type="button">
-              {{ settings.hero_cta_label }}
-            </button>
-          </div>
+        <div class="promo-content">
+          <h1 class="hero-title">{{ settings?.hero_headline || settings?.name || 'Featured collection' }}</h1>
+          <p v-if="settings?.hero_subheadline || settings?.description" class="hero-desc">
+            {{ settings?.hero_subheadline || settings?.description }}
+          </p>
         </div>
       </div>
     </template>
-
   </div>
 </template>
 
 <style scoped>
 .store-hero {
-  background: var(--color-surface);
-  border-bottom: 1px solid var(--color-border);
   width: 100%;
+  border-bottom: 1px solid var(--store-border);
+  background-color: var(--store-surface);
+  transition: background-color 200ms ease, border-color 200ms ease;
 }
 
-.hero-banner-wrap {
+.hero-title {
+  font-family: var(--font-display, 'Fraunces', Georgia, serif);
+  font-size: clamp(28px, 3.8vw, 44px);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.hero-desc {
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.55;
+  max-width: 580px;
+}
+
+/* Editorial Style */
+.editorial-container {
+  max-width: 1240px;
+  margin: 0 auto;
+}
+
+.cover-banner-frame {
   position: relative;
-  min-height: 280px;
+  min-height: 320px;
+  background-size: cover;
+  background-position: center;
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
+  text-align: center;
+  padding: 48px 24px;
 }
 
-.hero-banner {
+.cover-overlay {
   position: absolute;
   inset: 0;
-  background-size: cover;
-  background-position: center;
-  filter: brightness(0.65);
+  background: rgba(0, 0, 0, 0.45);
 }
 
-.hero-banner--default {
-  background: linear-gradient(135deg, var(--color-ink) 0%, var(--color-border) 100%);
-}
-
-.hero-branding {
+.cover-content {
   position: relative;
   z-index: 2;
-  max-width: 800px;
-  margin: 0 auto;
-  padding: var(--space-8) var(--space-4);
+  color: #FFFFFF;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.cover-content .hero-desc {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.editorial-text-only {
+  padding: 60px 24px;
   text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-3);
+  gap: 12px;
 }
 
-.hero-headline {
-  font-family: var(--font-display);
-  font-size: var(--text-3xl);
-  color: #FFFFFF;
-  line-height: var(--leading-tight);
+.editorial-text-only .hero-desc {
+  color: var(--store-text-secondary);
 }
 
-.hero-subheadline {
-  font-size: var(--text-base);
-  color: rgba(255, 255, 255, 0.9);
-  max-width: 540px;
-  line-height: var(--leading-relaxed);
-}
-
-.hero-cta-btn {
-  background: var(--color-gold);
-  color: var(--color-text-inverse, #FFFFFF);
-  border: none;
-  padding: var(--space-3) var(--space-8);
-  border-radius: var(--radius-full);
-  font-size: var(--text-base);
-  font-weight: 700;
-  cursor: pointer;
-  margin-top: var(--space-2);
-  transition: transform var(--duration-fast) var(--ease-standard);
-}
-.hero-cta-btn:hover { transform: translateY(-2px); }
-
-.hero-split-container {
-  max-width: 1200px;
+/* Split Style */
+.split-container {
+  max-width: 1240px;
   margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-}
-
-@media (min-width: 768px) {
-  .hero-split-container { flex-direction: row; min-height: 280px; }
-}
-
-.hero-split-content {
-  flex: 1;
-  padding: var(--space-8);
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: var(--space-3);
-}
-
-.hero-split-content .hero-headline {
-  color: var(--color-text);
-  font-size: var(--text-2xl);
-}
-.hero-split-content .hero-subheadline { color: var(--color-text-muted); }
-
-.hero-split-media {
-  flex: 1;
-  min-height: 200px;
-  background: var(--color-bg);
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   align-items: center;
-  justify-content: center;
+}
+
+@media (max-width: 768px) {
+  .split-container { grid-template-columns: 1fr; }
+}
+
+.split-content {
+  padding: 48px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.split-content .hero-desc {
+  color: var(--store-text-secondary);
+}
+
+.split-image-frame {
+  height: 100%;
+  min-height: 280px;
   overflow: hidden;
 }
 
@@ -196,61 +192,41 @@ defineProps<Props>();
   object-fit: cover;
 }
 
-.split-placeholder { font-size: 48px; }
-
-.hero-minimal-container {
+/* Minimal Style */
+.minimal-container {
   max-width: 900px;
   margin: 0 auto;
-  padding: var(--space-10) var(--space-4);
+  padding: 56px 24px;
   text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-3);
+  gap: 12px;
 }
 
-.hero-minimal-container .hero-headline { color: var(--color-text); font-size: var(--text-2xl); }
-.hero-minimal-container .hero-subheadline { color: var(--color-text-muted); }
-
-.hero-cta-btn--dark {
-  background: var(--color-ink);
-  color: var(--color-text-inverse);
+.minimal-container .hero-desc {
+  color: var(--store-text-secondary);
 }
 
-.hero-promo-container {
+/* Promo Style */
+.promo-container {
   min-height: 280px;
   background-size: cover;
   background-position: center;
-  background-color: var(--color-ink);
-  position: relative;
-}
-
-.promo-overlay {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, rgba(15, 61, 62, 0.9) 0%, rgba(15, 61, 62, 0.4) 100%);
+  background-color: var(--store-soft);
   display: flex;
   align-items: center;
-  padding: var(--space-8);
+  padding: 48px 32px;
 }
 
 .promo-content {
-  max-width: 600px;
+  max-width: 540px;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-3);
+  gap: 10px;
 }
 
-.promo-badge {
-  background: var(--color-gold);
-  color: var(--color-text-inverse, #FFFFFF);
-  font-size: var(--text-xs);
-  font-weight: 700;
-  text-transform: uppercase;
-  padding: 2px var(--space-3);
-  border-radius: var(--radius-full);
+.promo-content .hero-desc {
+  color: var(--store-text-secondary);
 }
-.promo-content .hero-headline { font-size: var(--text-2xl); color: #FFFFFF; }
-.promo-content .hero-subheadline { text-align: left; color: rgba(255, 255, 255, 0.85); }
 </style>

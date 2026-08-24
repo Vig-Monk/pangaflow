@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/views/storefront/ProductDetailView.vue
-// Product detail view with gallery and QuantityStepper.
+// Editorial ecommerce product detail view with large gallery, clean typography,
+// quantity stepper, and zero nested card borders.
 // =============================================================================
 
 import { onMounted, ref, computed } from 'vue';
@@ -12,8 +13,8 @@ import { useToast } from '@/composables/useToast';
 import { useStoreSettingsStore } from '@/stores/store';
 import QuantityStepper from '@/components/ui/QuantityStepper.vue';
 import Button from '@/components/ui/Button.vue';
-import Skeleton from '@/components/ui/Skeleton.vue';
-import { ArrowLeft, CheckCircle2, XCircle, ShoppingBag, Truck, ShieldCheck } from 'lucide-vue-next';
+import EmptyState from '@/components/ui/EmptyState.vue';
+import { ArrowLeft, ShoppingBag } from 'lucide-vue-next';
 
 interface PublicProduct {
   id: string;
@@ -72,10 +73,6 @@ function formatCurrency(value: number): string {
   return `KES ${value.toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
 }
 
-function selectImage(url: string): void {
-  activeImage.value = url;
-}
-
 function handleAddToCart(): void {
   if (!product.value || product.value.availability === 'out_of_stock') return;
 
@@ -100,124 +97,100 @@ function goBack(): void {
 </script>
 
 <template>
-  <div class="product-detail-page">
+  <div class="product-detail-view">
     <div class="detail-container">
-      <header class="detail-header">
-        <Button variant="ghost" @click="goBack"><ArrowLeft :size="16" /> Back to Catalog</Button>
-      </header>
+      <!-- Back Navigation Link -->
+      <nav class="back-nav">
+        <button type="button" class="back-link-btn" @click="goBack">
+          <ArrowLeft :size="15" /> Back to store
+        </button>
+      </nav>
 
-      <div v-if="loadError" class="error-container">
-        <div class="error-box card">
-          <h2 class="error-title">Product Offline</h2>
-          <p class="error-desc">This product could not be found, or has been set to draft mode by the merchant.</p>
-        </div>
+      <!-- Error State -->
+      <div v-if="loadError" class="state-wrap">
+        <EmptyState
+          title="Product not available"
+          description="This product could not be found or has been placed in draft mode."
+          action-label="Return to catalog"
+          :on-action="goBack"
+        />
       </div>
 
-      <template v-else>
-        <div v-if="loading" class="detail-grid-skeleton">
-          <div class="skeleton-gallery-wrap">
-            <Skeleton height="360px" />
-            <div class="skeleton-thumbnails">
-              <Skeleton v-for="n in 3" :key="n" height="60px" width="60px" />
-            </div>
-          </div>
-          <div class="skeleton-info-wrap">
-            <Skeleton height="18px" width="30%" />
-            <Skeleton height="32px" width="80%" />
-            <Skeleton height="24px" width="40%" />
-            <Skeleton height="90px" />
-            <Skeleton height="44px" width="100%" />
-          </div>
-        </div>
-
-        <div v-else-if="product" class="detail-layout">
-          <!-- Gallery Column -->
+      <!-- Detail Grid -->
+      <template v-else-if="product">
+        <div class="detail-editorial-layout">
+          <!-- Left Column: Gallery -->
           <div class="gallery-column">
-            <div class="main-display card">
-              <img v-if="activeImage" :src="activeImage" :alt="product.name" class="main-img" />
+            <!-- Primary Image -->
+            <div class="primary-image-frame">
+              <img v-if="activeImage" :src="activeImage" :alt="product.name" class="primary-img" />
               <div v-else class="img-placeholder">
-                <ShoppingBag :size="48" class="text-muted" />
+                <ShoppingBag :size="48" />
               </div>
             </div>
-            
-            <div class="thumbnail-strip" v-if="product.images.length > 1">
+
+            <!-- Thumbnail Strip -->
+            <div v-if="product.images.length > 1" class="thumbnail-row">
               <button
                 v-for="(img, idx) in product.images"
                 :key="idx"
-                class="thumb-btn"
-                :class="{ 'thumb-btn--active': activeImage === img }"
                 type="button"
-                @click="selectImage(img)"
+                class="thumb-btn"
+                :class="{ active: activeImage === img }"
+                @click="activeImage = img"
               >
-                <img :src="img" alt="Gallery thumbnail" class="thumb-img" />
+                <img :src="img" :alt="`${product.name} preview ${idx + 1}`" class="thumb-img" />
               </button>
             </div>
           </div>
 
-          <!-- Buying Column -->
+          <!-- Right Column: Product Information & Purchase -->
           <div class="info-column">
-            <div class="info-header card">
-              <span class="product-category">{{ product.category?.name || 'General' }}</span>
-              <h1 class="product-name font-display">{{ product.name }}</h1>
-              <p class="product-price tabular-figure">{{ formatCurrency(product.price) }}</p>
+            <span class="product-category-tag">{{ product.category?.name || 'General' }}</span>
+            <h1 class="product-title">{{ product.name }}</h1>
+            <p class="product-price font-mono">{{ formatCurrency(product.price) }}</p>
 
-              <div class="product-status-alert">
-                <span v-if="product.availability === 'in_stock'" class="status-indicator status-indicator--in">
-                  <CheckCircle2 :size="15" /> In Stock ({{ product.stock }} available)
-                </span>
-                <span v-else class="status-indicator status-indicator--out">
-                  <XCircle :size="15" /> Out of Stock
-                </span>
-              </div>
-
-              <!-- Add to Cart Widget -->
-              <div class="add-to-cart-widget" v-if="product.availability === 'in_stock'">
-                <div class="quantity-picker-wrap">
-                  <label class="form-label">Quantity</label>
-                  <QuantityStepper
-                    v-model="quantitySelection"
-                    :max="availableStockLimit"
-                    size="md"
-                  />
-                </div>
-                
-                <Button variant="primary" size="lg" style="width: 100%;" @click="handleAddToCart">
-                  <ShoppingBag :size="18" /> Add to Cart
-                </Button>
-              </div>
-              
-              <div v-else class="out-of-stock-action-panel">
-                <Button variant="secondary" size="lg" style="width: 100%;" disabled>
-                  Out of Stock
-                </Button>
-              </div>
+            <!-- Availability Status -->
+            <div class="availability-status">
+              <span v-if="product.availability === 'in_stock'" class="status-badge status-badge--in">
+                In stock ({{ product.stock }} available)
+              </span>
+              <span v-else class="status-badge status-badge--out">
+                Out of stock
+              </span>
             </div>
 
-            <!-- Policy details -->
-            <div class="secondary-details-card card">
-              <div v-if="product.description" class="desc-block">
-                <h3>Product Details</h3>
-                <p class="product-desc">{{ product.description }}</p>
-              </div>
-
-              <div class="policy-block">
-                <div class="policy-item">
-                  <Truck :size="18" class="text-ink" />
-                  <div>
-                    <span class="policy-title">Delivery &amp; Fulfillment</span>
-                    <span class="policy-desc">{{ storeSettingsStore.settings?.delivery_info || 'Doorstep delivery and in-person pickup options calculated at checkout.' }}</span>
-                  </div>
-                </div>
-                <div class="policy-item">
-                  <ShieldCheck :size="18" class="text-teal" />
-                  <div>
-                    <span class="policy-title">Verified Merchant Catalog</span>
-                    <span class="policy-desc">Direct communication and delivery verification code on arrival.</span>
-                  </div>
-                </div>
-              </div>
+            <!-- Description -->
+            <div v-if="product.description" class="product-description-block">
+              <p class="description-text">{{ product.description }}</p>
             </div>
 
+            <!-- Purchasing Actions -->
+            <div v-if="product.availability === 'in_stock'" class="purchase-actions-block">
+              <div class="stepper-row">
+                <span class="stepper-label">Quantity</span>
+                <QuantityStepper
+                  v-model="quantitySelection"
+                  :max="availableStockLimit"
+                  size="md"
+                />
+              </div>
+
+              <Button
+                variant="primary"
+                size="lg"
+                class="add-to-cart-btn"
+                @click="handleAddToCart"
+              >
+                Add to cart · {{ formatCurrency(product.price * quantitySelection) }}
+              </Button>
+            </div>
+
+            <div v-else class="out-of-stock-notice">
+              <Button variant="secondary" size="lg" disabled class="full-width">
+                Out of stock
+              </Button>
+            </div>
           </div>
         </div>
       </template>
@@ -226,120 +199,108 @@ function goBack(): void {
 </template>
 
 <style scoped>
-.product-detail-page {
-  padding: var(--space-8) var(--space-4);
+.product-detail-view {
   min-height: 80vh;
+  padding: 36px 24px 80px;
+}
+
+@media (max-width: 640px) {
+  .product-detail-view { padding: 20px 16px 60px; }
 }
 
 .detail-container {
-  max-width: 1050px;
+  max-width: 1140px;
   margin: 0 auto;
-}
-
-.detail-header {
-  margin-bottom: var(--space-4);
-}
-
-.error-container {
   display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.back-nav {
+  display: flex;
+}
+
+.back-link-btn {
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--store-text-secondary);
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  padding: var(--space-12) var(--space-4);
+  gap: 6px;
+  cursor: pointer;
+  padding: 0;
+  transition: color 150ms ease;
 }
 
-.error-box {
-  text-align: center;
-  max-width: 420px;
-  padding: var(--space-8);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-2);
+.back-link-btn:hover {
+  color: var(--store-text);
 }
 
-.error-title {
-  font-family: var(--font-display);
-  font-size: var(--text-xl);
-  color: var(--color-text);
+.detail-editorial-layout {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 56px;
+  align-items: start;
 }
 
-.error-desc {
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  line-height: var(--leading-relaxed);
+@media (max-width: 860px) {
+  .detail-editorial-layout {
+    grid-template-columns: 1fr;
+    gap: 36px;
+  }
 }
 
-.detail-grid-skeleton {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-6);
-}
-@media (min-width: 768px) {
-  .detail-grid-skeleton { flex-direction: row; }
-}
-.skeleton-gallery-wrap { flex: 1; display: flex; flex-direction: column; gap: var(--space-3); }
-.skeleton-thumbnails { display: flex; gap: var(--space-2); }
-.skeleton-info-wrap { flex: 1; display: flex; flex-direction: column; gap: var(--space-3); }
-
-.detail-layout {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-6);
-}
-@media (min-width: 768px) {
-  .detail-layout { flex-direction: row; align-items: flex-start; }
-}
-
+/* Gallery */
 .gallery-column {
-  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: 16px;
 }
 
-.main-display {
-  height: 360px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+.primary-image-frame {
+  aspect-ratio: 4 / 5;
+  background-color: var(--store-soft);
+  border-radius: 12px;
   overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
 }
 
-@media (min-width: 768px) {
-  .main-display { height: 420px; }
-}
-
-.main-img {
+.primary-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.thumbnail-strip {
+.img-placeholder {
+  color: var(--store-text-muted);
+}
+
+.thumbnail-row {
   display: flex;
-  gap: var(--space-2);
+  gap: 12px;
   overflow-x: auto;
-  padding-bottom: var(--space-1);
 }
 
 .thumb-btn {
-  width: 56px;
-  height: 56px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  overflow: hidden;
+  width: 68px;
+  height: 68px;
+  border-radius: 8px;
+  background-color: var(--store-soft);
+  border: 1px solid var(--store-border);
   padding: 0;
+  overflow: hidden;
   cursor: pointer;
   flex-shrink: 0;
+  transition: border-color 150ms ease;
 }
 
-.thumb-btn--active {
-  border-color: var(--brand-primary);
+.thumb-btn.active {
+  border-color: var(--store-accent);
   border-width: 2px;
 }
 
@@ -349,135 +310,88 @@ function goBack(): void {
   object-fit: cover;
 }
 
+/* Information Column */
 .info-column {
-  flex: 1.1;
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: 16px;
 }
 
-.info-header {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-5);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.product-category {
-  font-size: 10px;
+.product-category-tag {
+  font-size: 12px;
+  font-weight: 600;
   text-transform: uppercase;
-  color: var(--color-text-muted);
   letter-spacing: 0.05em;
-  font-weight: 700;
+  color: var(--store-text-muted);
 }
 
-.product-name {
-  font-size: var(--text-2xl);
-  color: var(--color-text);
-  line-height: var(--leading-tight);
+.product-title {
+  font-family: var(--font-display, 'Fraunces', Georgia, serif);
+  font-size: clamp(28px, 3.5vw, 38px);
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--store-text);
+  letter-spacing: -0.02em;
 }
 
 .product-price {
-  font-size: var(--text-xl);
-  font-weight: 800;
-  color: var(--color-ink);
-}
-
-.product-status-alert {
-  display: flex;
-  align-items: center;
-}
-
-.status-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-size: var(--text-xs);
-  font-weight: 700;
-}
-.status-indicator--in { color: var(--color-ledger-green); }
-.status-indicator--out { color: var(--color-market-clay); }
-
-.add-to-cart-widget {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  border-top: 1px solid var(--color-border);
-  padding-top: var(--space-3);
-  margin-top: var(--space-1);
-}
-
-.quantity-picker-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.form-label {
-  font-size: var(--text-xs);
+  font-size: 24px;
   font-weight: 600;
-  color: var(--color-text-muted);
+  color: var(--store-text);
 }
 
-.secondary-details-card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-5);
+.availability-status {
+  display: flex;
+}
+
+.status-badge {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.status-badge--in { color: var(--store-success); }
+.status-badge--out { color: var(--store-text-muted); }
+
+.product-description-block {
+  border-top: 1px solid var(--store-border);
+  padding-top: 20px;
+  margin-top: 4px;
+}
+
+.description-text {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--store-text-secondary);
+  white-space: pre-line;
+}
+
+.purchase-actions-block {
+  border-top: 1px solid var(--store-border);
+  padding-top: 24px;
+  margin-top: 8px;
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: 20px;
 }
 
-.desc-block {
+.stepper-row {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  border-bottom: 1px solid var(--color-border);
-  padding-bottom: var(--space-3);
+  justify-content: space-between;
+  align-items: center;
 }
 
-.desc-block h3 {
-  font-size: var(--text-sm);
-  font-weight: 700;
+.stepper-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--store-text);
 }
 
-.product-desc {
-  font-size: var(--text-xs);
-  color: var(--color-text-muted);
-  line-height: var(--leading-relaxed);
-  white-space: pre-wrap;
+.add-to-cart-btn {
+  width: 100%;
+  background-color: var(--store-accent);
+  color: #FFFFFF;
+  border-radius: 10px;
 }
 
-.policy-block {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.policy-item {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-}
-
-.policy-title {
-  display: block;
-  font-size: var(--text-xs);
-  font-weight: 700;
-  color: var(--color-text);
-}
-
-.policy-desc {
-  display: block;
-  font-size: 11px;
-  color: var(--color-text-muted);
-  margin-top: 1px;
-}
-
-.text-ink { color: var(--color-ink); }
-.text-teal { color: var(--color-ledger-green); }
+.full-width { width: 100%; }
 </style>
