@@ -1,20 +1,22 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/views/LandingView.vue
-// Master Landing Page Container: Orchestrates Bento modules, scroll-reveal engine,
-// and silent Render backend wake-up ping.
+// Minimalist, high-converting master view aggregating the 4 core sections:
+// 1. LandingNav (Sticky glassmorphic bar)
+// 2. MonolithHero (Punchy copy + Pure CSS "UI-As-Art" dual viewport)
+// 3. FlagshipPillars (3-Pillar Bento: Storefront, Direct STK POS, Madeni Ledger)
+// 4. PricingClean (Minimalist 3-tier commercial matrix)
+// 5. FaqConcierge (Direct FAQ + WhatsApp Concierge)
+// 6. LandingFooter (Nairobi footprint, legal, and trust guarantees)
 // =============================================================================
 
 import { onMounted } from 'vue';
 import { useScrollReveal } from '@/composables/useScrollAnimation';
 import LandingNav from '@/components/landing/LandingNav.vue';
-import HeroBento from '@/components/landing/HeroBento.vue';
-import ComparisonBento from '@/components/landing/ComparisonBento.vue';
-import ArchitectureFlow from '@/components/landing/ArchitectureFlow.vue';
-import RoiCalculator from '@/components/landing/RoiCalculator.vue';
-import FeatureBentoGrid from '@/components/landing/FeatureBentoGrid.vue';
-import PricingBento from '@/components/landing/PricingBento.vue';
-import FaqSection from '@/components/landing/FaqSection.vue';
+import MonolithHero from '@/components/landing/MonolithHero.vue';
+import FlagshipPillars from '@/components/landing/FlagshipPillars.vue';
+import PricingClean from '@/components/landing/PricingClean.vue';
+import FaqConcierge from '@/components/landing/FaqConcierge.vue';
 import LandingFooter from '@/components/landing/LandingFooter.vue';
 
 // Initialize native IntersectionObserver scroll reveal engine
@@ -27,7 +29,7 @@ useScrollReveal({
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) || 'http://localhost:3000/api/v1';
 
 onMounted(() => {
-  // Silent background wake-up ping for Render cold-start mitigation
+  // Silent background wake-up ping to eliminate Render free tier's 50s cold start
   fetch(`${API_BASE}/health`, { method: 'GET' }).catch(() => {});
 });
 </script>
@@ -38,37 +40,20 @@ onMounted(() => {
     <LandingNav />
 
     <main class="landing-main-content">
-      <!-- 2. Asymmetrical 12-Column Hero Bento Grid -->
-      <HeroBento />
+      <!-- 2. Hero Section with "UI-As-Art" Monolith Centerpiece -->
+      <MonolithHero />
 
-      <!-- 3. Interactive Counter Book vs. Soko OS Comparison Board -->
-      <ComparisonBento />
+      <!-- 3. The 3 Flagship Pillars Bento -->
+      <FlagshipPillars />
 
-      <!-- 4. Zero-Custody M-Pesa Architecture Flow Section -->
-      <section id="architecture" class="section-wrapper">
-        <div class="section-inner" data-reveal="zoom">
-          <ArchitectureFlow />
-        </div>
-      </section>
+      <!-- 4. Clean Commercial 3-Tier Pricing -->
+      <PricingClean />
 
-      <!-- 5. Lost Revenue & Loss Aversion ROI Calculator Section -->
-      <section id="roi" class="section-wrapper">
-        <div class="section-inner" data-reveal="zoom">
-          <RoiCalculator />
-        </div>
-      </section>
-
-      <!-- 6. Platform Pillars Feature Bento Grid -->
-      <FeatureBentoGrid />
-
-      <!-- 7. Commercial 4-Tier Pricing Grid -->
-      <PricingBento />
-
-      <!-- 8. FAQ Accordion & WhatsApp Concierge Callout -->
-      <FaqSection />
+      <!-- 5. Direct FAQ & WhatsApp Concierge -->
+      <FaqConcierge />
     </main>
 
-    <!-- 9. Footer & Trust Certifications -->
+    <!-- 6. Footer & Trust Guarantees -->
     <LandingFooter />
   </div>
 </template>
@@ -81,24 +66,13 @@ onMounted(() => {
   font-family: var(--font-body, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
   position: relative;
   overflow-x: hidden;
-  background-image: radial-gradient(rgba(31, 46, 41, 0.4) 1px, transparent 1px);
-  background-size: 28px 28px;
+  background-image: radial-gradient(rgba(31, 46, 41, 0.35) 1px, transparent 1px);
+  background-size: 32px 32px;
 }
 
 .landing-main-content {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-}
-
-.section-wrapper {
-  max-width: 1240px;
-  margin: 0 auto;
-  padding: 20px 20px 40px;
-  width: 100%;
-}
-
-.section-inner {
-  width: 100%;
+  gap: 32px;
 }
 </style>
