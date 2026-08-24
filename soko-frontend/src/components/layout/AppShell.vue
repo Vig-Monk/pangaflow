@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // =============================================================================
-// KauntaOS-frontend/src/components/layout/AppShell.vue
+// soko-frontend/src/components/layout/AppShell.vue
+// Merchant administrative shell with desktop sidebar, mobile bar, and menu sheet.
 // =============================================================================
 
 import { computed, ref, onMounted } from 'vue';
@@ -15,6 +16,7 @@ import {
   Tag,
   Package,
   Inbox,
+  TrendingUp,
   CreditCard,
   Key,
   Store,
@@ -23,7 +25,7 @@ import {
   Sun,
   Menu,
   LogOut,
-  ExternalLink
+  ExternalLink,
 } from 'lucide-vue-next';
 
 const router = useRouter();
@@ -77,6 +79,7 @@ function closeMobileMenu(): void {
         <!-- GROUP 2: FINANCE -->
         <div class="sidebar__group">
           <span class="sidebar__group-label">Finance</span>
+          <NavItem :to="{ name: 'analytics' }" label="Analytics" :icon="TrendingUp" />
           <NavItem :to="{ name: 'expenses' }" label="Expenses" :icon="CreditCard" />
           <NavItem :to="{ name: 'mpesa-setup' }" label="M-Pesa Setup" :icon="Key" />
         </div>
@@ -163,6 +166,9 @@ function closeMobileMenu(): void {
             </RouterLink>
             
             <span class="sheet__group-label">Finance &amp; Store</span>
+            <RouterLink :to="{ name: 'analytics' }" class="sheet__item" @click="closeMobileMenu">
+              <TrendingUp :size="18" /> Analytics
+            </RouterLink>
             <RouterLink :to="{ name: 'expenses' }" class="sheet__item" @click="closeMobileMenu">
               <CreditCard :size="18" /> Expenses
             </RouterLink>
@@ -201,7 +207,7 @@ function closeMobileMenu(): void {
   min-height: 100vh;
   width: 100%;
   max-width: 100%;
-  min-width: 0; /* Prevents flex-child blowout */
+  min-width: 0;
   background: var(--color-bg);
 }
 
@@ -341,7 +347,6 @@ function closeMobileMenu(): void {
 }
 .user-menu__logout:hover { color: var(--color-market-clay); }
 
-/* Main content container with min-width: 0 ensuring horizontal containment */
 .main-content {
   flex: 1;
   min-width: 0;
