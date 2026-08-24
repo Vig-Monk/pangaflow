@@ -43,7 +43,6 @@ const currentYear = new Date().getFullYear();
       </div>
     </div>
   </footer>
-</footer>
 </template>
 
 <style scoped>
