@@ -1,15 +1,10 @@
 // =============================================================================
-// src/modules/payments/payments.queries.ts
-// Database access layer — M-Pesa payment tracking. Raw pg only.
-// No business logic, no Daraja API calls — those live in daraja.service.ts.
+// soko-api/src/modules/payments/payments.queries.ts
+// Database access layer — M-Pesa payment tracking & callback audit logging.
 // =============================================================================
 
 import { PoolClient } from 'pg';
 import { query } from '../../config/db';
-
-// ---------------------------------------------------------------------------
-// MpesaTransaction — mirrors mpesa_transactions table field-for-field
-// ---------------------------------------------------------------------------
 
 export type MpesaTransactionStatus = 'pending' | 'completed' | 'failed';
 
@@ -20,7 +15,7 @@ export interface MpesaTransaction {
   checkout_request_id: string;
   merchant_request_id: string;
   phone: string;
-  amount: string; // NUMERIC — pg returns as string, parseFloat() where arithmetic is needed
+  amount: string;
   account_reference: string;
   transaction_desc: string;
   status: MpesaTransactionStatus;
@@ -31,10 +26,6 @@ export interface MpesaTransaction {
   created_at: Date;
   updated_at: Date;
 }
-
-// ---------------------------------------------------------------------------
-// Input types
-// ---------------------------------------------------------------------------
 
 export interface CreateMpesaTxInput {
   orgId: string;
@@ -55,16 +46,68 @@ export interface UpdateMpesaTxInput {
   transactionDate?: Date;
 }
 
-// ---------------------------------------------------------------------------
-// createPendingMpesaTransaction
-// ---------------------------------------------------------------------------
+/**
+ * Creates an immutable audit row recording raw Safaricom callback payloads.
+ */
+export async function logRawMpesaCallback(
+  checkoutRequestId: string,
+  merchantRequestId: string | null,
+  resultCode: number | null,
+  rawPayload: unknown
+): Promise<string> {
+  const result = await query<{ id: string }>(
+    `INSERT INTO mpesa_callbacks (
+       checkout_request_id, merchant_request_id, result_code, raw_payload
+     )
+     VALUES ($1, $2, $3, $4::jsonb)
+     RETURNING id`,
+    [
+      checkoutRequestId,
+      merchantRequestId ?? null,
+      resultCode ?? null,
+      JSON.stringify(rawPayload),
+    ]
+  );
+  return result.rows[0].id;
+}
+
+export async function markCallbackProcessed(
+  callbackId: string,
+  processed = true,
+  errorMessage: string | null = null
+): Promise<void> {
+  await query(
+    `UPDATE mpesa_callbacks
+     SET    processed = $2,
+            error_message = $3
+     WHERE  id = $1`,
+    [callbackId, processed, errorMessage]
+  );
+}
 
 /**
- * Creates a 'pending' M-Pesa transaction row immediately after a
- * successful stkPush() call, before the callback has arrived. Called
- * inside a pg transaction alongside whatever else the payment flow does
- * atomically (e.g. Prompt 2.2's payment initiation route).
+ * Checks for an active in-flight STK push within the last 60 seconds (Idempotency Window).
  */
+export async function findRecentPendingMpesaTransaction(
+  accountReference: string,
+  windowSeconds = 60
+): Promise<MpesaTransaction | null> {
+  const result = await query<MpesaTransaction>(
+    `SELECT id, org_id, customer_id, checkout_request_id, merchant_request_id,
+            phone, amount::text AS amount, account_reference, transaction_desc,
+            status, result_code, result_desc, mpesa_receipt_number,
+            transaction_date, created_at, updated_at
+     FROM   mpesa_transactions
+     WHERE  account_reference = $1
+       AND  status = 'pending'
+       AND  created_at >= NOW() - ($2 || ' seconds')::INTERVAL
+     ORDER  BY created_at DESC
+     LIMIT  1`,
+    [accountReference, windowSeconds]
+  );
+  return result.rows[0] ?? null;
+}
+
 export async function createPendingMpesaTransaction(
   client: PoolClient,
   data: CreateMpesaTxInput
@@ -95,22 +138,6 @@ export async function createPendingMpesaTransaction(
   return result.rows[0];
 }
 
-// ---------------------------------------------------------------------------
-// updateMpesaTransactionByCheckoutId
-// ---------------------------------------------------------------------------
-
-/**
- * Updates a transaction's status and result fields once the Daraja
- * callback arrives. checkout_request_id is the only correlation key
- * available at callback time — Safaricom's callback body carries the
- * same CheckoutRequestID the original stkPush() response returned.
- *
- * No-ops (affects zero rows) if the checkout_request_id doesn't match
- * any row — the caller (the callback route handler) is responsible for
- * deciding how to log/handle that case, since it likely indicates a
- * callback for a transaction this server didn't initiate, or one that
- * predates a database reset.
- */
 export async function updateMpesaTransactionByCheckoutId(
   client: PoolClient,
   checkoutRequestId: string,
@@ -135,17 +162,6 @@ export async function updateMpesaTransactionByCheckoutId(
   );
 }
 
-// ---------------------------------------------------------------------------
-// getMpesaTransactionByCheckoutId
-// ---------------------------------------------------------------------------
-
-/**
- * Looks up a transaction by its checkout_request_id. Used by the callback
- * handler to confirm a transaction exists (and check its current status
- * for idempotency) before applying an update, and by payment-status
- * polling endpoints if the frontend needs to check "has this payment
- * completed yet."
- */
 export async function getMpesaTransactionByCheckoutId(
   checkoutRequestId: string
 ): Promise<MpesaTransaction | null> {

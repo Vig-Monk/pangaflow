@@ -1,15 +1,18 @@
 // =============================================================================
-// src/modules/payments/payments.service.ts
+// soko-api/src/modules/payments/payments.service.ts
+// Multi-tenant M-Pesa processing with audit persistence & idempotency guards.
 // =============================================================================
 
 import { pool } from "../../config/db";
 import { env } from "../../config/env";
 import { AppError } from "../../utils/error";
 import * as darajaService from "../../services/daraja.service";
-import { MpesaCallbackResult } from "../../services/daraja.service";
 import {
     createPendingMpesaTransaction,
+    findRecentPendingMpesaTransaction,
     getMpesaTransactionByCheckoutId,
+    logRawMpesaCallback,
+    markCallbackProcessed,
     updateMpesaTransactionByCheckoutId
 } from "./payments.queries";
 import { recordTransaction } from "../transactions/transactions.queries";
@@ -23,6 +26,7 @@ import {
     markOrderAsPaidTransactional,
     markOrderPaymentFailedTransactional
 } from "../orders/orders.queries";
+import { fulfillDigitalItems } from "../../verticals/books/delivery.service";
 
 export type PaymentMethod = "mpesa" | "stripe";
 
@@ -77,6 +81,16 @@ export async function initiatePayment(
 async function initiateMpesaPayment(
     input: InitiatePaymentInput
 ): Promise<InitiatePaymentResult> {
+    // 1. STK Push Idempotency Guard (60-second in-flight check)
+    const recent = await findRecentPendingMpesaTransaction(input.customerId, 60);
+    if (recent) {
+        return {
+            checkoutRequestId: recent.checkout_request_id,
+            merchantRequestId: recent.merchant_request_id,
+            customerMessage: "An M-Pesa payment prompt is already pending on your phone. Please check your screen."
+        };
+    }
+
     const credsRow = await getCredentialsRowByOrgId(input.orgId);
     if (!credsRow || credsRow.status !== "verified") {
         throw new AppError(
@@ -108,7 +122,7 @@ async function initiateMpesaPayment(
         phone: input.phone,
         amount: input.amount,
         accountReference: input.customerId,
-        transactionDesc: "KauntaOS payment",
+        transactionDesc: "Store Payment",
         callbackUrl
     });
 
@@ -125,7 +139,7 @@ async function initiateMpesaPayment(
             phone: input.phone,
             amount: input.amount,
             accountReference: input.customerId,
-            transactionDesc: "KauntaOS payment"
+            transactionDesc: "Store Payment"
         });
 
         await client.query("COMMIT");
@@ -143,60 +157,72 @@ async function initiateMpesaPayment(
     };
 }
 
-export async function handleMpesaCallback(
-    callback: MpesaCallbackResult
-): Promise<void> {
-    const existing = await getMpesaTransactionByCheckoutId(
-        callback.checkoutRequestId
+/**
+ * Handles incoming Daraja callback with raw audit logging & transaction idempotency.
+ */
+export async function handleMpesaCallback(rawPayload: unknown): Promise<void> {
+    const parsed = darajaService.parseCallback(rawPayload);
+
+    // 1. Audit Log: Persist raw payload immediately
+    const auditId = await logRawMpesaCallback(
+        parsed.checkoutRequestId,
+        parsed.merchantRequestId,
+        parsed.resultCode,
+        rawPayload
     );
 
-    if (!existing) {
-        throw new AppError(
-            `No M-Pesa transaction found for checkoutRequestId: ${callback.checkoutRequestId}`,
-            404
-        );
-    }
+    const existing = await getMpesaTransactionByCheckoutId(parsed.checkoutRequestId);
 
-    if (existing.status === "completed") {
+    if (!existing) {
+        await markCallbackProcessed(auditId, false, `Transaction ${parsed.checkoutRequestId} not found.`);
         return;
     }
 
-    const isVerification = existing.account_reference === "KAUNTAOS -VERIFY";
+    // 2. Idempotency Check: Exit cleanly if already settled (prevents duplicate tokens & ledger entries)
+    if (existing.status === "completed") {
+        await markCallbackProcessed(auditId, true, "Ignored: already completed.");
+        return;
+    }
+
+    const isVerification = existing.account_reference.includes("VERIFY");
     const client = await pool.connect();
 
     try {
         await client.query("BEGIN");
 
-        // 1. Update mpesa_transactions record
+        // 3. Update mpesa_transactions record
         await updateMpesaTransactionByCheckoutId(
             client,
-            callback.checkoutRequestId,
+            parsed.checkoutRequestId,
             {
-                status: callback.isSuccess ? "completed" : "failed",
-                resultCode: callback.resultCode,
-                resultDesc: callback.resultDesc,
-                mpesaReceiptNumber: callback.mpesaReceiptNumber ?? undefined,
-                transactionDate: callback.transactionDate
-                    ? new Date(callback.transactionDate)
+                status: parsed.isSuccess ? "completed" : "failed",
+                resultCode: parsed.resultCode,
+                resultDesc: parsed.resultDesc,
+                mpesaReceiptNumber: parsed.mpesaReceiptNumber ?? undefined,
+                transactionDate: parsed.transactionDate
+                    ? new Date(parsed.transactionDate)
                     : undefined
             }
         );
 
-        // 2. Context Routing
+        // 4. Context Routing: Till Verification vs Storefront Order
         if (isVerification) {
-            if (callback.isSuccess) {
+            if (parsed.isSuccess) {
                 await updateVerificationStatus(existing.org_id, "verified", null);
             } else {
-                await updateVerificationStatus(existing.org_id, "failed", callback.resultDesc);
+                await updateVerificationStatus(existing.org_id, "failed", parsed.resultDesc);
             }
         } else {
             const order = await findOrderForWebhook(client, existing.account_reference);
 
             if (order) {
-                if (callback.isSuccess) {
+                if (parsed.isSuccess) {
                     await markOrderAsPaidTransactional(client, order.id);
 
-                    // Find or create customer record in CRM
+                    // Fulfill digital eBook download tokens automatically to PostgreSQL
+                    await fulfillDigitalItems(order.id, client);
+
+                    // Reconcile customer in CRM
                     let customerId = existing.customer_id;
                     if (!customerId && order.customer_phone) {
                         const cleanPhone = normalizePhone(order.customer_phone);
@@ -210,8 +236,8 @@ export async function handleMpesaCallback(
                         } else {
                             const newCustRes = await client.query<{ id: string }>(
                                 `INSERT INTO customers (org_id, name, phone, address)
-                 VALUES ($1, $2, $3, $4)
-                 RETURNING id`,
+                                 VALUES ($1, $2, $3, $4)
+                                 RETURNING id`,
                                 [
                                     order.org_id,
                                     order.customer_name,
@@ -223,10 +249,10 @@ export async function handleMpesaCallback(
                         }
                     }
 
-                    // Record in financial ledger so Dashboard updates immediately
+                    // Record in financial ledger
                     if (customerId) {
-                        const amount = callback.amount ?? parseFloat(order.total);
-                        const receipt = callback.mpesaReceiptNumber || "N/A";
+                        const amount = parsed.amount ?? parseFloat(order.total);
+                        const receipt = parsed.mpesaReceiptNumber || "N/A";
 
                         await recordTransaction(client, {
                             orgId: order.org_id,
@@ -249,21 +275,23 @@ export async function handleMpesaCallback(
                 } else {
                     await markOrderPaymentFailedTransactional(client, order.id);
                 }
-            } else if (callback.isSuccess && existing.customer_id) {
+            } else if (parsed.isSuccess && existing.customer_id) {
                 await recordTransaction(client, {
                     orgId: existing.org_id,
                     customerId: existing.customer_id,
                     type: "payment",
-                    amount: callback.amount ?? parseFloat(existing.amount),
-                    description: `M-Pesa payment — receipt ${callback.mpesaReceiptNumber ?? "N/A"}`,
+                    amount: parsed.amount ?? parseFloat(existing.amount),
+                    description: `M-Pesa payment — receipt ${parsed.mpesaReceiptNumber ?? "N/A"}`,
                     createdBy: null
                 });
             }
         }
 
         await client.query("COMMIT");
-    } catch (err) {
+        await markCallbackProcessed(auditId, true, null);
+    } catch (err: any) {
         await client.query("ROLLBACK");
+        await markCallbackProcessed(auditId, false, err.message || "Database update failed.");
         throw err;
     } finally {
         client.release();

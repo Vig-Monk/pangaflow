@@ -1,6 +1,12 @@
+// =============================================================================
+// soko-api/src/middleware/errorHandler.ts
+// Global Express error handler utilizing validated env configuration.
+// =============================================================================
+
 import { ErrorRequestHandler, Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/error';
 import { error as sendErrorResponse } from '../utils/response';
+import { env } from '../config/env';
 import pino from 'pino';
 
 const logger = pino();
@@ -20,11 +26,10 @@ export const errorHandler: ErrorRequestHandler = (
     } else {
       logger.warn({ err, reqId }, 'Operational client-side warning');
     }
-    sendErrorResponse(res, err.statusCode, err.message);
+    sendErrorResponse(res, err.statusCode, err.message, err.details);
     return;
   }
 
-  // Fallback for non-operational or unhandled programming crashes
   logger.error(
     {
       err: {
@@ -36,7 +41,7 @@ export const errorHandler: ErrorRequestHandler = (
     'Unhandled fatal exception'
   );
 
-  const isProduction = process.env.NODE_ENV === 'production';
+  const isProduction = env.NODE_ENV === 'production';
   const message = isProduction
     ? 'An unexpected error occurred. Please try again later.'
     : err.message;

@@ -17,6 +17,20 @@ export interface ProductImage {
     sort_order: number;
 }
 
+export interface ProductVariant {
+    id?: string;
+    product_id?: string;
+    title: string;
+    sku: string | null;
+    options: Record<string, string>;
+    price: string | number;
+    cost_price: string | number;
+    stock: number;
+    low_stock_at: number;
+    image_url: string | null;
+    is_active?: boolean;
+}
+
 export interface Product {
     id: string;
     org_id: string;
@@ -32,6 +46,7 @@ export interface Product {
     created_at: string;
     updated_at: string;
     images: ProductImage[];
+    variants?: ProductVariant[];
 }
 
 export interface InventoryItem {
@@ -42,6 +57,7 @@ export interface InventoryItem {
     stock: number;
     low_stock_at: number;
     updated_at: string;
+    variants_count: number;
 }
 
 export interface Category {
@@ -57,6 +73,19 @@ export interface CloudinarySignature {
     cloudName: string;
 }
 
+export interface CreateVariantInput {
+    id?: string;
+    title: string;
+    sku?: string | null;
+    options?: Record<string, string>;
+    price: number;
+    cost_price?: number;
+    stock: number;
+    low_stock_at?: number;
+    image_url?: string | null;
+    is_active?: boolean;
+}
+
 export interface CreateProductInput {
     name: string;
     category_id?: string | null;
@@ -66,6 +95,7 @@ export interface CreateProductInput {
     description?: string | null;
     cost_price?: number | null;
     images: Array<{ image_url: string; image_public_id: string }>;
+    variants?: CreateVariantInput[];
     publish?: boolean;
 }
 

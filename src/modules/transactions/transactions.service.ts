@@ -34,6 +34,8 @@ export const SmartSaleSchema = z.object({
     phone: z.string().max(20).optional(),
     address: z.string().max(500).optional(),
   }).optional(),
+  productId: z.string().uuid().optional(),
+  variantId: z.string().uuid().optional(),
   amount: z.number().positive('Sale amount must be greater than zero'),
   description: z.string().max(500).optional(),
   paymentMode: z.enum(['credit', 'cash', 'mpesa_manual', 'mpesa_stk']).default('credit'),
@@ -120,6 +122,7 @@ export async function smartSale(
   try {
     await client.query('BEGIN');
 
+    // 1. Resolve or Quick-Create Customer Inline
     let customerId: string;
     let customerName: string;
     let customerPhone: string | null = null;
@@ -142,7 +145,36 @@ export async function smartSale(
       customerPhone = custRes.rows[0].phone;
     }
 
-    const saleDescription = data.description?.trim() || (data.paymentMode === 'credit' ? 'Sale on credit (Deni)' : 'Sale recorded');
+    // 2. Decrement variant or product inventory if catalog item was sold at POS
+    if (data.variantId) {
+      await client.query(
+        `UPDATE product_variants
+         SET    stock = GREATEST(0, stock - 1),
+                updated_at = NOW()
+         WHERE  id = $1 AND org_id = $2`,
+        [data.variantId, orgId]
+      );
+      if (data.productId) {
+        await client.query(
+          `UPDATE inventory
+           SET    stock = GREATEST(0, stock - 1),
+                  updated_at = NOW()
+           WHERE  product_id = $1`,
+          [data.productId]
+        );
+      }
+    } else if (data.productId) {
+      await client.query(
+        `UPDATE inventory
+         SET    stock = GREATEST(0, stock - 1),
+                updated_at = NOW()
+         WHERE  product_id = $1`,
+        [data.productId]
+      );
+    }
+
+    // 3. Record Sale Transaction
+    const saleDescription = data.description?.trim() || (data.paymentMode === 'credit' ? 'Sale on credit (Deni)' : 'POS Sale recorded');
     const saleTransaction = await recordTransaction(client, {
       orgId,
       customerId,
@@ -156,6 +188,7 @@ export async function smartSale(
     let checkoutRequestId: string | undefined;
     let customerMessage: string | undefined;
 
+    // 4. Handle Settlement Mode
     if (data.paymentMode === 'cash') {
       paymentTransaction = await recordTransaction(client, {
         orgId,

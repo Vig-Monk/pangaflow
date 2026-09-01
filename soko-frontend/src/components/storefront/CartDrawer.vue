@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/components/storefront/CartDrawer.vue
-// Simplified customer slide-over cart drawer with clean dividers and typography.
+// Slide-over cart drawer with variant badges and compound keying.
 // =============================================================================
 
 import { computed } from 'vue';
@@ -9,7 +9,13 @@ import { useRoute, useRouter } from 'vue-router';
 import { useCartStore } from '@/stores/cart';
 import QuantityStepper from '@/components/ui/QuantityStepper.vue';
 import Button from '@/components/ui/Button.vue';
-import { X, Trash2, ArrowRight } from 'lucide-vue-next';
+import {
+  ShoppingBag,
+  X,
+  Trash2,
+  ArrowRight,
+  ShieldCheck,
+} from 'lucide-vue-next';
 
 interface Props {
   open: boolean;
@@ -31,12 +37,12 @@ function formatCurrency(value: number): string {
   return `KES ${value.toLocaleString('en-KE', { maximumFractionDigits: 0 })}`;
 }
 
-function handleQuantityChange(productId: string, quantity: number): void {
-  cartStore.updateQuantity(productId, quantity);
+function handleQuantityChange(productId: string, quantity: number, variantId?: string | null): void {
+  cartStore.updateQuantity(productId, quantity, undefined, variantId);
 }
 
-function handleRemoveItem(productId: string): void {
-  cartStore.removeItem(productId);
+function handleRemoveItem(productId: string, variantId?: string | null): void {
+  cartStore.removeItem(productId, variantId);
 }
 
 function handleProceedToCheckout(): void {
@@ -52,59 +58,90 @@ function handleProceedToCheckout(): void {
   <Teleport to="body">
     <Transition name="drawer-fade">
       <div v-if="open" class="drawer-backdrop" @click.self="emit('close')">
-        <div class="drawer-panel" role="dialog" aria-modal="true" aria-label="Shopping cart">
+        <div
+          class="cart-drawer-panel"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Shopping Cart"
+        >
           <!-- Header -->
           <header class="drawer-header">
-            <h2 class="drawer-title">Your Cart ({{ cartStore.totalItems }})</h2>
-            <button type="button" class="close-btn" aria-label="Close cart" @click="emit('close')">
+            <div class="header-title-row">
+              <ShoppingBag :size="20" class="text-ink" />
+              <h2 class="drawer-title">Your Cart</h2>
+              <span v-if="cartStore.totalItems > 0" class="items-count-badge tabular-figure">
+                {{ cartStore.totalItems }}
+              </span>
+            </div>
+            <button
+              type="button"
+              class="close-btn"
+              aria-label="Close cart"
+              @click="emit('close')"
+            >
               <X :size="20" />
             </button>
           </header>
 
           <!-- Empty State -->
-          <div v-if="cartStore.isEmpty" class="drawer-empty">
-            <p class="empty-title">Your cart is empty</p>
-            <p class="empty-sub">Explore our catalog and add items you want to purchase.</p>
+          <div v-if="cartStore.isEmpty" class="drawer-empty-state">
+            <div class="empty-icon-wrap">
+              <ShoppingBag :size="40" class="text-muted" />
+            </div>
+            <h3 class="empty-title">Your cart is empty</h3>
+            <p class="empty-desc">Explore products in our catalog and add items you want to purchase.</p>
             <Button variant="secondary" size="md" @click="emit('close')">
-              Start shopping
+              Start Shopping
             </Button>
           </div>
 
-          <!-- Items List -->
+          <!-- Cart Items List -->
           <template v-else>
             <div class="drawer-items-list">
               <div
                 v-for="item in cartStore.items"
-                :key="item.product_id"
-                class="cart-item-row"
+                :key="`${item.product_id}_${item.variant_id || 'base'}`"
+                class="drawer-item"
               >
-                <div class="item-thumb-box">
-                  <img v-if="item.image_url" :src="item.image_url" :alt="item.name" class="thumb-img" />
+                <div class="item-thumb">
+                  <img
+                    v-if="item.image_url"
+                    :src="item.image_url"
+                    :alt="item.name"
+                    class="thumb-img"
+                  />
+                  <ShoppingBag v-else :size="20" class="text-muted" />
                 </div>
 
-                <div class="item-info-col">
-                  <div class="item-header-row">
-                    <span class="item-name">{{ item.name }}</span>
+                <div class="item-info">
+                  <div class="item-title-row">
+                    <div class="item-heading-stack">
+                      <h4 class="item-name">{{ item.name }}</h4>
+                      <span v-if="item.variant_title" class="item-variant-tag">
+                        {{ item.variant_title }}
+                      </span>
+                    </div>
+
                     <button
                       type="button"
-                      class="remove-btn"
+                      class="item-delete-btn"
                       title="Remove item"
-                      @click="handleRemoveItem(item.product_id)"
+                      @click="handleRemoveItem(item.product_id, item.variant_id)"
                     >
                       <Trash2 :size="14" />
                     </button>
                   </div>
 
-                  <span class="item-unit-price font-mono">{{ formatCurrency(item.price) }}</span>
+                  <p class="item-price tabular-figure">{{ formatCurrency(item.price) }}</p>
 
-                  <div class="item-actions-row">
+                  <div class="item-actions">
                     <QuantityStepper
                       :model-value="item.quantity"
                       size="sm"
-                      :max="10"
-                      @update:model-value="(qty) => handleQuantityChange(item.product_id, qty)"
+                      :max="item.stock !== undefined ? Math.min(10, Math.max(1, item.stock)) : 10"
+                      @update:model-value="(qty) => handleQuantityChange(item.product_id, qty, item.variant_id)"
                     />
-                    <span class="item-subtotal font-mono">
+                    <span class="item-line-total tabular-figure font-semibold">
                       {{ formatCurrency(item.price * item.quantity) }}
                     </span>
                   </div>
@@ -112,20 +149,27 @@ function handleProceedToCheckout(): void {
               </div>
             </div>
 
-            <!-- Footer -->
+            <!-- Footer & Checkout CTA -->
             <footer class="drawer-footer">
               <div class="subtotal-row">
                 <span class="subtotal-label">Subtotal</span>
-                <span class="subtotal-val font-mono">{{ formatCurrency(cartStore.subtotal) }}</span>
+                <span class="subtotal-val tabular-figure text-ink">{{ formatCurrency(cartStore.subtotal) }}</span>
               </div>
-              <p class="delivery-notice">Delivery options and fees confirmed at checkout.</p>
+
+              <p class="delivery-hint">Delivery options and fees confirmed at checkout.</p>
+
+              <div class="trust-line">
+                <ShieldCheck :size="14" class="text-teal" />
+                <span>Direct merchant transaction with live tracking</span>
+              </div>
+
               <Button
                 variant="primary"
                 size="lg"
                 class="checkout-action-btn"
                 @click="handleProceedToCheckout"
               >
-                Proceed to checkout <ArrowRight :size="16" />
+                Proceed to Checkout <ArrowRight :size="16" />
               </Button>
             </footer>
           </template>
@@ -143,24 +187,31 @@ function handleProceedToCheckout(): void {
   backdrop-filter: blur(2px);
   display: flex;
   justify-content: flex-end;
-  z-index: 200;
+  z-index: 1000;
 }
 
-.drawer-panel {
-  background: var(--store-surface, #FFFFFF);
-  color: var(--store-text, #171514);
+@media (max-width: 640px) {
+  .drawer-backdrop {
+    align-items: flex-end;
+  }
+}
+
+.cart-drawer-panel {
+  background: var(--color-surface);
   width: 100%;
   max-width: 420px;
   height: 100%;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.16);
-  transition: background 200ms ease;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
 }
 
 @media (max-width: 640px) {
-  .drawer-panel {
+  .cart-drawer-panel {
     max-width: 100%;
+    height: 85vh;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   }
 }
 
@@ -168,75 +219,114 @@ function handleProceedToCheckout(): void {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 20px 24px;
-  border-bottom: 1px solid var(--store-border, #E8E4E0);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.header-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .drawer-title {
-  font-family: var(--font-display, 'Fraunces', Georgia, serif);
-  font-size: 18px;
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.items-count-badge {
+  background: var(--color-ink);
+  color: var(--color-text-inverse);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
 }
 
 .close-btn {
   background: transparent;
   border: none;
-  color: var(--store-text-muted, #8B8581);
+  color: var(--color-text-muted);
   cursor: pointer;
-  padding: 4px;
+  padding: var(--space-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
 }
-
 .close-btn:hover {
-  color: var(--store-text, #171514);
+  background: var(--color-bg);
+  color: var(--color-text);
 }
 
 /* Empty State */
-.drawer-empty {
+.drawer-empty-state {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 40px 24px;
-  gap: 12px;
+  padding: var(--space-8);
+  gap: var(--space-3);
+}
+
+.empty-icon-wrap {
+  width: 72px;
+  height: 72px;
+  background: var(--color-bg);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: var(--space-2);
 }
 
 .empty-title {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--color-text);
 }
 
-.empty-sub {
-  font-size: 13px;
-  color: var(--store-text-secondary, #6F6A67);
+.empty-desc {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  line-height: var(--leading-relaxed);
   max-width: 260px;
-  line-height: 1.5;
-  margin-bottom: 12px;
 }
 
 /* Items List */
 .drawer-items-list {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 24px;
+  padding: var(--space-4) var(--space-5);
   display: flex;
   flex-direction: column;
+  gap: var(--space-3);
 }
 
-.cart-item-row {
+.drawer-item {
   display: flex;
-  gap: 16px;
-  padding: 16px 0;
-  border-bottom: 1px solid var(--store-border, #E8E4E0);
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  align-items: center;
 }
 
-.item-thumb-box {
-  width: 64px;
-  height: 64px;
-  background-color: var(--store-soft, #F4F1EE);
-  border-radius: 8px;
+.item-thumb {
+  width: 60px;
+  height: 60px;
+  background: var(--color-surface);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
   overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 
@@ -246,104 +336,132 @@ function handleProceedToCheckout(): void {
   object-fit: cover;
 }
 
-.item-info-col {
+.item-info {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
 }
 
-.item-header-row {
+.item-title-row {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--space-2);
+}
+
+.item-heading-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
 }
 
 .item-name {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--color-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.remove-btn {
+.item-variant-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--brand-primary);
+  background: color-mix(in srgb, var(--brand-primary) 8%, var(--color-surface));
+  border: 1px solid color-mix(in srgb, var(--brand-primary) 20%, transparent);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  width: fit-content;
+}
+
+.item-delete-btn {
   background: transparent;
   border: none;
-  color: var(--store-text-muted, #8B8581);
+  color: var(--color-text-muted);
   cursor: pointer;
   padding: 0;
 }
-
-.remove-btn:hover {
-  color: var(--store-accent, #D91E4E);
+.item-delete-btn:hover {
+  color: var(--color-market-clay);
 }
 
-.item-unit-price {
-  font-size: 12px;
-  color: var(--store-text-secondary, #6F6A67);
+.item-price {
+  font-size: 11px;
+  color: var(--color-text-muted);
 }
 
-.item-actions-row {
+.item-actions {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
-.item-subtotal {
-  font-size: 13px;
-  font-weight: 600;
+.item-line-total {
+  font-size: var(--text-xs);
+  color: var(--color-text);
 }
 
 /* Footer */
 .drawer-footer {
-  padding: 20px 24px;
-  border-top: 1px solid var(--store-border, #E8E4E0);
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-2);
 }
 
 .subtotal-row {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
 }
 
 .subtotal-label {
-  font-size: 14px;
-  color: var(--store-text-secondary, #6F6A67);
-}
-
-.subtotal-val {
-  font-size: 18px;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
   font-weight: 600;
 }
 
-.delivery-notice {
-  font-size: 12px;
-  color: var(--store-text-muted, #8B8581);
+.subtotal-val {
+  font-size: var(--text-lg);
+  font-weight: 800;
+}
+
+.delivery-hint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.trust-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-top: 2px;
 }
 
 .checkout-action-btn {
   width: 100%;
-  background-color: var(--store-accent, #D91E4E);
-  color: #FFFFFF;
-  border-radius: 10px;
+  margin-top: var(--space-2);
 }
 
 /* Animations */
 .drawer-fade-enter-active,
 .drawer-fade-leave-active {
-  transition: opacity 200ms ease;
+  transition: opacity var(--duration-base) var(--ease-standard);
 }
 
-.drawer-fade-enter-active .drawer-panel,
-.drawer-fade-leave-active .drawer-panel {
-  transition: transform 250ms cubic-bezier(0.16, 1, 0.3, 1);
+.drawer-fade-enter-active .cart-drawer-panel,
+.drawer-fade-leave-active .cart-drawer-panel {
+  transition: transform var(--duration-base) var(--ease-standard);
 }
 
 .drawer-fade-enter-from,
@@ -351,7 +469,16 @@ function handleProceedToCheckout(): void {
   opacity: 0;
 }
 
-.drawer-fade-enter-from .drawer-panel {
+.drawer-fade-enter-from .cart-drawer-panel {
   transform: translateX(100%);
 }
+
+@media (max-width: 640px) {
+  .drawer-fade-enter-from .cart-drawer-panel {
+    transform: translateY(100%);
+  }
+}
+
+.text-teal { color: var(--color-ledger-green); }
+.text-ink { color: var(--color-ink); }
 </style>

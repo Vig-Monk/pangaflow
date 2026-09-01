@@ -1,15 +1,19 @@
 // =============================================================================
-// kauntaos-frontend/src/stores/cart.ts
+// soko-frontend/src/stores/cart.ts
+// Compound-keyed Cart Store supporting distinct product variant lines & persistence.
 // =============================================================================
 
 import { defineStore } from 'pinia';
 
 export interface CartItem {
   product_id: string;
+  variant_id?: string | null;
+  variant_title?: string | null;
   name: string;
   image_url: string | null;
   price: number;
   quantity: number;
+  stock?: number;
 }
 
 export interface CheckoutDraftState {
@@ -29,8 +33,8 @@ export interface CheckoutDraftState {
   paymentMethod: string;
 }
 
-const CART_PREFIX = 'kauntaos_cart_';
-const CHECKOUT_PREFIX = 'kauntaos_checkout_state_';
+const CART_PREFIX = 'soko_cart_';
+const CHECKOUT_PREFIX = 'soko_checkout_state_';
 
 function getCartStorageKey(slug: string): string {
   return `${CART_PREFIX}${slug.toLowerCase().trim()}`;
@@ -38,6 +42,12 @@ function getCartStorageKey(slug: string): string {
 
 function getCheckoutStorageKey(slug: string): string {
   return `${CHECKOUT_PREFIX}${slug.toLowerCase().trim()}`;
+}
+
+function matchesItem(item: CartItem, productId: string, variantId?: string | null): boolean {
+  const itemVariant = item.variant_id || null;
+  const targetVariant = variantId || null;
+  return item.product_id === productId && itemVariant === targetVariant;
 }
 
 function loadCartForStore(slug: string): CartItem[] {
@@ -137,38 +147,49 @@ export const useCartStore = defineStore('cart', {
       imageUrl: string | null,
       price: number,
       quantity: number,
-      maxStock?: number
+      maxStock?: number,
+      variantId?: string | null,
+      variantTitle?: string | null
     ): void {
       this.initForStore(storeSlug);
 
       const limit = maxStock !== undefined ? Math.min(10, Math.max(1, maxStock)) : 10;
-      const existing = this.items.find((item) => item.product_id === productId);
+      const existing = this.items.find((item) => matchesItem(item, productId, variantId));
 
       if (existing) {
         existing.quantity = Math.min(limit, existing.quantity + quantity);
       } else {
         this.items.push({
           product_id: productId,
+          variant_id: variantId || null,
+          variant_title: variantTitle || null,
           name,
           image_url: imageUrl,
           price,
           quantity: Math.min(limit, quantity),
+          stock: maxStock,
         });
       }
       saveCartForStore(this.storeSlug, this.items);
     },
 
-    updateQuantity(productId: string, quantity: number, maxStock?: number): void {
-      const item = this.items.find((item) => item.product_id === productId);
+    updateQuantity(
+      productId: string,
+      quantity: number,
+      maxStock?: number,
+      variantId?: string | null
+    ): void {
+      const item = this.items.find((item) => matchesItem(item, productId, variantId));
       if (item) {
-        const limit = maxStock !== undefined ? Math.min(10, Math.max(1, maxStock)) : 10;
+        const boundStock = maxStock !== undefined ? maxStock : item.stock;
+        const limit = boundStock !== undefined ? Math.min(10, Math.max(1, boundStock)) : 10;
         item.quantity = Math.max(1, Math.min(limit, quantity));
         saveCartForStore(this.storeSlug, this.items);
       }
     },
 
-    removeItem(productId: string): void {
-      this.items = this.items.filter((item) => item.product_id !== productId);
+    removeItem(productId: string, variantId?: string | null): void {
+      this.items = this.items.filter((item) => !matchesItem(item, productId, variantId));
       saveCartForStore(this.storeSlug, this.items);
     },
 

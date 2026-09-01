@@ -1,11 +1,12 @@
 // =============================================================================
-// src/modules/auth/auth.service.ts
-// Business logic for auth: hashing, JWT issuance, refresh rotation.
+// soko-api/src/modules/auth/auth.service.ts
+// Business logic for auth: password hashing, JWT generation, and refresh rotation.
 // =============================================================================
 
 import bcrypt from 'bcryptjs';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import crypto from 'crypto';
+import { PoolClient } from 'pg';
 import { pool } from '../../config/db';
 import { env } from '../../config/env';
 import { AppError } from '../../utils/error';
@@ -23,10 +24,6 @@ import {
   revokeRefreshToken,
   storeRefreshToken,
 } from './auth.queries';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export interface RegisterInput {
   name: string;
@@ -61,25 +58,10 @@ export interface JwtPayload {
 const BCRYPT_ROUNDS = 12;
 const REFRESH_TOKEN_BYTES = 64;
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Hashes a refresh token with SHA-256 before storage/lookup. Refresh tokens
- * are high-entropy random strings, not low-entropy user passwords — a fast
- * cryptographic hash is correct here. bcrypt's deliberate slowness exists to
- * resist brute-forcing short, guessable secrets, which does not apply to a
- * 512-bit random token.
- */
 function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
-/**
- * Generates a URL-safe slug from an org name, appending a numeric suffix on
- * collision. e.g. "Joy's Cakes" -> "joys-cakes", then "joys-cakes-2".
- */
 async function generateUniqueSlug(orgName: string): Promise<string> {
   const base = orgName
     .toLowerCase()
@@ -94,8 +76,6 @@ async function generateUniqueSlug(orgName: string): Promise<string> {
   let slug = candidate;
   let suffix = 1;
 
-  // Bounded loop: a pathological run of collisions on one base slug becomes
-  // an explicit error instead of an infinite loop.
   while (suffix < 1000) {
     const existing = await findOrgBySlug(slug);
     if (!existing) {
@@ -108,25 +88,19 @@ async function generateUniqueSlug(orgName: string): Promise<string> {
   throw new AppError('Could not generate a unique organization slug', 500, false);
 }
 
-/**
- * Strips password_hash before a User is ever returned outside this service.
- */
 function toSafeUser(user: User): Omit<User, 'password_hash'> {
   const { password_hash: _passwordHash, ...safeUser } = user;
   return safeUser;
 }
 
 /**
- * Issues a new access + refresh token pair and persists the refresh token
- * hash. Opens and releases its own single-statement client — this is not
- * used inside the register transaction (register writes its own refresh
- * token row directly, in the same BEGIN/COMMIT block as the user/org
- * inserts), so there is no double-write risk here.
+ * Issues and persists access/refresh token pair. Reusable in or out of transactions.
  */
-async function generateTokens(
+async function generateAndPersistTokens(
   userId: string,
   orgId: string,
-  role: Role
+  role: Role,
+  client?: PoolClient
 ): Promise<TokenPair> {
   const payload: JwtPayload = { userId, orgId, role };
 
@@ -140,28 +114,21 @@ async function generateTokens(
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + env.REFRESH_TOKEN_EXPIRES_DAYS);
 
-  const client = await pool.connect();
-  try {
+  if (client) {
     await storeRefreshToken(client, { userId, tokenHash, expiresAt });
-  } finally {
-    client.release();
+  } else {
+    const standaloneClient = await pool.connect();
+    try {
+      await storeRefreshToken(standaloneClient, { userId, tokenHash, expiresAt });
+    } finally {
+      standaloneClient.release();
+    }
   }
 
   return { accessToken, refreshToken };
 }
 
-// ---------------------------------------------------------------------------
-// register
-// ---------------------------------------------------------------------------
-
-/**
- * Registers a new user + organization + org_member + initial refresh token
- * in a single atomic pg transaction. Any failure rolls back all of it —
- * there is no partial state where a user exists without an org.
- */
-
-
-    export async function register(data: RegisterInput): Promise<AuthResult> {
+export async function register(data: RegisterInput): Promise<AuthResult> {
   const existing = await findUserByEmail(data.email);
   if (existing) {
     throw new AppError('An account with this email already exists', 409);
@@ -175,57 +142,49 @@ async function generateTokens(
   try {
     await client.query('BEGIN');
 
+    // 1. Create User
     const user = await createUser(client, {
       email: data.email,
       passwordHash,
       name: data.name,
     });
 
+    // 2. Create Organization
     const org = await createOrg(client, {
       name: data.orgName,
       slug,
       businessType: data.businessType,
     });
 
+    // 3. Auto-provision initial published store record for the storefront
+    await client.query(
+      `INSERT INTO stores (org_id, slug, name, status)
+       VALUES ($1, $2, $3, 'published')
+       ON CONFLICT (org_id) DO NOTHING`,
+      [org.id, slug, data.orgName]
+    );
+
+    // 4. Create Owner Membership
     const member = await createOrgMember(client, {
       orgId: org.id,
       userId: user.id,
       role: 'owner',
     });
 
-    const payload: JwtPayload = { userId: user.id, orgId: org.id, role: member.role };
-
-    const accessToken = jwt.sign(payload, env.JWT_SECRET, {
-      expiresIn: env.JWT_EXPIRES_IN as SignOptions['expiresIn'],
-    });
-
-    const refreshToken = crypto.randomBytes(REFRESH_TOKEN_BYTES).toString('hex');
-    const tokenHash = hashToken(refreshToken);
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + env.REFRESH_TOKEN_EXPIRES_DAYS);
-
-    await storeRefreshToken(client, { userId: user.id, tokenHash, expiresAt });
+    // 5. Generate and persist token pair
+    const tokens = await generateAndPersistTokens(user.id, org.id, member.role, client);
 
     await client.query('COMMIT');
 
     return {
       user: toSafeUser(user),
       org,
-      tokens: { accessToken, refreshToken },
+      tokens,
     };
-  } catch (err) {
+  } catch (err: any) {
     await client.query('ROLLBACK');
 
-    // Unique-violation on users.email: race between the existence check
-    // above and this insert (or a users row with no org membership, which
-    // the existence check's INNER JOIN would miss). Surface it as a clean
-    // 409 instead of an unhandled 500.
-    if (
-      err &&
-      typeof err === 'object' &&
-      'code' in err &&
-      (err as { code?: string }).code === '23505'
-    ) {
+    if (err && typeof err === 'object' && 'code' in err && err.code === '23505') {
       throw new AppError('An account with this email already exists', 409);
     }
 
@@ -234,10 +193,6 @@ async function generateTokens(
     client.release();
   }
 }
-
-// ---------------------------------------------------------------------------
-// login
-// ---------------------------------------------------------------------------
 
 export async function login(data: LoginInput): Promise<AuthResult> {
   const userWithOrg = await findUserByEmail(data.email);
@@ -253,12 +208,10 @@ export async function login(data: LoginInput): Promise<AuthResult> {
 
   const org = await findOrgById(userWithOrg.org_id);
   if (!org) {
-    // Membership row pointed at an org that no longer exists — data
-    // integrity issue, not a client error. Logged as 500, not exposed as 404.
     throw new AppError('Organization not found', 500, false);
   }
 
-  const tokens = await generateTokens(userWithOrg.id, userWithOrg.org_id, userWithOrg.role);
+  const tokens = await generateAndPersistTokens(userWithOrg.id, userWithOrg.org_id, userWithOrg.role);
 
   const { org_id: _orgId, role: _role, ...userFields } = userWithOrg;
 
@@ -269,20 +222,6 @@ export async function login(data: LoginInput): Promise<AuthResult> {
   };
 }
 
-// ---------------------------------------------------------------------------
-// refreshTokens — rotation with reuse detection
-// ---------------------------------------------------------------------------
-
-/**
- * Validates an incoming refresh token, rotates it (revoke old, issue new),
- * and returns a new token pair.
- *
- * Reuse detection: if the presented token is already revoked, this is
- * treated as a signal that a previously-issued token has leaked and is
- * being replayed by an attacker. Every refresh token for that user is
- * revoked in response, forcing a fresh login on every device. This is the
- * standard mitigation under a rotation scheme.
- */
 export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
   const tokenHash = hashToken(refreshToken);
   const tokenRow = await findRefreshToken(tokenHash);
@@ -306,16 +245,10 @@ export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
     throw new AppError('User account no longer exists', 401);
   }
 
-  // Revoke the presented token before issuing its replacement — this is
-  // rotation, not reuse. The new token is the only valid one going forward.
   await revokeRefreshToken(tokenHash);
 
-  return generateTokens(userWithOrg.id, userWithOrg.org_id, userWithOrg.role);
+  return generateAndPersistTokens(userWithOrg.id, userWithOrg.org_id, userWithOrg.role);
 }
-
-// ---------------------------------------------------------------------------
-// logout
-// ---------------------------------------------------------------------------
 
 export async function logout(refreshToken: string): Promise<void> {
   const tokenHash = hashToken(refreshToken);

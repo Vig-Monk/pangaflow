@@ -1,9 +1,10 @@
 // =============================================================================
-// src/modules/auth/auth.routes.ts
-// Route wiring for the auth module. Mounted at /api/v1/auth in app.ts.
+// soko-api/src/modules/auth/auth.routes.ts
+// Route wiring for auth with scoped rate limiting.
 // =============================================================================
 
 import { Router } from 'express';
+import { authLimiter } from '../../middleware/rateLimiter';
 import {
   loginHandler,
   logoutHandler,
@@ -13,9 +14,9 @@ import {
 
 const router = Router();
 
-router.post('/register', registerHandler);
-router.post('/login', loginHandler);
-router.post('/refresh', refreshHandler);
+router.post('/register', authLimiter, registerHandler);
+router.post('/login', authLimiter, loginHandler);
+router.post('/refresh', authLimiter, refreshHandler);
 router.post('/logout', logoutHandler);
 
 export default router;

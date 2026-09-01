@@ -1,5 +1,5 @@
 // =============================================================================
-// src/modules/public/public.controller.ts
+// soko-api/src/modules/public/public.controller.ts
 // =============================================================================
 
 import { Request, Response, NextFunction } from 'express';
@@ -77,7 +77,12 @@ export async function getPublicOrderDetailsHandler(
   next: NextFunction
 ): Promise<void> {
   try {
-    const orderDetails = await publicService.getPublicOrderDetails(req.params.storeSlug, req.params.orderId);
+    const verifyingPhone = typeof req.query.phone === 'string' ? req.query.phone : undefined;
+    const orderDetails = await publicService.getPublicOrderDetails(
+      req.params.storeSlug,
+      req.params.orderId,
+      verifyingPhone
+    );
     success(res, orderDetails);
   } catch (err) {
     next(err);

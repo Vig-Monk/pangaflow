@@ -1,5 +1,6 @@
 // =============================================================================
-// src/tests/e2e-integration.test.ts (UPDATED - STEP 1 REGRESSION ASSERTION)
+// soko-api/src/tests/e2e-integration.test.ts
+// Sanitized integration suite registering an ephemeral test merchant dynamically.
 // =============================================================================
 
 import axios from "axios";
@@ -12,14 +13,18 @@ async function runE2EIntegrationTest() {
     );
 
     try {
-        console.log("1. [Merchant] Authenticating...");
-        const loginRes = await axios.post(`${API_BASE}/auth/login`, {
-            email: "samuelwmusioki@gmail.com",
-            password: "12345678"
+        const testEmail = `merchant.test.${Date.now()}@soko.app`;
+        console.log(`1. [Merchant] Registering ephemeral test account: ${testEmail}...`);
+        const registerRes = await axios.post(`${API_BASE}/auth/register`, {
+            name: "Test Merchant Admin",
+            email: testEmail,
+            password: "TestPassword123!",
+            orgName: "Ephemeral Test Bookstore",
+            businessType: "books",
         });
 
-        const token = loginRes.data.data.tokens.accessToken;
-        const orgId = loginRes.data.data.org.id;
+        const token = registerRes.data.data.tokens.accessToken;
+        const orgId = registerRes.data.data.org.id;
         console.log(`   ✓ Authenticated. Org ID: ${orgId}`);
 
         const authHeaders = { headers: { Authorization: `Bearer ${token}` } };
@@ -40,16 +45,12 @@ async function runE2EIntegrationTest() {
         console.log("   ✓ Cloudinary upload signature verified.");
 
         console.log("3. [Merchant] Creating catalog category...");
-        const catRes = await axios.get(
+        const catRes = await axios.post(
             `${API_BASE}/products/categories`,
+            { name: "Fiction" },
             authHeaders
         );
-        let categoryId = catRes.data.data[0]?.id;
-
-        if (!categoryId) {
-            console.log("   ℹ No categories found.");
-            return;
-        }
+        const categoryId = catRes.data.data.id;
         console.log(`   ✓ Using Category ID: ${categoryId}`);
 
         console.log("4. [Merchant] Configuring public storefront settings...");
@@ -81,8 +82,7 @@ async function runE2EIntegrationTest() {
                     publish: true,
                     images: [
                         {
-                            image_url:
-                                "https://res.cloudinary.com/test/image1.jpg",
+                            image_url: "https://res.cloudinary.com/test/image1.jpg",
                             image_public_id: "test_id_1"
                         }
                     ]
@@ -178,4 +178,6 @@ async function runE2EIntegrationTest() {
     }
 }
 
-runE2EIntegrationTest();
+if (require.main === module) {
+  runE2EIntegrationTest();
+}

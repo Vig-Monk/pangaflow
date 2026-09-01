@@ -1,14 +1,15 @@
-// src/middleware/auth.ts
+// =============================================================================
+// soko-api/src/middleware/auth.ts
+// Dual Authentication Guard: Supports User JWTs & Master Organization API Keys.
+// =============================================================================
+
 import { RequestHandler } from 'express';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env';
 import { AppError } from '../utils/error';
 import { findUserById } from '../modules/auth/auth.queries';
 import { JwtPayload } from '../modules/auth/auth.service';
-
-// ---------------------------------------------------------------------------
-// Runtime type guard — narrows jwt.verify() result to our JwtPayload shape
-// ---------------------------------------------------------------------------
+import { pool } from '../config/db';
 
 function isAppJwtPayload(decoded: unknown): decoded is JwtPayload {
   if (typeof decoded !== 'object' || decoded === null) return false;
@@ -19,12 +20,6 @@ function isAppJwtPayload(decoded: unknown): decoded is JwtPayload {
     typeof c.role   === 'string'
   );
 }
-
-// ---------------------------------------------------------------------------
-// verifyToken
-// Attaches req.user, req.orgId, req.role via the existing express.d.ts
-// augmentation. Throws AppError — caught by the global errorHandler.
-// ---------------------------------------------------------------------------
 
 export const verifyToken: RequestHandler = async (req, _res, next) => {
   try {
@@ -40,6 +35,23 @@ export const verifyToken: RequestHandler = async (req, _res, next) => {
       throw new AppError('Missing access token', 401);
     }
 
+    // -------------------------------------------------------------------------
+    // Method 1: Permanent Master Org API Key or Admin Secret
+    // -------------------------------------------------------------------------
+    if (token === env.ADMIN_SECRET) {
+      const orgRes = await pool.query<{ id: string }>(
+        `SELECT id FROM organizations WHERE deleted_at IS NULL ORDER BY created_at ASC LIMIT 1`
+      );
+      if (orgRes.rows[0]) {
+        req.orgId = orgRes.rows[0].id;
+        req.role = 'owner';
+        return next();
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Method 2: Standard User/Service JWT
+    // -------------------------------------------------------------------------
     let decoded: unknown;
     try {
       decoded = jwt.verify(token, env.JWT_SECRET);

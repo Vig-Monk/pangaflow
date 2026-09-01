@@ -1,12 +1,12 @@
 // =============================================================================
-// src/utils/geo.ts
+// soko-api/src/utils/geo.ts
 // Server-authoritative zero-cost geometry and distance calculations.
 // =============================================================================
 
 export interface DeliveryFeeConfig {
-  baseFee?: number;            // Base delivery fee in KES (default: 100)
-  feePerKm?: number;           // Surcharge per km beyond base threshold in KES (default: 25)
-  baseThresholdKm?: number;    // Distance included in base fee (default: 3 km)
+  baseFee?: number;             // Base delivery fee in KES (default: 100)
+  feePerKm?: number;            // Surcharge per km beyond base threshold in KES (default: 25)
+  baseThresholdKm?: number;     // Distance included in base fee (default: 2.0 km)
   maxDeliveryRadiusKm?: number; // Maximum radius the merchant delivers to (default: 15 km)
 }
 
@@ -17,8 +17,7 @@ export interface DeliveryFeeCalculation {
 }
 
 /**
- * Computes the spherical distance in kilometers between two sets of GPS coordinates
- * using the Haversine formula (pure server-side math, zero external API costs).
+ * Computes spherical distance in kilometers between two sets of GPS coordinates using the Haversine formula.
  */
 export function computeHaversineDistanceKm(
   lat1: number,
@@ -39,7 +38,6 @@ export function computeHaversineDistanceKm(
     return 0;
   }
 
-  // Quick return for identical coordinates
   if (lat1 === lat2 && lon1 === lon2) {
     return 0;
   }
@@ -63,8 +61,7 @@ export function computeHaversineDistanceKm(
 }
 
 /**
- * Calculates the delivery fee based on computed distance and merchant tier configurations.
- * If distance exceeds the maximum delivery radius or is indeterminate, flags for merchant confirmation.
+ * Calculates delivery fee based on distance and 2 km base threshold.
  */
 export function calculateDeliveryFee(
   distanceKm: number,
@@ -72,7 +69,7 @@ export function calculateDeliveryFee(
 ): DeliveryFeeCalculation {
   const baseFee = config.baseFee ?? 100;
   const feePerKm = config.feePerKm ?? 25;
-  const baseThresholdKm = config.baseThresholdKm ?? 3;
+  const baseThresholdKm = config.baseThresholdKm ?? 2.0;
   const maxDeliveryRadiusKm = config.maxDeliveryRadiusKm ?? 15;
 
   if (distanceKm <= 0 || isNaN(distanceKm)) {

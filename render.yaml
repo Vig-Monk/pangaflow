@@ -1,4 +1,6 @@
+# soko-api/render.yaml
 services:
+  # 1. Express API Web Service
   - type: web
     name: kauntaos-api
     runtime: node
@@ -14,6 +16,11 @@ services:
         value: 3000
       - key: DATABASE_URL
         sync: false
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: kauntaos-redis
+          property: connectionString
       - key: JWT_SECRET
         sync: false
       - key: JWT_EXPIRES_IN
@@ -36,10 +43,27 @@ services:
         sync: false
       - key: FRONTEND_URL
         sync: false
+      - key: MPESA_CREDENTIALS_KEY
+        sync: false
       - key: CLOUDINARY_CLOUD_NAME
         sync: false
       - key: CLOUDINARY_API_KEY
         sync: false
       - key: CLOUDINARY_API_SECRET
         sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        value: flemela-books
     autoDeploy: true
+
+  # 2. Managed Render Redis Instance
+  - type: redis
+    name: kauntaos-redis
+    plan: free
+    region: oregon
+    ipAllowList: [] # Accessible internally by your backend only

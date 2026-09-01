@@ -12,15 +12,16 @@ import * as authService from './auth.service';
 // ---------------------------------------------------------------------------
 // Zod schemas — request body validation
 // z.infer<> carries the validated shape through without re-annotation.
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------
 
 export const RegisterBodySchema = z.object({
   name: z.string().min(1, 'Name is required').max(200),
   email: z.string().email('Invalid email address'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
   orgName: z.string().min(1, 'Organization name is required').max(200),
-  businessType: z.enum(['core', 'shop', 'salon', 'stays', 'market']).default('core'),
+  businessType: z.enum(['core', 'shop', 'salon', 'stays', 'market', 'books']).default('books'),
 });
+
 
 export const LoginBodySchema = z.object({
   email: z.string().email('Invalid email address'),

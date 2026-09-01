@@ -1,18 +1,43 @@
 // =============================================================================
-// src/modules/products/products.controller.ts
+// soko-api/src/modules/products/products.controller.ts
 // =============================================================================
 
 import { Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
 import { success } from '../../utils/response';
 import { AppError } from '../../utils/error';
 import * as productsService from './products.service';
 import * as productsQueries from './products.queries';
+import { findBestBookCover } from '../../services/bookCover.service';
 
 function requireOrgId(req: Request): string {
   if (!req.orgId) {
     throw new AppError('Unauthorized', 401);
   }
   return req.orgId;
+}
+
+const FindCoverQuerySchema = z.object({
+  title: z.string().min(1, 'Book title is required'),
+  author: z.string().optional(),
+});
+
+export async function autoFindBookCoverHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const parsed = FindCoverQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid query parameters', 400);
+    }
+
+    const result = await findBestBookCover(parsed.data.title, parsed.data.author);
+    success(res, result);
+  } catch (err) {
+    next(err);
+  }
 }
 
 export async function uploadSignatureHandler(
@@ -69,7 +94,12 @@ export async function createCategoryHandler(
 ): Promise<void> {
   try {
     const orgId = requireOrgId(req);
-    const category = await productsService.createCategory(orgId, req.body.name);
+    const schema = z.object({ name: z.string().min(1, 'Category name is required').max(100) });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid category name', 400);
+    }
+    const category = await productsService.createCategory(orgId, parsed.data.name);
     success(res, category, undefined, 201);
   } catch (err) {
     next(err);

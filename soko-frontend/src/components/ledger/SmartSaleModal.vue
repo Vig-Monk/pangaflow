@@ -1,14 +1,12 @@
 <script setup lang="ts">
 // =============================================================================
 // soko-frontend/src/components/ledger/SmartSaleModal.vue
-// Complete Point of Sale (POS) terminal modal:
-// - Inline + New Customer quick-creation
-// - 4 Payment Modes: Credit (Debt), Cash in Hand, Manual M-Pesa, and Direct STK Push
-// - Quick currency denomination chips & live 60s M-Pesa countdown timer
+// POS Modal with Catalog item selection, Variant resolution, and automatic stock deduction.
 // =============================================================================
 
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { useCustomersStore } from '@/stores/customers';
+import { useProductsStore, type Product } from '@/stores/products';
 import { usePaymentsStore } from '@/stores/payments';
 import { useToast } from '@/composables/useToast';
 import { apiPost } from '@/services/apiClient';
@@ -25,6 +23,8 @@ import {
   AlertCircle,
   RotateCcw,
   CreditCard,
+  Tag,
+  Layers,
 } from 'lucide-vue-next';
 
 interface Props {
@@ -42,24 +42,28 @@ const emit = defineEmits<{
 }>();
 
 const customersStore = useCustomersStore();
+const productsStore = useProductsStore();
 const paymentsStore = usePaymentsStore();
 const { push: pushToast } = useToast();
 
 type PaymentMode = 'credit' | 'cash' | 'mpesa_manual' | 'mpesa_stk';
 
-// Form State
+// Customer selection state
 const isNewCustomer = ref(false);
 const customerId = ref(props.preselectedCustomerId || '');
 const newCustomerName = ref('');
 const newCustomerPhone = ref('');
+
+// Product / Variant catalog selection state
+const selectedProductId = ref('');
+const selectedVariantId = ref('');
 const amount = ref(0);
 const description = ref('');
 const paymentMode = ref<PaymentMode>('credit');
 const mpesaRef = ref('');
 const stkPhone = ref('');
-const createdCustomerId = ref('');
 
-// UI & Async State
+// UI & Async states
 const isSubmitting = ref(false);
 const isAwaitingStk = ref(false);
 const stkCountdown = ref(60);
@@ -70,6 +74,9 @@ let pollInterval: ReturnType<typeof setInterval> | undefined;
 onMounted(() => {
   if (customersStore.list.length === 0) {
     customersStore.fetchList({ limit: 100 });
+  }
+  if (productsStore.list.length === 0) {
+    productsStore.fetchList({ limit: 100 });
   }
 });
 
@@ -93,7 +100,6 @@ watch(
   (isOpen) => {
     if (isOpen) {
       resetForm();
-      customersStore.fetchList({ limit: 100 });
     } else {
       stopStkTimers();
     }
@@ -103,6 +109,40 @@ watch(
 const selectedCustomerObject = computed(() => {
   return customersStore.list.find((c) => c.id === customerId.value);
 });
+
+const selectedProductObject = computed<Product | undefined>(() => {
+  return productsStore.list.find((p) => p.id === selectedProductId.value);
+});
+
+const productVariantsList = computed(() => {
+  return selectedProductObject.value?.variants || [];
+});
+
+// Auto-fill price and description when a product is picked
+watch(selectedProductObject, (prod) => {
+  if (prod) {
+    selectedVariantId.value = '';
+    if (prod.variants && prod.variants.length > 0) {
+      const firstVariant = prod.variants[0];
+      selectedVariantId.value = firstVariant.id || '';
+      amount.value = typeof firstVariant.price === 'string' ? parseFloat(firstVariant.price) : firstVariant.price;
+      description.value = `${prod.name} (${firstVariant.title})`;
+    } else {
+      amount.value = typeof prod.price === 'string' ? parseFloat(prod.price) : prod.price;
+      description.value = prod.name;
+    }
+  }
+});
+
+// Update price and title when a specific variant is chosen
+function handleVariantSelect(variantId: string): void {
+  selectedVariantId.value = variantId;
+  const v = productVariantsList.value.find((item) => item.id === variantId);
+  if (v && selectedProductObject.value) {
+    amount.value = typeof v.price === 'string' ? parseFloat(v.price) : v.price;
+    description.value = `${selectedProductObject.value.name} (${v.title})`;
+  }
+}
 
 // Auto-fill STK phone from customer record if available
 watch(selectedCustomerObject, (cust) => {
@@ -118,12 +158,13 @@ function resetForm(): void {
   }
   newCustomerName.value = '';
   newCustomerPhone.value = '';
+  selectedProductId.value = '';
+  selectedVariantId.value = '';
   amount.value = 0;
   description.value = '';
   paymentMode.value = 'credit';
   mpesaRef.value = '';
   stkPhone.value = selectedCustomerObject.value?.phone || '';
-  createdCustomerId.value = '';
   isSubmitting.value = false;
   isAwaitingStk.value = false;
   stkFailed.value = false;
@@ -162,9 +203,8 @@ function startStkPolling(checkoutRequestId: string): void {
       if (status === 'completed') {
         stopStkTimers();
         isAwaitingStk.value = false;
-        await customersStore.fetchList({ page: 1 });
         pushToast({ message: 'M-Pesa payment received & sale completed!', variant: 'success' });
-        emit('success', { customerId: createdCustomerId.value || customerId.value, amount: amount.value });
+        emit('success', { customerId: customerId.value, amount: amount.value });
         emit('close');
       } else if (status === 'failed') {
         stopStkTimers();
@@ -197,6 +237,8 @@ async function handleSubmit(): Promise<void> {
             phone: newCustomerPhone.value.trim() || undefined,
           }
         : undefined,
+      productId: selectedProductId.value || undefined,
+      variantId: selectedVariantId.value || undefined,
       amount: Number(amount.value),
       description: description.value.trim() || undefined,
       paymentMode: paymentMode.value,
@@ -207,7 +249,6 @@ async function handleSubmit(): Promise<void> {
     };
 
     const result = await apiPost<any>('/transactions/smart-sale', payload);
-    createdCustomerId.value = result.customerId;
 
     if (paymentMode.value === 'mpesa_stk' && result.checkoutRequestId) {
       isSubmitting.value = false;
@@ -215,9 +256,6 @@ async function handleSubmit(): Promise<void> {
       pushToast({ message: result.customerMessage || 'M-Pesa prompt sent to customer phone', variant: 'info' });
       return;
     }
-
-    // Refresh customers list immediately so newly created customer is in the store
-    await customersStore.fetchList({ page: 1 });
 
     const successMsg =
       paymentMode.value === 'credit'
@@ -251,7 +289,6 @@ async function handleSubmit(): Promise<void> {
             <span>Customer *</span>
           </label>
 
-          <!-- Toggle between Search vs + New Customer if not preselected -->
           <button
             v-if="!props.preselectedCustomerId"
             type="button"
@@ -290,7 +327,44 @@ async function handleSubmit(): Promise<void> {
         </div>
       </div>
 
-      <!-- 2. SALE AMOUNT WITH QUICK-CHIPS -->
+      <!-- 2. CATALOG PRODUCT & VARIANT PICKER (Optional) -->
+      <div class="pos-section card">
+        <div class="section-top-row">
+          <label class="section-label">
+            <Tag :size="15" class="text-ink" />
+            <span>Catalog Product (Optional)</span>
+          </label>
+        </div>
+
+        <select v-model="selectedProductId" class="form-select">
+          <option value="">Custom / Non-Catalog Item</option>
+          <option v-for="p in productsStore.list" :key="p.id" :value="p.id">
+            {{ p.name }} (KES {{ parseFloat(p.price).toLocaleString('en-KE') }})
+          </option>
+        </select>
+
+        <!-- Variant Selector if Product has Variants -->
+        <div v-if="productVariantsList.length > 0" class="variants-picker-box">
+          <label class="field-micro-label">
+            <Layers :size="12" /> Select Option / Variant:
+          </label>
+          <div class="variant-chips-row">
+            <button
+              v-for="v in productVariantsList"
+              :key="v.id"
+              type="button"
+              class="variant-chip-btn"
+              :class="{ 'variant-chip-btn--active': selectedVariantId === v.id }"
+              @click="handleVariantSelect(v.id || '')"
+            >
+              <span>{{ v.title }}</span>
+              <span class="chip-price tabular-figure">KES {{ parseFloat(String(v.price)).toLocaleString('en-KE') }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. SALE AMOUNT WITH QUICK-CHIPS -->
       <div class="pos-section card">
         <label class="section-label">
           <span>Sale Amount (KES) *</span>
@@ -298,14 +372,13 @@ async function handleSubmit(): Promise<void> {
         <CurrencyInput v-model="amount" :show-quick-chips="true" />
       </div>
 
-      <!-- 3. MULTI-CHANNEL SETTLEMENT CHOICES -->
+      <!-- 4. MULTI-CHANNEL SETTLEMENT CHOICES -->
       <div class="pos-section card">
         <label class="section-label">
           <span>Payment &amp; Settlement *</span>
         </label>
 
         <div class="settlement-pills-grid">
-          <!-- Option A: Credit (Madeni) -->
           <button
             type="button"
             class="settlement-pill"
@@ -315,11 +388,10 @@ async function handleSubmit(): Promise<void> {
             <div class="pill-dot"></div>
             <div class="pill-text">
               <span class="pill-title">Sell on Credit</span>
-              <span class="pill-desc">Adds to customer debt</span>
+              <span class="pill-desc">Customer owes balance</span>
             </div>
           </button>
 
-          <!-- Option B: Cash in Hand -->
           <button
             type="button"
             class="settlement-pill"
@@ -333,7 +405,6 @@ async function handleSubmit(): Promise<void> {
             </div>
           </button>
 
-          <!-- Option C: Manual M-Pesa (Till/Send Money) -->
           <button
             type="button"
             class="settlement-pill"
@@ -347,7 +418,6 @@ async function handleSubmit(): Promise<void> {
             </div>
           </button>
 
-          <!-- Option D: Direct STK Push -->
           <button
             type="button"
             class="settlement-pill"
@@ -362,24 +432,22 @@ async function handleSubmit(): Promise<void> {
           </button>
         </div>
 
-        <!-- Conditional Input: M-Pesa Ref for Manual M-Pesa -->
         <div v-if="paymentMode === 'mpesa_manual'" class="conditional-field-wrap">
           <input
             v-model="mpesaRef"
             type="text"
             placeholder="M-Pesa Confirmation Code (e.g. SH12AB34CD)"
-            class="form-input font-mono"
+            class="form-input font-mono uppercase"
           />
         </div>
 
-        <!-- Conditional Input: Phone for STK Push -->
         <div v-if="paymentMode === 'mpesa_stk'" class="conditional-field-wrap">
-          <label class="field-micro-label">Send STK Prompt To Phone:</label>
+          <label class="field-micro-label">Customer M-Pesa Phone Number:</label>
           <PhoneInput v-model="stkPhone" placeholder="07XXXXXXXX" />
         </div>
       </div>
 
-      <!-- 4. OPTIONAL DESCRIPTION / LINE ITEMS -->
+      <!-- 5. OPTIONAL DESCRIPTION / LINE ITEMS -->
       <div class="form-group">
         <label class="field-micro-label">Items / Description (Optional)</label>
         <input
@@ -500,6 +568,50 @@ async function handleSubmit(): Promise<void> {
   margin-top: 2px;
 }
 
+.variants-picker-box {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: 2px;
+}
+
+.variant-chips-row {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.variant-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  padding: 3px var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-standard);
+}
+.variant-chip-btn:hover {
+  border-color: var(--color-ink);
+}
+
+.variant-chip-btn--active {
+  border-color: var(--brand-primary);
+  background: color-mix(in srgb, var(--brand-primary) 8%, var(--color-surface));
+  color: var(--brand-primary);
+}
+
+.chip-price {
+  font-weight: 800;
+}
+
 .settlement-pills-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -598,6 +710,8 @@ async function handleSubmit(): Promise<void> {
   border-color: var(--color-ink);
 }
 
+.uppercase { text-transform: uppercase; }
+
 /* STK Waiting State View */
 .stk-waiting-view {
   display: flex;
@@ -693,5 +807,5 @@ async function handleSubmit(): Promise<void> {
 }
 
 .text-gold { color: var(--color-gold); }
-.text-clay { color: var(--color-market-clay); }
+.text-clay { color: var(--color-market-clay);}
 </style>

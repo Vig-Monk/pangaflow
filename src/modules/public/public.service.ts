@@ -1,5 +1,5 @@
 // =============================================================================
-// src/modules/public/public.service.ts
+// soko-api/src/modules/public/public.service.ts
 // =============================================================================
 
 import axios from 'axios';
@@ -13,7 +13,7 @@ import * as publicQueries from './public.queries';
 import * as ordersQueries from '../orders/orders.queries';
 import { getCredentialsRowByOrgId, getDecryptedCredentials } from '../mpesa-credentials/mpesa-credentials.queries';
 import * as darajaService from '../../services/daraja.service';
-import { createPendingMpesaTransaction } from '../payments/payments.queries';
+import { createPendingMpesaTransaction, findRecentPendingMpesaTransaction } from '../payments/payments.queries';
 
 export interface LocationSearchResult {
   name: string;
@@ -87,7 +87,6 @@ async function fetchNominatimWithRateLimit(searchQuery: string): Promise<Locatio
 
     return results;
   } catch (err) {
-    console.warn('Nominatim fallback geocoding degraded gracefully:', err instanceof Error ? err.message : err);
     return [];
   }
 }
@@ -123,6 +122,7 @@ export const CheckoutSchema = z.object({
   customerEmail: z.string().email('Invalid email').nullable().optional().or(z.literal('')).transform(v => (v === '' ? null : v)),
   deliveryLocation: z.string().min(1, 'Delivery location is required').max(500),
   notes: z.string().max(1000).nullable().optional(),
+  mpesaCode: z.string().max(50).nullable().optional(),
   paymentMethod: z.string().min(1, 'Payment method selection is required'),
   deliveryType: z.enum(['delivery', 'pickup']).default('delivery'),
   customerLat: z.number().nullable().optional(),
@@ -132,7 +132,10 @@ export const CheckoutSchema = z.object({
   items: z.array(
     z.object({
       product_id: z.string().uuid(),
+      format_id: z.string().uuid().nullable().optional(),
+      variant_id: z.string().uuid().nullable().optional(),
       quantity: z.number().int().positive('Quantity must be greater than zero'),
+      delivery_method: z.enum(['digital', 'pickup', 'delivery']).optional(),
     })
   ).min(1, 'Cannot checkout with an empty cart'),
 });
@@ -153,16 +156,33 @@ export interface PublicStoreDto {
   mpesa_verified: boolean;
 }
 
+export interface PublicFormatDto {
+  id: string;
+  product_id: string;
+  format: 'pdf' | 'epub' | 'hardcopy';
+  price: number;
+  file_url: string | null;
+  file_public_id: string | null;
+  file_size_bytes: number | null;
+  stock: number | null;
+}
+
 export interface PublicProductDto {
   id: string;
+  org_id: string;
+  category_id: string;
+  category_name: string;
   name: string;
   slug: string;
+  sku: string | null;
+  author: string | null;
   description: string | null;
   price: number;
   stock: number;
-  images: string[];
-  category: { name: string };
-  availability: 'in_stock' | 'out_of_stock';
+  images: Array<{ image_url: string; image_public_id?: string; sort_order?: number }>;
+  formats: PublicFormatDto[];
+  created_at: string;
+  updated_at: string;
 }
 
 export interface PublicOrderConfirmation {
@@ -181,6 +201,7 @@ export interface PublicOrderConfirmation {
   deliveryLocation: string;
   items: Array<{
     productName: string;
+    variantTitle?: string | null;
     unitPrice: number;
     quantity: number;
     subtotal: number;
@@ -206,16 +227,50 @@ function toPublicStoreDto(row: publicQueries.PublicStoreRow, mpesaVerified: bool
 }
 
 function toPublicProductDto(row: publicQueries.PublicProductRow): PublicProductDto {
+  const formats: PublicFormatDto[] = (row.formats || []).map((f) => ({
+    id: f.id,
+    product_id: f.product_id,
+    format: f.format,
+    price: parseFloat(f.price),
+    file_url: f.file_url,
+    file_public_id: f.file_public_id,
+    file_size_bytes: f.file_size_bytes ? parseInt(f.file_size_bytes, 10) : null,
+    stock: f.stock,
+  }));
+
+  const hardcopyFormat = formats.find((f) => f.format === 'hardcopy');
+  const totalStock = hardcopyFormat ? (hardcopyFormat.stock ?? 0) : row.stock;
+
+  const normalizedImages = (row.images || [])
+    .map((img: any, idx: number) => {
+      if (typeof img === 'string') return { image_url: img, image_public_id: `img_${idx}`, sort_order: idx };
+      if (img && typeof img === 'object' && img.image_url) return img;
+      return null;
+    })
+    .filter(Boolean);
+
+  let author: string | null = null;
+  if (row.description && row.description.startsWith('By ')) {
+    const match = row.description.match(/^By\s+([^<\n]+)/);
+    author = match ? match[1].trim() : null;
+  }
+
   return {
     id: row.id,
+    org_id: row.org_id,
+    category_id: row.category_id,
+    category_name: row.category_name || 'General',
     name: row.name,
     slug: row.slug,
+    sku: row.sku,
+    author,
     description: row.description,
     price: parseFloat(row.price),
-    stock: row.stock,
-    images: Array.isArray(row.images) ? row.images : [],
-    category: { name: row.category_name || 'General' },
-    availability: row.stock > 0 ? 'in_stock' : 'out_of_stock',
+    stock: totalStock,
+    images: normalizedImages,
+    formats,
+    created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+    updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
   };
 }
 
@@ -261,7 +316,7 @@ export async function placeOrder(
     throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid checkout information', 400);
   }
 
-  const { items, ...customerData } = parsed.data;
+  const { items, mpesaCode, ...customerData } = parsed.data;
 
   const normalizedSlug = (storeSlug || '').trim().toLowerCase();
   const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
@@ -269,12 +324,12 @@ export async function placeOrder(
     throw new AppError('Store not found', 404);
   }
 
-  const isDirectMpesa = customerData.paymentMethod === 'mpesa' || customerData.paymentMethod === 'mpesa_direct';
+  const isAutomatedDaraja = customerData.paymentMethod === 'mpesa' || customerData.paymentMethod === 'mpesa_direct';
 
-  if (isDirectMpesa) {
+  if (isAutomatedDaraja) {
     const creds = await getCredentialsRowByOrgId(store.org_id);
     if (!creds || creds.status !== 'verified') {
-      throw new AppError("This store hasn't finished setting up payments yet", 503);
+      throw new AppError("This store hasn't finished setting up automated payments yet", 503);
     }
   }
 
@@ -282,11 +337,10 @@ export async function placeOrder(
   try {
     await client.query('BEGIN');
 
-    // 1. Auto-Sync & Deduplicate Shopper in Merchant's Customer CRM
     const cleanPhone = normalizeCustomerPhone(customerData.customerPhone);
 
-    const existingCustomer = await client.query<{ id: string; email: string | null; address: string | null }>(
-      `SELECT id, email, address FROM customers WHERE org_id = $1 AND phone = $2 AND deleted_at IS NULL LIMIT 1`,
+    const existingCustomer = await client.query<{ id: string }>(
+      `SELECT id FROM customers WHERE org_id = $1 AND phone = $2 AND deleted_at IS NULL LIMIT 1`,
       [store.org_id, cleanPhone]
     );
 
@@ -302,27 +356,10 @@ export async function placeOrder(
           customerData.deliveryLocation || null,
         ]
       );
-    } else {
-      const existingId = existingCustomer.rows[0].id;
-      await client.query(
-        `UPDATE customers
-         SET name = COALESCE(NULLIF($3, ''), name),
-             email = COALESCE(email, $4),
-             address = COALESCE(address, $5),
-             updated_at = NOW()
-         WHERE id = $1 AND org_id = $2`,
-        [
-          existingId,
-          store.org_id,
-          customerData.customerName.trim(),
-          customerData.customerEmail?.trim() || null,
-          customerData.deliveryLocation || null,
-        ]
-      );
     }
 
-    // 2. Fetch Products & Snapshot Real Cost Price (COGS)
     let calculatedProductsSubtotal = 0;
+    let hasPhysicalItem = false;
     const itemsToInsert = [];
 
     for (const cartItem of items) {
@@ -346,29 +383,74 @@ export async function placeOrder(
         throw new AppError('One of the products in your cart is no longer available.', 400);
       }
 
-      if (product.stock < cartItem.quantity) {
-        throw new AppError(`Insufficient stock remaining for ${product.name}`, 409);
+      let unitPrice = parseFloat(product.price);
+      let costPrice = parseFloat(product.cost_price || '0');
+      let variantTitle: string | null = null;
+      let deliveryMethod: string = cartItem.delivery_method || 'delivery';
+      let isPhysical = false;
+
+      if (cartItem.format_id) {
+        const formatRes = await client.query<{
+          id: string;
+          format: 'pdf' | 'epub' | 'hardcopy';
+          price: string;
+          stock: number | null;
+        }>(
+          `SELECT id, format, price::text AS price, stock
+           FROM   product_formats
+           WHERE  id = $1 AND product_id = $2`,
+          [cartItem.format_id, product.id]
+        );
+
+        const formatRow = formatRes.rows[0];
+        if (!formatRow) {
+          throw new AppError(`Selected format for "${product.name}" is no longer available.`, 400);
+        }
+
+        unitPrice = parseFloat(formatRow.price);
+        variantTitle = formatRow.format.toUpperCase();
+
+        if (formatRow.format === 'hardcopy') {
+          hasPhysicalItem = true;
+          isPhysical = true;
+          deliveryMethod = customerData.deliveryType || 'delivery';
+          if (formatRow.stock !== null && formatRow.stock < cartItem.quantity) {
+            throw new AppError(`Insufficient stock remaining for "${product.name}". Only ${formatRow.stock} physical copies left.`, 409);
+          }
+        } else {
+          deliveryMethod = 'digital';
+          isPhysical = false;
+        }
+      } else {
+        hasPhysicalItem = true;
+        isPhysical = true;
+        deliveryMethod = customerData.deliveryType || 'delivery';
+        if (product.stock < cartItem.quantity) {
+          throw new AppError(`Insufficient stock remaining for "${product.name}". Only ${product.stock} left.`, 409);
+        }
       }
 
-      const unitPrice = parseFloat(product.price);
-      const costPrice = parseFloat(product.cost_price || '0');
       const subtotal = Math.round(unitPrice * cartItem.quantity * 100) / 100;
       calculatedProductsSubtotal += subtotal;
 
       itemsToInsert.push({
         productId: product.id,
+        formatId: cartItem.format_id || null,
+        variantId: cartItem.variant_id || null,
+        variantTitle,
         productName: product.name,
         unitPrice,
         costPrice,
         quantity: cartItem.quantity,
         subtotal,
+        deliveryMethod,
+        isPhysical,
       });
     }
 
     calculatedProductsSubtotal = Math.round(calculatedProductsSubtotal * 100) / 100;
 
-    // 3. Server-Authoritative Delivery Fee Math
-    const isDelivery = customerData.deliveryType !== 'pickup';
+    const isDelivery = hasPhysicalItem && customerData.deliveryType !== 'pickup';
     let deliveryFee = 0;
     let deliveryFeeStatus: 'known' | 'needs_merchant_confirmation' = 'known';
     let confirmationCode: string | null = null;
@@ -417,7 +499,12 @@ export async function placeOrder(
 
     const finalOrderTotal = Math.round((calculatedProductsSubtotal + deliveryFee) * 100) / 100;
 
-    // 4. Insert Transactional Order
+    let finalNotes = customerData.notes?.trim() || '';
+    if (mpesaCode && mpesaCode.trim()) {
+      const codeNote = `[M-Pesa Reference: ${mpesaCode.trim().toUpperCase()}]`;
+      finalNotes = finalNotes ? `${codeNote} ${finalNotes}` : codeNote;
+    }
+
     const orderId = await ordersQueries.insertOrderTransactional(client, {
       orgId: store.org_id,
       storeId: store.id,
@@ -425,10 +512,10 @@ export async function placeOrder(
       customerPhone: cleanPhone,
       customerEmail: customerData.customerEmail?.trim() || null,
       deliveryLocation: customerData.deliveryLocation,
-      notes: customerData.notes,
+      notes: finalNotes || null,
       paymentMethod: customerData.paymentMethod,
       total: finalOrderTotal,
-      deliveryType: customerData.deliveryType,
+      deliveryType: hasPhysicalItem ? customerData.deliveryType : 'delivery',
       customerLat: customerData.customerLat,
       customerLng: customerData.customerLng,
       locationSource: customerData.locationSource,
@@ -440,43 +527,70 @@ export async function placeOrder(
 
     await ordersQueries.insertOrderStatusHistoryTransactional(client, orderId, 'pending', 'system');
 
-    // 5. Insert Snapshot Line Items with COGS & Decrement Stock
     for (const item of itemsToInsert) {
-      await ordersQueries.insertOrderItemTransactional(client, orderId, item);
+      await ordersQueries.insertOrderItemTransactional(client, orderId, {
+        productId: item.productId,
+        productName: item.productName,
+        unitPrice: item.unitPrice,
+        costPrice: item.costPrice,
+        quantity: item.quantity,
+        subtotal: item.subtotal,
+        variantId: item.variantId,
+        variantTitle: item.variantTitle,
+        formatId: item.formatId,
+        deliveryMethod: item.deliveryMethod,
+      });
 
-      const success = await ordersQueries.decrementStockTransactional(client, item.productId, item.quantity);
-      if (!success) {
-        throw new AppError(`Stock was checked out concurrently by another shopper for ${item.productName}.`, 409);
+      if (item.isPhysical) {
+        if (item.formatId) {
+          const decFormatRes = await client.query(
+            `UPDATE product_formats
+             SET    stock = stock - $1, updated_at = NOW()
+             WHERE  id = $2 AND format = 'hardcopy' AND (stock IS NULL OR stock >= $1)`,
+            [item.quantity, item.formatId]
+          );
+          if (decFormatRes.rowCount === 0) {
+            throw new AppError(`The hardcopy edition of "${item.productName}" was just sold out.`, 409);
+          }
+          await ordersQueries.decrementStockTransactional(client, item.productId, item.quantity);
+        } else {
+          await ordersQueries.decrementStockTransactional(client, item.productId, item.quantity);
+        }
       }
     }
 
-    // 6. Direct M-Pesa STK Trigger (If Selected)
     let checkoutRequestId: string | undefined;
 
-    if (isDirectMpesa) {
-      const decryptedCreds = await getDecryptedCredentials(store.org_id);
-      if (decryptedCreds) {
-        const callbackUrl = `${env.API_PUBLIC_URL.replace(/\/$/, '')}/api/v1/payments/mpesa/callback`;
-        const stkResult = await darajaService.stkPush({
-          credentials: decryptedCreds,
-          phone: cleanPhone,
-          amount: finalOrderTotal,
-          accountReference: orderId,
-          transactionDesc: `Order ${orderId.slice(0, 8)}`,
-          callbackUrl,
-        });
+   if  (isAutomatedDaraja) {
+      const recentPending = await findRecentPendingMpesaTransaction(orderId, 60);
 
-        checkoutRequestId = stkResult.checkoutRequestId;
+      if (recentPending) {
+        checkoutRequestId = recentPending.checkout_request_id;
+      } else {
+        const decryptedCreds = await getDecryptedCredentials(store.org_id);
+        if (decryptedCreds) {
+          const callbackUrl = `${env.API_PUBLIC_URL.replace(/\/$/, '')}/api/v1/payments/mpesa/callback`;
+          const stkResult = await darajaService.stkPush({
+            credentials: decryptedCreds,
+            phone: cleanPhone,
+            amount: finalOrderTotal,
+            accountReference: orderId,
+            transactionDesc: `Order ${orderId.slice(0, 8)}`,
+            callbackUrl,
+          });
 
-        await createPendingMpesaTransaction(client, {
-          orgId: store.org_id,
-          checkoutRequestId: stkResult.checkoutRequestId,
-          merchantRequestId: stkResult.merchantRequestId,
-          phone: cleanPhone,
-          amount: finalOrderTotal,
-          accountReference: orderId,
-          transactionDesc: `Order ${orderId.slice(0, 8)}`,
-        });
+          checkoutRequestId = stkResult.checkoutRequestId;
+
+          await createPendingMpesaTransaction(client, {
+            orgId: store.org_id,
+            checkoutRequestId: stkResult.checkoutRequestId,
+            merchantRequestId: stkResult.merchantRequestId,
+            phone: cleanPhone,
+            amount: finalOrderTotal,
+            accountReference: orderId,
+            transactionDesc: `Order ${orderId.slice(0, 8)}`,
+          });
+        }
       }
     }
 
@@ -492,20 +606,76 @@ export async function placeOrder(
 
 export async function getPublicOrderDetails(
   storeSlug: string,
-  orderId: string
-): Promise<PublicOrderConfirmation> {
+  orderId: string,
+  verifyingPhone?: string
+): Promise<PublicOrderConfirmation & { downloads: any[]; isVerifiedCustomer: boolean; notes: string | null }> {
   const normalizedSlug = (storeSlug || '').trim().toLowerCase();
   const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
   if (!store) {
     throw new AppError('Store not found', 404);
   }
 
-  const order = await publicQueries.getPublicOrderDetailsRow(store.org_id, orderId);
+  const orderRes = await pool.query<publicQueries.PublicOrderDetailsRow & { notes: string | null }>(
+    `SELECT o.id, o.customer_name, o.customer_phone, o.total::text AS total, o.status,
+            o.payment_method, o.payment_status, o.notes,
+            o.delivery_type, o.delivery_fee::text AS delivery_fee,
+            o.delivery_fee_status, o.delivery_confirmation_code,
+            o.delivery_location,
+            mt.mpesa_receipt_number, mt.checkout_request_id
+     FROM   orders o
+     LEFT JOIN mpesa_transactions mt 
+            ON mt.account_reference = o.id::text 
+           AND mt.status = 'completed'
+     WHERE  o.id = $1 AND o.org_id = $2
+     ORDER BY mt.created_at DESC
+     LIMIT 1`,
+    [orderId, store.org_id]
+  );
+
+  const order = orderRes.rows[0];
   if (!order) {
     throw new AppError('Order confirmation details not found', 404);
   }
 
   const items = await publicQueries.getPublicOrderItems(order.id);
+
+  const cleanVerifying = verifyingPhone ? normalizeCustomerPhone(verifyingPhone) : null;
+  const isVerifiedCustomer = Boolean(cleanVerifying && cleanVerifying === normalizeCustomerPhone(order.customer_phone));
+
+  let downloads: any[] = [];
+  if (order.payment_status === 'paid') {
+    const downloadsRes = await pool.query<{
+      token: string;
+      max_downloads: number;
+      download_count: number;
+      expires_at: Date;
+      format: string;
+      book_title: string;
+    }>(
+      `SELECT dd.download_token AS token,
+              dd.max_downloads,
+              dd.download_count,
+              dd.expires_at,
+              pf.format,
+              p.name AS book_title
+       FROM digital_downloads dd
+       INNER JOIN product_formats pf ON pf.id = dd.format_id
+       INNER JOIN products p ON p.id = pf.product_id
+       INNER JOIN order_items oi ON oi.id = dd.order_item_id
+       WHERE oi.order_id = $1`,
+      [order.id]
+    );
+
+    downloads = downloadsRes.rows.map((d) => ({
+      bookTitle: d.book_title,
+      format: d.format,
+      token: d.token,
+      downloadUrl: `/api/v1/books/download/${d.token}?redirect=true`,
+      expiresAt: d.expires_at.toISOString(),
+      maxDownloads: d.max_downloads,
+      downloadCount: d.download_count,
+    }));
+  }
 
   return {
     orderId: order.id,
@@ -521,11 +691,15 @@ export async function getPublicOrderDetails(
     deliveryFeeStatus: order.delivery_fee_status,
     deliveryConfirmationCode: order.delivery_confirmation_code,
     deliveryLocation: order.delivery_location,
+    notes: order.notes,
     items: items.map((row: publicQueries.PublicOrderItemRow) => ({
       productName: row.product_name,
+      variantTitle: row.variant_title || null,
       unitPrice: parseFloat(row.unit_price),
       quantity: row.quantity,
       subtotal: parseFloat(row.subtotal),
     })),
-  };
-}
+    downloads,
+    isVerifiedCustomer,
+  };}
+    

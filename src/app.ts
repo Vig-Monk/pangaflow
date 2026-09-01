@@ -1,5 +1,6 @@
 // =============================================================================
-// src/app.ts
+// soko-api/src/app.ts
+// Multi-Frontend CORS Support (Flemela + KauntaOS + Vercel Previews)
 // =============================================================================
 
 import express, { Request, Response, NextFunction } from "express";
@@ -24,95 +25,103 @@ import agentRoutes from "./verticals/market/agent.routes";
 import expensesRoutes from "./modules/expenses/expenses.routes";
 import adminRoutes from "./modules/admin/admin.routes";
 import productsRoutes from "./modules/products/products.routes";
+import productFormatsRoutes from "./modules/product-formats/product-formats.routes";
 import storesRoutes from "./modules/stores/stores.routes";
 import ordersRoutes from "./modules/orders/orders.routes";
 import publicRoutes from "./modules/public/public.routes";
 import mpesaCredentialsRoutes from "./modules/mpesa-credentials/mpesa-credentials.routes";
 import analyticsRoutes from "./modules/analytics/analytics.routes";
+import booksRoutes from "./verticals/books/books.routes";
 
 const app = express();
 
 app.use(helmet());
 
+// Multi-Frontend Allowed Origins
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:3333',
+];
+
+// Support comma-separated URLs in FRONTEND_URL (e.g. "https://flemela.vercel.app,https://kauntaos.vercel.app")
+if (env.FRONTEND_URL) {
+  const customOrigins = env.FRONTEND_URL.split(',').map((o) => o.trim().replace(/\/$/, ''));
+  allowedOrigins.push(...customOrigins);
+}
+
 app.use(
-    cors({
-        origin: (requestOrigin, callback) => {
-            if (!requestOrigin) return callback(null, true);
+  cors({
+    origin: (requestOrigin, callback) => {
+      // Allow server-to-server or mobile requests without origin
+      if (!requestOrigin) return callback(null, true);
 
-            let isAllowed = false;
-            try {
-                const url = new URL(requestOrigin);
-                const normalizedFrontend = env.FRONTEND_URL?.replace(/\/$/, "");
+      // 1. Check exact domain match
+      if (allowedOrigins.includes(requestOrigin)) {
+        return callback(null, true);
+      }
 
-                isAllowed =
-                    requestOrigin === "http://localhost:5173" ||
-                    requestOrigin === normalizedFrontend ||
-                    url.hostname.endsWith(".vercel.app");
-            } catch {
-                isAllowed = false;
-            }
+      // 2. Allow all Vercel preview & production deployments (*.vercel.app)
+      if (requestOrigin.endsWith('.vercel.app')) {
+        return callback(null, true);
+      }
 
-            if (isAllowed) {
-                return callback(null, true);
-            }
-            return callback(
-                new Error(`Origin ${requestOrigin} is not allowed by CORS`)
-            );
-        },
-        credentials: true
-    })
+      return callback(new Error(`Origin ${requestOrigin} is not allowed by CORS`));
+    },
+    credentials: true,
+  })
 );
 
 app.use(express.json());
 
 app.use((req: Request, _res: Response, next: NextFunction) => {
-    req.requestId = uuidv4();
-    next();
+  req.requestId = uuidv4();
+  next();
 });
 
 app.use(
-    pinoHttp({
-        customProps: req => ({
-            requestId: (req as Request).requestId
-        }),
-        autoLogging: {
-            ignore: req => req.url === "/api/v1/health"
-        }
-    })
+  pinoHttp({
+    customProps: req => ({
+      requestId: (req as Request).requestId
+    }),
+    autoLogging: {
+      ignore: req => req.url === "/api/v1/health"
+    }
+  })
 );
 
 const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: {
-        success: false,
-        error: {
-            message: "Too many requests. Please try again later."
-        }
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: {
+      message: "Too many requests. Please try again later."
     }
+  }
 });
 app.use(limiter);
 
 const apiRouter = express.Router();
 
 apiRouter.get("/health", async (_req: Request, res: Response) => {
-    let dbStatus: HealthCheckResponse["db"] = "connected";
+  let dbStatus: HealthCheckResponse["db"] = "connected";
 
-    try {
-        await pool.query("SELECT 1");
-    } catch {
-        dbStatus = "error";
-    }
+  try {
+    await pool.query("SELECT 1");
+  } catch {
+    dbStatus = "error";
+  }
 
-    const response: HealthCheckResponse = {
-        status: dbStatus === "connected" ? "ok" : "error",
-        db: dbStatus,
-        timestamp: new Date().toISOString()
-    };
+  const response: HealthCheckResponse = {
+    status: dbStatus === "connected" ? "ok" : "error",
+    db: dbStatus,
+    timestamp: new Date().toISOString()
+  };
 
-    res.status(dbStatus === "connected" ? 200 : 503).json(response);
+  res.status(dbStatus === "connected" ? 200 : 503).json(response);
 });
 
 apiRouter.use("/auth", authRoutes);
@@ -124,20 +133,22 @@ apiRouter.use("/agent", agentRoutes);
 apiRouter.use("/expenses", expensesRoutes);
 apiRouter.use("/public", publicRoutes);
 apiRouter.use("/admin", adminRoutes);
+apiRouter.use("/products/:productId/formats", productFormatsRoutes);
 apiRouter.use("/products", productsRoutes);
 apiRouter.use("/store", storesRoutes);
 apiRouter.use("/orders", ordersRoutes);
 apiRouter.use("/mpesa-credentials", mpesaCredentialsRoutes);
 apiRouter.use("/analytics", analyticsRoutes);
+apiRouter.use("/books", booksRoutes);
 app.use("/api/v1", apiRouter);
 
 app.use((req: Request, _res: Response, next: NextFunction) => {
-    next(
-        new AppError(
-            `Endpoint not found: ${req.method} ${req.originalUrl}`,
-            404
-        )
-    );
+  next(
+    new AppError(
+      `Endpoint not found: ${req.method} ${req.originalUrl}`,
+      404
+    )
+  );
 });
 
 app.use(errorHandler);

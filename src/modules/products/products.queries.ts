@@ -1,9 +1,38 @@
 // =============================================================================
-// src/modules/products/products.queries.ts
+// soko-api/src/modules/products/products.queries.ts
 // =============================================================================
 
 import { PoolClient } from "pg";
 import { query, pool } from "../../config/db";
+
+export type FormatType = 'pdf' | 'epub' | 'hardcopy';
+
+export interface ProductFormatRow {
+    id: string;
+    product_id: string;
+    format: FormatType;
+    price: string;
+    file_url: string | null;
+    file_public_id: string | null;
+    file_size_bytes: string | null;
+    stock: number | null;
+    created_at: Date;
+    updated_at: Date;
+}
+
+export interface ProductVariant {
+    id: string;
+    product_id: string;
+    title: string;
+    sku: string | null;
+    options: Record<string, string>;
+    price: string;
+    cost_price: string;
+    stock: number;
+    low_stock_at: number;
+    image_url: string | null;
+    is_active: boolean;
+}
 
 export interface ProductWithImages {
     id: string;
@@ -24,6 +53,8 @@ export interface ProductWithImages {
         image_public_id: string;
         sort_order: number;
     }>;
+    variants: ProductVariant[];
+    formats: ProductFormatRow[];
 }
 
 export interface InventoryWithProduct {
@@ -34,6 +65,7 @@ export interface InventoryWithProduct {
     stock: number;
     low_stock_at: number;
     updated_at: Date;
+    variants_count: number;
 }
 
 export interface ListProductsOptions {
@@ -54,12 +86,25 @@ export interface CategoryRow {
     name: string;
 }
 
+export interface VariantInputData {
+    id?: string;
+    title: string;
+    sku?: string | null;
+    options?: Record<string, string>;
+    price: number;
+    cost_price?: number;
+    stock: number;
+    low_stock_at?: number;
+    image_url?: string | null;
+    is_active?: boolean;
+}
+
 export async function listCategories(orgId: string): Promise<CategoryRow[]> {
     const result = await query<CategoryRow>(
         `SELECT id, name 
-     FROM   categories 
-     WHERE  org_id = $1 
-     ORDER  BY name ASC`,
+         FROM   categories 
+         WHERE  org_id = $1 
+         ORDER  BY name ASC`,
         [orgId]
     );
     return result.rows;
@@ -83,9 +128,9 @@ export async function findOrCreateCategoryByName(
 
     const insertResult = await client.query<{ id: string }>(
         `INSERT INTO categories (org_id, name) 
-     VALUES ($1, $2) 
-     ON CONFLICT (org_id, name) DO UPDATE SET name = EXCLUDED.name
-     RETURNING id`,
+         VALUES ($1, $2) 
+         ON CONFLICT (org_id, name) DO UPDATE SET name = EXCLUDED.name
+         RETURNING id`,
         [orgId, trimmedName]
     );
 
@@ -98,9 +143,9 @@ export async function createCategory(
 ): Promise<CategoryRow> {
     const result = await query<CategoryRow>(
         `INSERT INTO categories (org_id, name)
-     VALUES ($1, $2)
-     ON CONFLICT (org_id, name) DO UPDATE SET name = EXCLUDED.name
-     RETURNING id, name`,
+         VALUES ($1, $2)
+         ON CONFLICT (org_id, name) DO UPDATE SET name = EXCLUDED.name
+         RETURNING id, name`,
         [orgId, name.trim()]
     );
     return result.rows[0];
@@ -124,7 +169,57 @@ const PRODUCT_SELECT_FIELDS = `
       WHERE pi.product_id = p.id
     ),
     '[]'::json
-  ) AS images
+  ) AS images,
+  COALESCE(
+    (
+      SELECT json_agg(
+        json_build_object(
+          'id', pv.id,
+          'product_id', pv.product_id,
+          'title', pv.title,
+          'sku', pv.sku,
+          'options', pv.options,
+          'price', pv.price::text,
+          'cost_price', pv.cost_price::text,
+          'stock', pv.stock,
+          'low_stock_at', pv.low_stock_at,
+          'image_url', pv.image_url,
+          'is_active', pv.is_active
+        ) ORDER BY pv.created_at ASC
+      )
+      FROM product_variants pv
+      WHERE pv.product_id = p.id AND pv.is_active = TRUE
+    ),
+    '[]'::json
+  ) AS variants,
+  COALESCE(
+    (
+      SELECT json_agg(
+        json_build_object(
+          'id', pf.id,
+          'product_id', pf.product_id,
+          'format', pf.format,
+          'price', pf.price::text,
+          'file_url', pf.file_url,
+          'file_public_id', pf.file_public_id,
+          'file_size_bytes', pf.file_size_bytes::text,
+          'stock', pf.stock,
+          'created_at', pf.created_at,
+          'updated_at', pf.updated_at
+        ) ORDER BY (
+          CASE pf.format
+            WHEN 'hardcopy' THEN 1
+            WHEN 'pdf' THEN 2
+            WHEN 'epub' THEN 3
+            ELSE 4
+          END
+        ) ASC
+      )
+      FROM product_formats pf
+      WHERE pf.product_id = p.id
+    ),
+    '[]'::json
+  ) AS formats
 `;
 
 export async function listProducts(
@@ -146,7 +241,7 @@ export async function listProducts(
 
     if (searchQuery && searchQuery.trim().length > 0) {
         conditions.push(
-            `(p.name ILIKE $${paramIndex} OR p.sku ILIKE $${paramIndex})`
+            `(p.name ILIKE $${paramIndex} OR p.sku ILIKE $${paramIndex} OR p.description ILIKE $${paramIndex})`
         );
         params.push(`%${searchQuery.trim()}%`);
         paramIndex++;
@@ -156,8 +251,8 @@ export async function listProducts(
 
     const countResult = await query<{ count: string }>(
         `SELECT COUNT(*) AS count 
-     FROM products p 
-     WHERE ${whereClause}`,
+         FROM products p 
+         WHERE ${whereClause}`,
         params
     );
     const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
@@ -169,11 +264,11 @@ export async function listProducts(
     const dataParams = [...params, limit, offset];
     const dataResult = await query<ProductWithImages>(
         `SELECT ${PRODUCT_SELECT_FIELDS}
-     FROM products p
-     LEFT JOIN categories c ON c.id = p.category_id
-     WHERE ${whereClause}
-     ORDER BY (CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, p.created_at DESC
-     LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+         FROM products p
+         LEFT JOIN categories c ON c.id = p.category_id
+         WHERE ${whereClause}
+         ORDER BY (CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, p.created_at DESC
+         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
         dataParams
     );
 
@@ -186,9 +281,9 @@ export async function getProductById(
 ): Promise<ProductWithImages | null> {
     const result = await query<ProductWithImages>(
         `SELECT ${PRODUCT_SELECT_FIELDS}
-     FROM products p
-     LEFT JOIN categories c ON c.id = p.category_id
-     WHERE p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL`,
+         FROM products p
+         LEFT JOIN categories c ON c.id = p.category_id
+         WHERE p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL`,
         [orgId, productId]
     );
     return result.rows[0] ?? null;
@@ -205,32 +300,147 @@ export async function updateProduct(
         sku?: string | null;
         description?: string | null;
         status?: "draft" | "published" | "archived";
+        variants?: VariantInputData[];
+        images?: Array<{ image_url: string; image_public_id?: string }>;
     }
 ): Promise<ProductWithImages | null> {
-    const setClauses: string[] = [];
-    const params: unknown[] = [orgId, productId];
-    let paramIndex = 3;
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
 
-    for (const [key, value] of Object.entries(fields)) {
-        if (value !== undefined) {
-            setClauses.push(`${key} = $${paramIndex}`);
-            params.push(value);
-            paramIndex++;
+        const setClauses: string[] = [];
+        const params: unknown[] = [orgId, productId];
+        let paramIndex = 3;
+
+        const { variants, images, ...directFields } = fields;
+
+        for (const [key, value] of Object.entries(directFields)) {
+            if (value !== undefined) {
+                setClauses.push(`${key} = $${paramIndex}`);
+                params.push(value);
+                paramIndex++;
+            }
+        }
+
+        if (setClauses.length > 0) {
+            const updateQuery = `
+              UPDATE products
+              SET ${setClauses.join(", ")}, updated_at = NOW()
+              WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL
+            `;
+            await client.query(updateQuery, params);
+        }
+
+        if (images !== undefined) {
+            await client.query("DELETE FROM product_images WHERE product_id = $1", [productId]);
+            for (let s = 0; s < images.length; s++) {
+                if (images[s].image_url) {
+                    await insertProductImageTransactional(
+                        client,
+                        productId,
+                        images[s].image_url,
+                        images[s].image_public_id || 'cover_img',
+                        s
+                    );
+                }
+            }
+        }
+
+        if (variants !== undefined) {
+            await syncProductVariantsTransactional(client, orgId, productId, variants);
+        }
+
+        await client.query("COMMIT");
+        return getProductById(orgId, productId);
+    } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+    } finally {
+        client.release();
+    }
+}
+
+export async function syncProductVariantsTransactional(
+    client: PoolClient,
+    orgId: string,
+    productId: string,
+    variants: VariantInputData[]
+): Promise<void> {
+    if (variants.length === 0) {
+        await client.query(
+            `UPDATE product_variants SET is_active = FALSE, updated_at = NOW() WHERE org_id = $1 AND product_id = $2`,
+            [orgId, productId]
+        );
+        return;
+    }
+
+    const keepVariantIds: string[] = [];
+
+    for (const v of variants) {
+        if (v.id) {
+            await client.query(
+                `UPDATE product_variants
+                 SET title        = $4,
+                     sku          = $5,
+                     options      = $6,
+                     price        = $7,
+                     cost_price   = $8,
+                     stock        = $9,
+                     low_stock_at = $10,
+                     image_url    = $11,
+                     is_active    = $12,
+                     updated_at   = NOW()
+                 WHERE id = $1 AND org_id = $2 AND product_id = $3`,
+                [
+                    v.id,
+                    orgId,
+                    productId,
+                    v.title.trim(),
+                    v.sku?.trim() || null,
+                    JSON.stringify(v.options || {}),
+                    v.price,
+                    v.cost_price ?? 0,
+                    v.stock,
+                    v.low_stock_at ?? 5,
+                    v.image_url || null,
+                    v.is_active ?? true
+                ]
+            );
+            keepVariantIds.push(v.id);
+        } else {
+            const inserted = await client.query<{ id: string }>(
+                `INSERT INTO product_variants (
+                   org_id, product_id, title, sku, options, price,
+                   cost_price, stock, low_stock_at, image_url, is_active
+                 )
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                 RETURNING id`,
+                [
+                    orgId,
+                    productId,
+                    v.title.trim(),
+                    v.sku?.trim() || null,
+                    JSON.stringify(v.options || {}),
+                    v.price,
+                    v.cost_price ?? 0,
+                    v.stock,
+                    v.low_stock_at ?? 5,
+                    v.image_url || null,
+                    v.is_active ?? true
+                ]
+            );
+            keepVariantIds.push(inserted.rows[0].id);
         }
     }
 
-    if (setClauses.length === 0) {
-        return getProductById(orgId, productId);
+    if (keepVariantIds.length > 0) {
+        await client.query(
+            `UPDATE product_variants
+             SET is_active = FALSE, updated_at = NOW()
+             WHERE org_id = $1 AND product_id = $2 AND NOT (id = ANY($3::uuid[]))`,
+            [orgId, productId, keepVariantIds]
+        );
     }
-
-    const updateQuery = `
-    UPDATE products
-    SET ${setClauses.join(", ")}, updated_at = NOW()
-    WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL
-  `;
-    await query(updateQuery, params);
-
-    return getProductById(orgId, productId);
 }
 
 export async function archiveProduct(
@@ -263,36 +473,12 @@ export async function deleteProductPermanently(
     orgId: string,
     productId: string
 ): Promise<boolean> {
-    const client = await pool.connect();
-    try {
-        await client.query("BEGIN");
-
-        const check = await client.query(
-            "SELECT id FROM products WHERE id = $1 AND org_id = $2",
-            [productId, orgId]
-        );
-        if (check.rows.length === 0) {
-            await client.query("ROLLBACK");
-            return false;
-        }
-
-        await client.query("DELETE FROM product_images WHERE product_id = $1", [productId]);
-        await client.query("DELETE FROM inventory WHERE product_id = $1", [productId]);
-        await client.query("UPDATE order_items SET product_id = NULL WHERE product_id = $1", [productId]);
-
-        const deleteRes = await client.query(
-            "DELETE FROM products WHERE id = $1 AND org_id = $2",
-            [productId, orgId]
-        );
-
-        await client.query("COMMIT");
-        return deleteRes.rowCount !== null && deleteRes.rowCount > 0;
-    } catch (err) {
-        await client.query("ROLLBACK");
-        throw err;
-    } finally {
-        client.release();
-    }
+    const result = await query(
+        `DELETE FROM products 
+         WHERE org_id = $1 AND id = $2`,
+        [orgId, productId]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
 }
 
 export async function bulkDeleteProducts(
@@ -300,36 +486,12 @@ export async function bulkDeleteProducts(
     productIds: string[]
 ): Promise<number> {
     if (productIds.length === 0) return 0;
-    const client = await pool.connect();
-    try {
-        await client.query("BEGIN");
-
-        await client.query(
-            `DELETE FROM product_images WHERE product_id IN (SELECT id FROM products WHERE id = ANY($1::uuid[]) AND org_id = $2)`,
-            [productIds, orgId]
-        );
-        await client.query(
-            `DELETE FROM inventory WHERE product_id IN (SELECT id FROM products WHERE id = ANY($1::uuid[]) AND org_id = $2)`,
-            [productIds, orgId]
-        );
-        await client.query(
-            `UPDATE order_items SET product_id = NULL WHERE product_id = ANY($1::uuid[])`,
-            [productIds]
-        );
-
-        const deleteRes = await client.query(
-            `DELETE FROM products WHERE id = ANY($1::uuid[]) AND org_id = $2`,
-            [productIds, orgId]
-        );
-
-        await client.query("COMMIT");
-        return deleteRes.rowCount ?? 0;
-    } catch (err) {
-        await client.query("ROLLBACK");
-        throw err;
-    } finally {
-        client.release();
-    }
+    const result = await query(
+        `DELETE FROM products 
+         WHERE org_id = $1 AND id = ANY($2::uuid[])`,
+        [orgId, productIds]
+    );
+    return result.rowCount ?? 0;
 }
 
 export async function setProductStatus(
@@ -339,8 +501,8 @@ export async function setProductStatus(
 ): Promise<ProductWithImages | null> {
     await query(
         `UPDATE products 
-     SET status = $3, updated_at = NOW() 
-     WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
+         SET status = $3, updated_at = NOW() 
+         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
         [orgId, productId, status]
     );
     return getProductById(orgId, productId);
@@ -365,9 +527,9 @@ export async function listInventory(
 
     const countResult = await query<{ count: string }>(
         `SELECT COUNT(*) AS count 
-     FROM inventory i
-     INNER JOIN products p ON p.id = i.product_id
-     WHERE ${whereClause}`,
+         FROM inventory i
+         INNER JOIN products p ON p.id = i.product_id
+         WHERE ${whereClause}`,
         params
     );
     const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
@@ -379,12 +541,13 @@ export async function listInventory(
     const dataParams = [...params, limit, offset];
     const dataResult = await query<InventoryWithProduct>(
         `SELECT i.id, i.product_id, i.stock, i.low_stock_at, i.updated_at,
-            p.name AS product_name, p.sku AS product_sku
-     FROM inventory i
-     INNER JOIN products p ON p.id = i.product_id
-     WHERE ${whereClause}
-     ORDER BY i.stock ASC, p.name ASC
-     LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+                p.name AS product_name, p.sku AS product_sku,
+                COALESCE((SELECT COUNT(*) FROM product_variants pv WHERE pv.product_id = p.id AND pv.is_active = TRUE), 0)::int AS variants_count
+         FROM inventory i
+         INNER JOIN products p ON p.id = i.product_id
+         WHERE ${whereClause}
+         ORDER BY i.stock ASC, p.name ASC
+         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
         dataParams
     );
 
@@ -398,11 +561,12 @@ export async function updateInventoryStock(
 ): Promise<InventoryWithProduct | null> {
     const result = await query<InventoryWithProduct>(
         `UPDATE inventory i
-     SET stock = $3, updated_at = NOW()
-     FROM products p
-     WHERE p.id = i.product_id AND p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL
-     RETURNING i.id, i.product_id, i.stock, i.low_stock_at, i.updated_at,
-               p.name AS product_name, p.sku AS product_sku`,
+         SET stock = $3, updated_at = NOW()
+         FROM products p
+         WHERE p.id = i.product_id AND p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL
+         RETURNING i.id, i.product_id, i.stock, i.low_stock_at, i.updated_at,
+                   p.name AS product_name, p.sku AS product_sku,
+                   0::int AS variants_count`,
         [orgId, productId, stock]
     );
     return result.rows[0] ?? null;
@@ -448,10 +612,10 @@ export async function insertProductTransactional(
 ): Promise<string> {
     const result = await client.query<{ id: string }>(
         `INSERT INTO products 
-       (org_id, category_id, name, slug, sku, description, cost_price, price, status)
-     VALUES 
-       ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-     RETURNING id`,
+           (org_id, category_id, name, slug, sku, description, cost_price, price, status)
+         VALUES 
+           ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id`,
         [
             orgId,
             data.category_id,
@@ -474,7 +638,7 @@ export async function insertInventoryTransactional(
 ): Promise<void> {
     await client.query(
         `INSERT INTO inventory (product_id, stock, low_stock_at)
-     VALUES ($1, $2, 5)`,
+         VALUES ($1, $2, 5)`,
         [productId, stock]
     );
 }
@@ -488,7 +652,37 @@ export async function insertProductImageTransactional(
 ): Promise<void> {
     await client.query(
         `INSERT INTO product_images (product_id, image_url, image_public_id, sort_order)
-     VALUES ($1, $2, $3, $4)`,
+         VALUES ($1, $2, $3, $4)`,
         [productId, imageUrl, imagePublicId, sortOrder]
     );
+}
+
+export async function insertProductVariantTransactional(
+    client: PoolClient,
+    orgId: string,
+    productId: string,
+    variant: VariantInputData
+): Promise<string> {
+    const result = await client.query<{ id: string }>(
+        `INSERT INTO product_variants (
+           org_id, product_id, title, sku, options, price,
+           cost_price, stock, low_stock_at, image_url, is_active
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         RETURNING id`,
+        [
+            orgId,
+            productId,
+            variant.title.trim(),
+            variant.sku?.trim() || null,
+            JSON.stringify(variant.options || {}),
+            variant.price,
+            variant.cost_price ?? 0,
+            variant.stock,
+            variant.low_stock_at ?? 5,
+            variant.image_url || null,
+            variant.is_active ?? true
+			        ]
+    );
+    return result.rows[0].id;
 }

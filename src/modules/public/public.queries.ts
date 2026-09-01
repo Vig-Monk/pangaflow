@@ -1,5 +1,6 @@
 // =============================================================================
-// src/modules/public/public.queries.ts
+// soko-api/src/modules/public/public.queries.ts
+// Strict Tenant-Isolated Public Storefront Queries
 // =============================================================================
 
 import { query } from '../../config/db';
@@ -22,19 +23,37 @@ export interface PublicStoreRow {
   hero_cta_label: string | null;
 }
 
+export interface PublicFormatRow {
+  id: string;
+  product_id: string;
+  format: 'pdf' | 'epub' | 'hardcopy';
+  price: string;
+  file_url: string | null;
+  file_public_id: string | null;
+  file_size_bytes: string | null;
+  stock: number | null;
+}
+
 export interface PublicProductRow {
   id: string;
+  org_id: string;
+  category_id: string;
+  category_name: string;
   name: string;
   slug: string;
+  sku: string | null;
   description: string | null;
   price: string;
-  category_name: string;
   stock: number;
-  images: string[];
+  images: Array<{ image_url: string; image_public_id: string; sort_order: number }>;
+  formats: PublicFormatRow[];
+  created_at: Date;
+  updated_at: Date;
 }
 
 export interface PublicOrderItemRow {
   product_name: string;
+  variant_title: string | null;
   unit_price: string;
   quantity: number;
   subtotal: string;
@@ -43,6 +62,7 @@ export interface PublicOrderItemRow {
 export interface PublicOrderDetailsRow {
   id: string;
   customer_name: string;
+  customer_phone: string;
   total: string;
   status: 'pending' | 'confirmed' | 'assigned' | 'out_for_delivery' | 'delivered' | 'cancelled';
   payment_method: string;
@@ -64,9 +84,6 @@ export interface LocalEstateRow {
   lng: string;
 }
 
-/**
- * Searches curated reference estates by name or alias.
- */
 export async function searchEstatesLocal(searchQuery: string): Promise<LocalEstateRow[]> {
   const result = await query<LocalEstateRow>(
     `SELECT id, name, city, lat::text AS lat, lng::text AS lng
@@ -82,32 +99,85 @@ export async function searchEstatesLocal(searchQuery: string): Promise<LocalEsta
   return result.rows;
 }
 
+/**
+ * Strict lookup by store slug. Never leaks other organization stores when not found.
+ */
 export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow | null> {
+  const cleanSlug = (slug || '').trim().toLowerCase();
+
   const result = await query<PublicStoreRow>(
-    `SELECT id, org_id, slug, name, description, logo_url, cover_image_url,
-            contact_phone, contact_email, location, delivery_info,
-            hero_layout, hero_headline, hero_subheadline, hero_cta_label
-     FROM   stores
-     WHERE  slug   = $1
-       AND  status = 'published'`,
-    [slug.trim().toLowerCase()]
+    `SELECT s.id, s.org_id, s.slug, s.name, s.description, s.logo_url, s.cover_image_url,
+            s.contact_phone, s.contact_email, s.location, s.delivery_info,
+            s.hero_layout, s.hero_headline, s.hero_subheadline, s.hero_cta_label
+     FROM   stores s
+     INNER JOIN organizations o ON o.id = s.org_id
+     WHERE  s.slug = $1
+       AND  o.deleted_at IS NULL
+       AND  s.status = 'published'
+     LIMIT  1`,
+    [cleanSlug]
   );
+
   return result.rows[0] ?? null;
 }
 
+/**
+ * Returns products strictly isolated to the specified organization.
+ */
 export async function getProductsByStoreOrgIdPublic(orgId: string): Promise<PublicProductRow[]> {
   const result = await query<PublicProductRow>(
-    `SELECT p.id, p.name, p.slug, p.description, p.price::text AS price,
+    `SELECT p.id,
+            p.org_id,
+            p.category_id,
+            p.name,
+            p.slug,
+            p.sku,
+            p.description,
+            p.price::text AS price,
             COALESCE(c.name, 'General') AS category_name,
             COALESCE(i.stock, 0) AS stock,
+            p.created_at,
+            p.updated_at,
             COALESCE(
               (
-                SELECT json_agg(pi.image_url ORDER BY pi.sort_order ASC)
-                FROM   product_images pi
-                WHERE  pi.product_id = p.id
+                SELECT json_agg(
+                  json_build_object(
+                    'image_url', pi.image_url,
+                    'image_public_id', pi.image_public_id,
+                    'sort_order', pi.sort_order
+                  ) ORDER BY pi.sort_order ASC
+                )
+                FROM product_images pi
+                WHERE pi.product_id = p.id
               ),
               '[]'::json
-            ) AS images
+            ) AS images,
+            COALESCE(
+              (
+                SELECT json_agg(
+                  json_build_object(
+                    'id', pf.id,
+                    'product_id', pf.product_id,
+                    'format', pf.format,
+                    'price', pf.price::text,
+                    'file_url', pf.file_url,
+                    'file_public_id', pf.file_public_id,
+                    'file_size_bytes', pf.file_size_bytes::text,
+                    'stock', pf.stock
+                  ) ORDER BY (
+                    CASE pf.format
+                      WHEN 'hardcopy' THEN 1
+                      WHEN 'pdf' THEN 2
+                      WHEN 'epub' THEN 3
+                      ELSE 4
+                    END
+                  ) ASC
+                )
+                FROM product_formats pf
+                WHERE pf.product_id = p.id
+              ),
+              '[]'::json
+            ) AS formats
      FROM   products p
      LEFT JOIN categories c ON c.id = p.category_id
      LEFT JOIN inventory i  ON i.product_id = p.id
@@ -120,22 +190,66 @@ export async function getProductsByStoreOrgIdPublic(orgId: string): Promise<Publ
   return result.rows;
 }
 
+/**
+ * Returns single product strictly isolated to the specified organization.
+ */
 export async function getProductBySlugPublic(
   orgId: string,
   productSlug: string
 ): Promise<PublicProductRow | null> {
   const result = await query<PublicProductRow>(
-    `SELECT p.id, p.name, p.slug, p.description, p.price::text AS price,
+    `SELECT p.id,
+            p.org_id,
+            p.category_id,
+            p.name,
+            p.slug,
+            p.sku,
+            p.description,
+            p.price::text AS price,
             COALESCE(c.name, 'General') AS category_name,
             COALESCE(i.stock, 0) AS stock,
+            p.created_at,
+            p.updated_at,
             COALESCE(
               (
-                SELECT json_agg(pi.image_url ORDER BY pi.sort_order ASC)
-                FROM   product_images pi
-                WHERE  pi.product_id = p.id
+                SELECT json_agg(
+                  json_build_object(
+                    'image_url', pi.image_url,
+                    'image_public_id', pi.image_public_id,
+                    'sort_order', pi.sort_order
+                  ) ORDER BY pi.sort_order ASC
+                )
+                FROM product_images pi
+                WHERE pi.product_id = p.id
               ),
               '[]'::json
-            ) AS images
+            ) AS images,
+            COALESCE(
+              (
+                SELECT json_agg(
+                  json_build_object(
+                    'id', pf.id,
+                    'product_id', pf.product_id,
+                    'format', pf.format,
+                    'price', pf.price::text,
+                    'file_url', pf.file_url,
+                    'file_public_id', pf.file_public_id,
+                    'file_size_bytes', pf.file_size_bytes::text,
+                    'stock', pf.stock
+                  ) ORDER BY (
+                    CASE pf.format
+                      WHEN 'hardcopy' THEN 1
+                      WHEN 'pdf' THEN 2
+                      WHEN 'epub' THEN 3
+                      ELSE 4
+                    END
+                  ) ASC
+                )
+                FROM product_formats pf
+                WHERE pf.product_id = p.id
+              ),
+              '[]'::json
+            ) AS formats
      FROM   products p
      LEFT JOIN categories c ON c.id = p.category_id
      LEFT JOIN inventory i  ON i.product_id = p.id
@@ -153,7 +267,7 @@ export async function getPublicOrderDetailsRow(
   orderId: string
 ): Promise<PublicOrderDetailsRow | null> {
   const result = await query<PublicOrderDetailsRow>(
-    `SELECT o.id, o.customer_name, o.total::text AS total, o.status,
+    `SELECT o.id, o.customer_name, o.customer_phone, o.total::text AS total, o.status,
             o.payment_method, o.payment_status,
             o.delivery_type, o.delivery_fee::text AS delivery_fee,
             o.delivery_fee_status, o.delivery_confirmation_code,
@@ -173,7 +287,7 @@ export async function getPublicOrderDetailsRow(
 
 export async function getPublicOrderItems(orderId: string): Promise<PublicOrderItemRow[]> {
   const result = await query<PublicOrderItemRow>(
-    `SELECT product_name, unit_price::text AS unit_price, quantity, subtotal::text AS subtotal
+    `SELECT product_name, variant_title, unit_price::text AS unit_price, quantity, subtotal::text AS subtotal
      FROM   order_items
      WHERE  order_id = $1`,
     [orderId]

@@ -1,5 +1,5 @@
 // =============================================================================
-// src/modules/products/products.routes.ts
+// soko-api/src/modules/products/products.routes.ts
 // =============================================================================
 
 import { Router } from "express";
@@ -7,6 +7,7 @@ import { verifyToken } from "../../middleware/auth";
 import { checkProductLimit } from "../../middleware/checkLimit";
 import {
     uploadSignatureHandler,
+    autoFindBookCoverHandler,
     createCategoryHandler,
     listCategoriesHandler,
     listProductsHandler,
@@ -26,6 +27,9 @@ import {
 const router = Router();
 
 router.use(verifyToken);
+
+// Automated Typo-Tolerant Cover Art Discovery
+router.get("/find-cover", autoFindBookCoverHandler);
 
 // Inventory Paths
 router.get("/inventory", listInventoryHandler);
