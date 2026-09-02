@@ -1,8 +1,5 @@
 // =============================================================================
 // soko-api/src/modules/product-formats/product-formats.service.ts
-// Business logic & validation for product formats.
-// Digital formats (PDF, EPUB) require file_public_id (R2 key) or file_url and forbid stock.
-// Physical formats (Hardcopy) require stock and forbid file attachments.
 // =============================================================================
 
 import { z } from 'zod';
@@ -35,19 +32,11 @@ export const CreateProductFormatSchema = z
   })
   .superRefine((data, ctx) => {
     if (data.format === 'pdf' || data.format === 'epub') {
-      // Must have either an R2 key (file_public_id) or a file reference (file_url)
-      if (!data.file_public_id && !data.file_url) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['file_public_id'],
-          message: 'A Cloudflare R2 file key or file_url is required for digital formats (pdf, epub)',
-        });
-      }
       if (data.stock !== undefined && data.stock !== null) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['stock'],
-          message: 'stock count is not allowed for digital formats',
+          message: 'Stock count is not allowed for digital formats',
         });
       }
     }
