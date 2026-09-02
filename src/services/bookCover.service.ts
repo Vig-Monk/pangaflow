@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/services/bookCover.service.ts
-// Robust Book Cover Discovery with High-Resolution CDN Formatting.
+// Ultra-High-Resolution (HD 800px+) Book Cover Discovery Engine.
 // =============================================================================
 
 import axios from 'axios';
@@ -14,7 +14,7 @@ export interface CoverSearchResult {
 
 function cleanQueryString(input: string): string {
   return (input || '')
-    .replace(/\s*[\(\[\{][^\)\]\}]*[\)\]\}]/g, ' ') // Strip [Paperback], (1st Edition), etc.
+    .replace(/\s*[\(\[\{][^\)\]\}]*[\)\]\}]/g, ' ') // Strip (Paperback), [E-Book], etc.
     .replace(/:\s*.*$/, '')                          // Strip subtitles
     .replace(/[^\w\s-]/g, ' ')                       // Strip punctuation
     .replace(/\s+/g, ' ')
@@ -22,15 +22,25 @@ function cleanQueryString(input: string): string {
 }
 
 /**
- * Formats Google Books URLs to guaranteed high-res HTTPS CDN links
+ * Upgrades Google Books thumbnail URLs to 800px+ High-Resolution HD images
  */
-function normalizeGoogleBooksUrl(url: string, volumeId?: string): string {
+function upgradeToHighResGoogleUrl(url: string, volumeId?: string): string {
+  // If volumeId is present, use Google's direct 800x1200 HD publisher CDN endpoint
   if (volumeId) {
-    // Direct Google CDN endpoint (bypasses gbs_api restrictions and gives crisp 400x600 covers)
-    return `https://books.google.com/books/publisher/content/images/frontcover/${volumeId}?fife=w400-h600`;
+    return `https://books.google.com/books/publisher/content/images/frontcover/${volumeId}?fife=w800-h1200`;
   }
+
   let upgraded = url.replace(/^http:\/\//i, 'https://');
   upgraded = upgraded.replace(/&edge=curl/g, '');
+
+  // zoom=0 removes thumbnail downscaling and returns uncompressed scan
+  upgraded = upgraded.replace(/zoom=[0-9]/g, 'zoom=0');
+
+  // Append 800px width scaling parameter if not present
+  if (!upgraded.includes('fife=')) {
+    upgraded += '&fife=w800-h1200';
+  }
+
   return upgraded;
 }
 
@@ -49,7 +59,7 @@ export async function findBestBookCover(
   }
 
   // ---------------------------------------------------------------------------
-  // Tier 1: Google Books API
+  // Tier 1: Google Books API (High-Resolution Discovery)
   // ---------------------------------------------------------------------------
   try {
     const query = hasValidIsbn
@@ -77,7 +87,7 @@ export async function findBestBookCover(
 
         if (rawCover && typeof rawCover === 'string' && rawCover.length > 10) {
           return {
-            coverUrl: normalizeGoogleBooksUrl(rawCover, volumeId),
+            coverUrl: upgradeToHighResGoogleUrl(rawCover, volumeId),
             title: volumeInfo.title || rawTitle,
             author: volumeInfo.authors?.[0] || rawAuthor,
             source: 'googlebooks',
@@ -86,11 +96,11 @@ export async function findBestBookCover(
       }
     }
   } catch (err) {
-    // Fallback to Open Library
+    // Non-blocking fallback to Open Library
   }
 
   // ---------------------------------------------------------------------------
-  // Tier 2: Open Library API Fallback
+  // Tier 2: Open Library API (Large -L.jpg Format)
   // ---------------------------------------------------------------------------
   try {
     if (hasValidIsbn) {
@@ -128,7 +138,7 @@ export async function findBestBookCover(
       }
     }
   } catch (err) {
-    // Fallback to null
+    // Fallback
   }
 
   return { coverUrl: null, title: rawTitle, source: null };
