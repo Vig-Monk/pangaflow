@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/products/products.service.ts
-// Product catalog management with inverted cover art resolution.
+// Product catalog management with promotion validation and format isolation.
 // =============================================================================
 
 import { z } from "zod";
@@ -19,6 +19,8 @@ cloudinary.config({
     api_secret: env.CLOUDINARY_API_SECRET
 });
 
+const ALLOWED_BADGES = ['BESTSELLER', 'FLASH_SALE', 'NO1_PICK', 'DEAL_OF_WEEK', 'LIMITED_TIME'] as const;
+
 export const VariantInputSchema = z.object({
     id: z.string().uuid().optional(),
     title: z.string().min(1, "Variant title is required").max(200),
@@ -35,9 +37,12 @@ export const VariantInputSchema = z.object({
 export const ProductValidationSchema = z.object({
     name: z.string().min(1, "Name is required").max(200),
     category_id: z.string().uuid("category_id must be a valid UUID").nullable().optional(),
-    price: z.number().nonnegative("Price must be greater than or equal to zero"),
+    price: z.number().positive("Price must be greater than zero"),
+    compare_at_price: z.number().positive("Compare-at price must be greater than zero").nullable().optional(),
     cost_price: z.number().nonnegative("Cost price must be greater than or equal to zero").nullable().optional(),
     sku: z.string().max(100).nullable().optional(),
+    badge: z.enum(ALLOWED_BADGES).nullable().optional(),
+    sale_ends_at: z.string().datetime().nullable().optional(),
     description: z.string().max(2000).nullable().optional(),
     stock: z.number().int().nonnegative("Stock must be an integer greater than or equal to zero"),
     images: z
@@ -50,6 +55,9 @@ export const ProductValidationSchema = z.object({
         .optional(),
     variants: z.array(VariantInputSchema).optional(),
     publish: z.boolean().optional()
+}).refine(data => !data.compare_at_price || data.compare_at_price > data.price, {
+    message: "Original compare-at price must be strictly greater than selling price",
+    path: ["compare_at_price"]
 });
 
 export const BulkCreateSchema = z.object({
@@ -65,6 +73,7 @@ export const BulkDeleteProductsSchema = z.object({
 
 export const ListProductsQuerySchema = z.object({
     category_id: z.string().uuid().optional(),
+    badge: z.enum(ALLOWED_BADGES).optional(),
     q: z.string().optional(),
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20)
@@ -73,13 +82,24 @@ export const ListProductsQuerySchema = z.object({
 export const UpdateProductSchema = z.object({
     name: z.string().min(1).max(200).optional(),
     category_id: z.string().uuid().optional(),
-    price: z.number().nonnegative().optional(),
+    price: z.number().positive().optional(),
+    compare_at_price: z.number().positive().nullable().optional(),
     cost_price: z.number().nonnegative().nullable().optional(),
     sku: z.string().max(100).nullable().optional(),
+    badge: z.enum(ALLOWED_BADGES).nullable().optional(),
+    sale_ends_at: z.string().datetime().nullable().optional(),
     description: z.string().max(2000).nullable().optional(),
     status: z.enum(["draft", "published", "archived"]).optional(),
     variants: z.array(VariantInputSchema).optional(),
     images: z.array(z.object({ image_url: z.string(), image_public_id: z.string().optional() })).optional()
+}).refine(data => {
+    if (data.compare_at_price && data.price && data.compare_at_price <= data.price) {
+        return false;
+    }
+    return true;
+}, {
+    message: "Compare-at price must be strictly greater than selling price",
+    path: ["compare_at_price"]
 });
 
 export const ListInventoryQuerySchema = z.object({
@@ -159,6 +179,7 @@ export async function listMerchantProducts(orgId: string, rawQuery: unknown) {
     return productsQueries.listProducts(orgId, {
         categoryId: parsed.data.category_id,
         searchQuery: parsed.data.q,
+        badge: parsed.data.badge,
         page: parsed.data.page,
         limit: parsed.data.limit
     });
@@ -227,20 +248,76 @@ export async function unarchiveMerchantProduct(orgId: string, productId: string)
     return productsQueries.unarchiveProduct(orgId, productId);
 }
 
-export async function deleteMerchantProduct(orgId: string, productId: string) {
-    const existing = await productsQueries.getProductById(orgId, productId);
-    if (!existing) {
-        throw new AppError("Product not found", 404);
+export async function deleteMerchantProduct(
+    orgId: string,
+    productId: string
+): Promise<{ deleted: boolean; action: 'hard_deleted' | 'soft_deleted' }> {
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+
+        const product = await client.query<{ id: string; name: string }>(
+            `SELECT id, name FROM products WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
+            [orgId, productId]
+        );
+
+        if (product.rows.length === 0) {
+            throw new AppError("Product not found or already deleted", 404);
+        }
+
+        const orderCount = await productsQueries.getProductOrderCount(client, orgId, productId);
+
+        let action: 'hard_deleted' | 'soft_deleted' = 'hard_deleted';
+
+        if (orderCount > 0) {
+            await productsQueries.softDeleteProductTransactional(client, orgId, productId);
+            action = 'soft_deleted';
+        } else {
+            await productsQueries.hardDeleteProductTransactional(client, orgId, productId);
+            action = 'hard_deleted';
+        }
+
+        await client.query("COMMIT");
+        return { deleted: true, action };
+    } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+    } finally {
+        client.release();
     }
-    return productsQueries.deleteProductPermanently(orgId, productId);
 }
 
-export async function deleteProductsBulk(orgId: string, rawBody: unknown) {
+export async function deleteProductsBulk(
+    orgId: string,
+    rawBody: unknown
+): Promise<{ deleted: boolean; count: number; softDeleted: number; hardDeleted: number }> {
     const parsed = BulkDeleteProductsSchema.safeParse(rawBody);
     if (!parsed.success) {
         throw new AppError(parsed.error.issues[0]?.message ?? "Invalid bulk deletion payload", 400);
     }
-    return productsQueries.bulkDeleteProducts(orgId, parsed.data.productIds);
+
+    let softDeleted = 0;
+    let hardDeleted = 0;
+
+    for (const productId of parsed.data.productIds) {
+        try {
+            const res = await deleteMerchantProduct(orgId, productId);
+            if (res.action === 'soft_deleted') {
+                softDeleted++;
+            } else {
+                hardDeleted++;
+            }
+        } catch {
+            // Continue with remaining IDs in batch
+        }
+    }
+
+    return {
+        deleted: true,
+        count: softDeleted + hardDeleted,
+        softDeleted,
+        hardDeleted,
+    };
 }
 
 export async function listMerchantInventory(orgId: string, rawQuery: unknown) {
@@ -333,7 +410,6 @@ export async function createProductsBulk(orgId: string, rawBody: unknown) {
 
             const slug = await generateUniqueSlug(client, orgId, prod.name);
 
-            // Compute parent price/cost
             const parentPrice = prod.variants && prod.variants.length > 0 ? prod.variants[0].price : prod.price;
             const parentCost = prod.variants && prod.variants.length > 0 ? (prod.variants[0].cost_price ?? 0) : (prod.cost_price ?? null);
 
@@ -348,22 +424,19 @@ export async function createProductsBulk(orgId: string, rawBody: unknown) {
                     description: prod.description || null,
                     cost_price: parentCost,
                     price: parentPrice,
+                    compare_at_price: prod.compare_at_price || null,
+                    badge: prod.badge || null,
+                    sale_ends_at: prod.sale_ends_at || null,
                     status: prod.publish ? "published" : "draft"
                 }
             );
 
-            // Calculate total stock across variants
             const totalStock = prod.variants && prod.variants.length > 0
                 ? prod.variants.reduce((sum, v) => sum + (v.stock || 0), 0)
                 : prod.stock;
 
             await productsQueries.insertInventoryTransactional(client, insertedId, totalStock);
 
-            // -----------------------------------------------------------------
-            // INVERTED COVER RESOLUTION:
-            // 1. First attempt automated discovery (Google Books / Open Library)
-            // 2. Fall back to admin-provided images if discovery fails
-            // -----------------------------------------------------------------
             let finalImages = prod.images || [];
 
             try {
@@ -375,10 +448,9 @@ export async function createProductsBulk(orgId: string, rawBody: unknown) {
                 }];
               }
             } catch {
-              // Non-blocking fallback to admin images or placeholder
+              // Non-blocking fallback
             }
 
-            // Insert Images to PostgreSQL
             for (let s = 0; s < finalImages.length; s++) {
                 const img = finalImages[s];
                 await productsQueries.insertProductImageTransactional(
@@ -390,7 +462,6 @@ export async function createProductsBulk(orgId: string, rawBody: unknown) {
                 );
             }
 
-            // Insert Variants
             if (prod.variants && prod.variants.length > 0) {
                 for (const v of prod.variants) {
                     await productsQueries.insertProductVariantTransactional(

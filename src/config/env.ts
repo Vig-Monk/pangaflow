@@ -1,5 +1,6 @@
 // =============================================================================
 // soko-api/src/config/env.ts
+// Validated Environment Variables with SMTP Configuration
 // =============================================================================
 
 import dotenv from 'dotenv';
@@ -31,6 +32,14 @@ const envSchema = z.object({
   R2_ACCESS_KEY_ID:           z.string().optional().default(''),
   R2_SECRET_ACCESS_KEY:       z.string().optional().default(''),
   R2_BUCKET_NAME:              z.string().optional().default('flemela-books'),
+
+  // Transactional SMTP Settings (Nodemailer)
+  SMTP_HOST:                   z.string().optional().default(''),
+  SMTP_PORT:                   z.coerce.number().default(465),
+  SMTP_SECURE:                 z.coerce.boolean().default(true),
+  SMTP_USER:                   z.string().optional().default(''),
+  SMTP_PASS:                   z.string().optional().default(''),
+  SMTP_FROM:                   z.string().default('Flemela Bookstore <orders@flemela.co.ke>'),
 });
 
 const parsed = envSchema.safeParse(process.env);

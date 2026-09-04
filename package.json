@@ -11,7 +11,8 @@
     "migrate": "tsx src/migrations/run.ts",
     "test": "tsx src/tests/run-all-tests.ts",
     "test:unit": "tsx src/tests/unit-math-crypto.test.ts",
-    "test:e2e": "tsx src/tests/e2e-delivery-flow.test.ts"
+    "test:e2e": "tsx src/tests/e2e-delivery-flow.test.ts",
+    "heal": "tsx src/scripts/heal-system.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.750.0",
@@ -32,6 +33,7 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.2.0",
     "node-cron": "^3.0.3",
+    "nodemailer": "^9.1.1",
     "pg": "^8.11.5",
     "pino": "^8.21.0",
     "pino-http": "^9.0.0",
@@ -45,6 +47,7 @@
     "@types/multer": "^2.2.0",
     "@types/node": "^20.12.12",
     "@types/node-cron": "^3.0.11",
+    "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.11.6",
     "@types/uuid": "^9.0.8",
     "@typescript-eslint/eslint-plugin": "^7.10.0",

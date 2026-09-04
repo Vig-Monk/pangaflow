@@ -1,11 +1,13 @@
 // =============================================================================
 // soko-api/src/modules/product-formats/product-formats.service.ts
+// Format management with retroactive download fulfillment triggers.
 // =============================================================================
 
 import { z } from 'zod';
 import { AppError } from '../../utils/error';
 import * as formatQueries from './product-formats.queries';
 import type { FormatType, ProductFormatRow } from './product-formats.queries';
+import { reconcilePendingDownloadsForFormat } from '../../verticals/books/delivery.service';
 
 const UUID_SCHEMA = z.string().uuid('Must be a valid UUID');
 
@@ -59,26 +61,25 @@ export const CreateProductFormatSchema = z
     }
   });
 
-export const UpdateProductFormatSchema = z
-  .object({
-    price: z.number().nonnegative('Price must be greater than or equal to zero').optional(),
-    file_url: z
-      .string()
-      .max(1000)
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    file_public_id: z
-      .string()
-      .max(500)
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    file_size_bytes: z.number().int().nonnegative().nullable().optional(),
-    stock: z.number().int().nonnegative().nullable().optional(),
-  });
+export const UpdateProductFormatSchema = z.object({
+  price: z.number().nonnegative('Price must be greater than or equal to zero').optional(),
+  file_url: z
+    .string()
+    .max(1000)
+    .nullable()
+    .optional()
+    .or(z.literal(''))
+    .transform((v) => (v === '' ? null : v)),
+  file_public_id: z
+    .string()
+    .max(500)
+    .nullable()
+    .optional()
+    .or(z.literal(''))
+    .transform((v) => (v === '' ? null : v)),
+  file_size_bytes: z.number().int().nonnegative().nullable().optional(),
+  stock: z.number().int().nonnegative().nullable().optional(),
+});
 
 export interface ProductFormatDto {
   id: string;
@@ -224,6 +225,17 @@ export async function updateFormat(
     throw new AppError('Product format not found', 404);
   }
 
+  // If a digital file was just uploaded, trigger retroactive fulfillment for pending orders
+  if (isDigital && (row.file_url || row.file_public_id) && (!existing.file_url && !existing.file_public_id)) {
+    setImmediate(async () => {
+      try {
+        await reconcilePendingDownloadsForFormat(formatId);
+      } catch (e) {
+        console.error('Retroactive format fulfillment error:', e);
+      }
+    });
+  }
+
   return toFormatDto(row);
 }
 
@@ -235,8 +247,18 @@ export async function deleteFormat(
   const productId = validateUuid(rawProductId, 'productId');
   const formatId = validateUuid(rawFormatId, 'formatId');
 
-  const deleted = await formatQueries.deleteProductFormat(orgId, productId, formatId);
-  if (!deleted) {
-    throw new AppError('Product format not found', 404);
+  try {
+    const deleted = await formatQueries.deleteProductFormat(orgId, productId, formatId);
+    if (!deleted) {
+      throw new AppError('Product format not found', 404);
+    }
+  } catch (err: any) {
+    if (err.code === '23503') {
+      throw new AppError(
+        'Cannot remove this format because active customer digital downloads depend on it.',
+        409
+      );
+    }
+    throw err;
   }
 }

@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/public/public.queries.ts
-// Strict Tenant-Isolated Public Storefront Queries
+// Strict Tenant-Isolated Public Storefront Queries with Promotion Fields
 // =============================================================================
 
 import { query } from '../../config/db';
@@ -28,6 +28,7 @@ export interface PublicFormatRow {
   product_id: string;
   format: 'pdf' | 'epub' | 'hardcopy';
   price: string;
+  compare_at_price: string | null;
   file_url: string | null;
   file_public_id: string | null;
   file_size_bytes: string | null;
@@ -44,6 +45,9 @@ export interface PublicProductRow {
   sku: string | null;
   description: string | null;
   price: string;
+  compare_at_price: string | null;
+  badge: string | null;
+  sale_ends_at: Date | null;
   stock: number;
   images: Array<{ image_url: string; image_public_id: string; sort_order: number }>;
   formats: PublicFormatRow[];
@@ -99,9 +103,6 @@ export async function searchEstatesLocal(searchQuery: string): Promise<LocalEsta
   return result.rows;
 }
 
-/**
- * Strict lookup by store slug. Never leaks other organization stores when not found.
- */
 export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow | null> {
   const cleanSlug = (slug || '').trim().toLowerCase();
 
@@ -121,9 +122,6 @@ export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow
   return result.rows[0] ?? null;
 }
 
-/**
- * Returns products strictly isolated to the specified organization.
- */
 export async function getProductsByStoreOrgIdPublic(orgId: string): Promise<PublicProductRow[]> {
   const result = await query<PublicProductRow>(
     `SELECT p.id,
@@ -134,6 +132,9 @@ export async function getProductsByStoreOrgIdPublic(orgId: string): Promise<Publ
             p.sku,
             p.description,
             p.price::text AS price,
+            p.compare_at_price::text AS compare_at_price,
+            p.badge,
+            p.sale_ends_at,
             COALESCE(c.name, 'General') AS category_name,
             COALESCE(i.stock, 0) AS stock,
             p.created_at,
@@ -160,6 +161,7 @@ export async function getProductsByStoreOrgIdPublic(orgId: string): Promise<Publ
                     'product_id', pf.product_id,
                     'format', pf.format,
                     'price', pf.price::text,
+                    'compare_at_price', pf.compare_at_price::text,
                     'file_url', pf.file_url,
                     'file_public_id', pf.file_public_id,
                     'file_size_bytes', pf.file_size_bytes::text,
@@ -190,9 +192,6 @@ export async function getProductsByStoreOrgIdPublic(orgId: string): Promise<Publ
   return result.rows;
 }
 
-/**
- * Returns single product strictly isolated to the specified organization.
- */
 export async function getProductBySlugPublic(
   orgId: string,
   productSlug: string
@@ -206,6 +205,9 @@ export async function getProductBySlugPublic(
             p.sku,
             p.description,
             p.price::text AS price,
+            p.compare_at_price::text AS compare_at_price,
+            p.badge,
+            p.sale_ends_at,
             COALESCE(c.name, 'General') AS category_name,
             COALESCE(i.stock, 0) AS stock,
             p.created_at,
@@ -232,6 +234,7 @@ export async function getProductBySlugPublic(
                     'product_id', pf.product_id,
                     'format', pf.format,
                     'price', pf.price::text,
+                    'compare_at_price', pf.compare_at_price::text,
                     'file_url', pf.file_url,
                     'file_public_id', pf.file_public_id,
                     'file_size_bytes', pf.file_size_bytes::text,

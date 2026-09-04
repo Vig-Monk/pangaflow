@@ -1,7 +1,6 @@
 // =============================================================================
-// src/modules/product-formats/product-formats.queries.ts
-// Database access layer for product formats. Raw pg only.
-// Every query joins through products to enforce tenant isolation (p.org_id = $orgId).
+// soko-api/src/modules/product-formats/product-formats.queries.ts
+// Database access layer for product formats with compare_at_price support.
 // =============================================================================
 
 import { query } from '../../config/db';
@@ -13,6 +12,7 @@ export interface ProductFormatRow {
   product_id: string;
   format: FormatType;
   price: string;
+  compare_at_price: string | null;
   file_url: string | null;
   file_public_id: string | null;
   file_size_bytes: string | null;
@@ -24,6 +24,7 @@ export interface ProductFormatRow {
 export interface CreateFormatInput {
   format: FormatType;
   price: number;
+  compareAtPrice?: number | null;
   fileUrl?: string | null;
   filePublicId?: string | null;
   fileSizeBytes?: number | null;
@@ -32,6 +33,7 @@ export interface CreateFormatInput {
 
 export interface UpdateFormatInput {
   price?: number;
+  compareAtPrice?: number | null;
   fileUrl?: string | null;
   filePublicId?: string | null;
   fileSizeBytes?: number | null;
@@ -44,6 +46,7 @@ const FORMAT_SELECT_FIELDS = `
   pf.product_id,
   pf.format,
   pf.price::text AS price,
+  pf.compare_at_price::text AS compare_at_price,
   pf.file_url,
   pf.file_public_id,
   pf.file_size_bytes::text AS file_size_bytes,
@@ -52,12 +55,13 @@ const FORMAT_SELECT_FIELDS = `
   pf.updated_at
 `;
 
-// Fields for INSERT / UPDATE RETURNING clauses (no pf. alias prefix)
+// Fields for INSERT / UPDATE RETURNING clauses
 const FORMAT_RETURNING_FIELDS = `
   id,
   product_id,
   format,
   price::text AS price,
+  compare_at_price::text AS compare_at_price,
   file_url,
   file_public_id,
   file_size_bytes::text AS file_size_bytes,
@@ -121,24 +125,26 @@ export async function createProductFormat(
 ): Promise<ProductFormatRow | null> {
   const result = await query<ProductFormatRow>(
     `INSERT INTO product_formats (
-       product_id, format, price, file_url, file_public_id, file_size_bytes, stock
+       product_id, format, price, compare_at_price, file_url, file_public_id, file_size_bytes, stock
      )
-     SELECT p.id, $3, $4, $5, $6, $7, $8
+     SELECT p.id, $3, $4, $5, $6, $7, $8, $9
      FROM products p
      WHERE p.id = $2 AND p.org_id = $1 AND p.deleted_at IS NULL
      ON CONFLICT (product_id, format) DO UPDATE SET
-       price           = EXCLUDED.price,
-       file_url        = EXCLUDED.file_url,
-       file_public_id  = EXCLUDED.file_public_id,
-       file_size_bytes = EXCLUDED.file_size_bytes,
-       stock           = EXCLUDED.stock,
-       updated_at      = NOW()
+       price            = EXCLUDED.price,
+       compare_at_price = EXCLUDED.compare_at_price,
+       file_url         = EXCLUDED.file_url,
+       file_public_id   = EXCLUDED.file_public_id,
+       file_size_bytes  = EXCLUDED.file_size_bytes,
+       stock            = EXCLUDED.stock,
+       updated_at       = NOW()
      RETURNING ${FORMAT_RETURNING_FIELDS}`,
     [
       orgId,
       productId,
       data.format,
       data.price,
+      data.compareAtPrice ?? null,
       data.fileUrl ?? null,
       data.filePublicId ?? null,
       data.fileSizeBytes ?? null,
@@ -161,6 +167,12 @@ export async function updateProductFormat(
   if (data.price !== undefined) {
     setClauses.push(`price = $${paramIdx}`);
     params.push(data.price);
+    paramIdx++;
+  }
+
+  if (data.compareAtPrice !== undefined) {
+    setClauses.push(`compare_at_price = $${paramIdx}`);
+    params.push(data.compareAtPrice);
     paramIdx++;
   }
 

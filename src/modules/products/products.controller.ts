@@ -63,11 +63,8 @@ export async function deleteProductHandler(
 ): Promise<void> {
   try {
     const orgId = requireOrgId(req);
-    const deleted = await productsService.deleteMerchantProduct(orgId, req.params.id);
-    if (!deleted) {
-      throw new AppError('Product not found', 404);
-    }
-    success(res, { deleted: true });
+    const result = await productsService.deleteMerchantProduct(orgId, req.params.id);
+    success(res, result);
   } catch (err) {
     next(err);
   }
@@ -80,8 +77,8 @@ export async function bulkDeleteProductsHandler(
 ): Promise<void> {
   try {
     const orgId = requireOrgId(req);
-    const count = await productsService.deleteProductsBulk(orgId, req.body);
-    success(res, { deleted: true, count });
+    const result = await productsService.deleteProductsBulk(orgId, req.body);
+    success(res, result);
   } catch (err) {
     next(err);
   }

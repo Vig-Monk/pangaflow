@@ -1,5 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/products/products.queries.ts
+// Product catalog queries with promotions, compare-at pricing, and smart deletes.
 // =============================================================================
 
 import { PoolClient } from "pg";
@@ -12,6 +13,7 @@ export interface ProductFormatRow {
     product_id: string;
     format: FormatType;
     price: string;
+    compare_at_price: string | null;
     file_url: string | null;
     file_public_id: string | null;
     file_size_bytes: string | null;
@@ -45,6 +47,9 @@ export interface ProductWithImages {
     description: string | null;
     cost_price: string | null;
     price: string;
+    compare_at_price: string | null;
+    badge: string | null;
+    sale_ends_at: Date | null;
     status: "draft" | "published" | "archived";
     created_at: Date;
     updated_at: Date;
@@ -71,6 +76,7 @@ export interface InventoryWithProduct {
 export interface ListProductsOptions {
     categoryId?: string;
     searchQuery?: string;
+    badge?: string;
     page: number;
     limit: number;
 }
@@ -153,8 +159,9 @@ export async function createCategory(
 
 const PRODUCT_SELECT_FIELDS = `
   p.id, p.org_id, p.category_id, p.name, p.slug, p.sku, p.description,
-  p.cost_price::text AS cost_price, p.price::text AS price, p.status,
-  p.created_at, p.updated_at,
+  p.cost_price::text AS cost_price, p.price::text AS price,
+  p.compare_at_price::text AS compare_at_price, p.badge, p.sale_ends_at,
+  p.status, p.created_at, p.updated_at,
   c.name AS category_name,
   COALESCE(
     (
@@ -200,6 +207,7 @@ const PRODUCT_SELECT_FIELDS = `
           'product_id', pf.product_id,
           'format', pf.format,
           'price', pf.price::text,
+          'compare_at_price', pf.compare_at_price::text,
           'file_url', pf.file_url,
           'file_public_id', pf.file_public_id,
           'file_size_bytes', pf.file_size_bytes::text,
@@ -226,7 +234,7 @@ export async function listProducts(
     orgId: string,
     options: ListProductsOptions
 ): Promise<{ products: ProductWithImages[]; total: number }> {
-    const { categoryId, searchQuery, page, limit } = options;
+    const { categoryId, searchQuery, badge, page, limit } = options;
     const offset = (page - 1) * limit;
 
     const conditions: string[] = ["p.org_id = $1", "p.deleted_at IS NULL"];
@@ -236,6 +244,12 @@ export async function listProducts(
     if (categoryId) {
         conditions.push(`p.category_id = $${paramIndex}`);
         params.push(categoryId);
+        paramIndex++;
+    }
+
+    if (badge) {
+        conditions.push(`p.badge = $${paramIndex}`);
+        params.push(badge);
         paramIndex++;
     }
 
@@ -296,8 +310,11 @@ export async function updateProduct(
         name?: string;
         category_id?: string;
         price?: number;
+        compare_at_price?: number | null;
         cost_price?: number | null;
         sku?: string | null;
+        badge?: string | null;
+        sale_ends_at?: string | null;
         description?: string | null;
         status?: "draft" | "published" | "archived";
         variants?: VariantInputData[];
@@ -312,7 +329,7 @@ export async function updateProduct(
         const params: unknown[] = [orgId, productId];
         let paramIndex = 3;
 
-        const { variants, images, ...directFields } = fields;
+        const { variants, images, sale_ends_at, ...directFields } = fields;
 
         for (const [key, value] of Object.entries(directFields)) {
             if (value !== undefined) {
@@ -320,6 +337,12 @@ export async function updateProduct(
                 params.push(value);
                 paramIndex++;
             }
+        }
+
+        if (sale_ends_at !== undefined) {
+            setClauses.push(`sale_ends_at = $${paramIndex}`);
+            params.push(sale_ends_at ? new Date(sale_ends_at) : null);
+            paramIndex++;
         }
 
         if (setClauses.length > 0) {
@@ -469,6 +492,58 @@ export async function unarchiveProduct(
     return result.rowCount !== null && result.rowCount > 0;
 }
 
+// ---------------------------------------------------------------------------
+// Smart Deletion Database Operations
+// ---------------------------------------------------------------------------
+
+export async function getProductOrderCount(
+    client: PoolClient,
+    orgId: string,
+    productId: string
+): Promise<number> {
+    const result = await client.query<{ count: string }>(
+        `SELECT COUNT(oi.id)::text AS count
+         FROM order_items oi
+         INNER JOIN orders o ON o.id = oi.order_id
+         WHERE o.org_id = $1 AND (
+           oi.product_id = $2 OR 
+           oi.format_id IN (SELECT id FROM product_formats WHERE product_id = $2)
+         )`,
+        [orgId, productId]
+    );
+    return parseInt(result.rows[0]?.count || '0', 10);
+}
+
+export async function softDeleteProductTransactional(
+    client: PoolClient,
+    orgId: string,
+    productId: string
+): Promise<void> {
+    const timestamp = Math.floor(Date.now() / 1000);
+    await client.query(
+        `UPDATE products
+         SET deleted_at = NOW(),
+             status     = 'archived',
+             slug       = slug || '-deleted-' || $3,
+             updated_at = NOW()
+         WHERE org_id = $1 AND id = $2`,
+        [orgId, productId, timestamp]
+    );
+}
+
+export async function hardDeleteProductTransactional(
+    client: PoolClient,
+    orgId: string,
+    productId: string
+): Promise<boolean> {
+    const result = await client.query(
+        `DELETE FROM products 
+         WHERE org_id = $1 AND id = $2`,
+        [orgId, productId]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
+}
+
 export async function deleteProductPermanently(
     orgId: string,
     productId: string
@@ -479,19 +554,6 @@ export async function deleteProductPermanently(
         [orgId, productId]
     );
     return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function bulkDeleteProducts(
-    orgId: string,
-    productIds: string[]
-): Promise<number> {
-    if (productIds.length === 0) return 0;
-    const result = await query(
-        `DELETE FROM products 
-         WHERE org_id = $1 AND id = ANY($2::uuid[])`,
-        [orgId, productIds]
-    );
-    return result.rowCount ?? 0;
 }
 
 export async function setProductStatus(
@@ -607,14 +669,17 @@ export async function insertProductTransactional(
         description: string | null;
         cost_price: number | null;
         price: number;
+        compare_at_price?: number | null;
+        badge?: string | null;
+        sale_ends_at?: string | null;
         status: "draft" | "published" | "archived";
     }
 ): Promise<string> {
     const result = await client.query<{ id: string }>(
         `INSERT INTO products 
-           (org_id, category_id, name, slug, sku, description, cost_price, price, status)
+           (org_id, category_id, name, slug, sku, description, cost_price, price, compare_at_price, badge, sale_ends_at, status)
          VALUES 
-           ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING id`,
         [
             orgId,
@@ -625,6 +690,9 @@ export async function insertProductTransactional(
             data.description,
             data.cost_price,
             data.price,
+            data.compare_at_price ?? null,
+            data.badge ?? null,
+            data.sale_ends_at ? new Date(data.sale_ends_at) : null,
             data.status
         ]
     );
@@ -682,7 +750,7 @@ export async function insertProductVariantTransactional(
             variant.low_stock_at ?? 5,
             variant.image_url || null,
             variant.is_active ?? true
-			        ]
+        ]
     );
     return result.rows[0].id;
 }

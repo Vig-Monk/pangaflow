@@ -1,5 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/public/public.service.ts
+// Storefront API with phone-gated downloads, email capture, and promo expiration.
 // =============================================================================
 
 import axios from 'axios';
@@ -86,7 +87,7 @@ async function fetchNominatimWithRateLimit(searchQuery: string): Promise<Locatio
     });
 
     return results;
-  } catch (err) {
+  } catch {
     return [];
   }
 }
@@ -119,7 +120,13 @@ export async function searchDeliveryLocations(rawQuery: unknown): Promise<Locati
 export const CheckoutSchema = z.object({
   customerName: z.string().min(1, 'Name is required').max(200),
   customerPhone: z.string().min(1, 'Phone is required').max(20),
-  customerEmail: z.string().email('Invalid email').nullable().optional().or(z.literal('')).transform(v => (v === '' ? null : v)),
+  customerEmail: z
+    .string()
+    .email('Invalid email')
+    .nullable()
+    .optional()
+    .or(z.literal(''))
+    .transform((v) => (v === '' ? null : v)),
   deliveryLocation: z.string().min(1, 'Delivery location is required').max(500),
   notes: z.string().max(1000).nullable().optional(),
   mpesaCode: z.string().max(50).nullable().optional(),
@@ -129,15 +136,17 @@ export const CheckoutSchema = z.object({
   customerLng: z.number().nullable().optional(),
   locationSource: z.enum(['gps', 'local_list', 'nominatim', 'manual_text']).optional(),
   locationAccuracyM: z.number().nullable().optional(),
-  items: z.array(
-    z.object({
-      product_id: z.string().uuid(),
-      format_id: z.string().uuid().nullable().optional(),
-      variant_id: z.string().uuid().nullable().optional(),
-      quantity: z.number().int().positive('Quantity must be greater than zero'),
-      delivery_method: z.enum(['digital', 'pickup', 'delivery']).optional(),
-    })
-  ).min(1, 'Cannot checkout with an empty cart'),
+  items: z
+    .array(
+      z.object({
+        product_id: z.string().uuid(),
+        format_id: z.string().uuid().nullable().optional(),
+        variant_id: z.string().uuid().nullable().optional(),
+        quantity: z.number().int().positive('Quantity must be greater than zero'),
+        delivery_method: z.enum(['digital', 'pickup', 'delivery']).optional(),
+      })
+    )
+    .min(1, 'Cannot checkout with an empty cart'),
 });
 
 export interface PublicStoreDto {
@@ -161,6 +170,7 @@ export interface PublicFormatDto {
   product_id: string;
   format: 'pdf' | 'epub' | 'hardcopy';
   price: number;
+  compare_at_price: number | null;
   file_url: string | null;
   file_public_id: string | null;
   file_size_bytes: number | null;
@@ -178,6 +188,9 @@ export interface PublicProductDto {
   author: string | null;
   description: string | null;
   price: number;
+  compare_at_price: number | null;
+  badge: string | null;
+  sale_ends_at: string | null;
   stock: number;
   images: Array<{ image_url: string; image_public_id?: string; sort_order?: number }>;
   formats: PublicFormatDto[];
@@ -227,11 +240,16 @@ function toPublicStoreDto(row: publicQueries.PublicStoreRow, mpesaVerified: bool
 }
 
 function toPublicProductDto(row: publicQueries.PublicProductRow): PublicProductDto {
+  const isSaleExpired = Boolean(
+    row.sale_ends_at && new Date(row.sale_ends_at).getTime() < Date.now()
+  );
+
   const formats: PublicFormatDto[] = (row.formats || []).map((f) => ({
     id: f.id,
     product_id: f.product_id,
     format: f.format,
     price: parseFloat(f.price),
+    compare_at_price: f.compare_at_price && !isSaleExpired ? parseFloat(f.compare_at_price) : null,
     file_url: f.file_url,
     file_public_id: f.file_public_id,
     file_size_bytes: f.file_size_bytes ? parseInt(f.file_size_bytes, 10) : null,
@@ -266,6 +284,9 @@ function toPublicProductDto(row: publicQueries.PublicProductRow): PublicProductD
     author,
     description: row.description,
     price: parseFloat(row.price),
+    compare_at_price: row.compare_at_price && !isSaleExpired ? parseFloat(row.compare_at_price) : null,
+    badge: isSaleExpired ? null : (row.badge || null),
+    sale_ends_at: row.sale_ends_at ? new Date(row.sale_ends_at).toISOString() : null,
     stock: totalStock,
     images: normalizedImages,
     formats,
@@ -317,7 +338,6 @@ export async function placeOrder(
   }
 
   const { items, mpesaCode, ...customerData } = parsed.data;
-
   const normalizedSlug = (storeSlug || '').trim().toLowerCase();
   const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
   if (!store) {
@@ -415,7 +435,10 @@ export async function placeOrder(
           isPhysical = true;
           deliveryMethod = customerData.deliveryType || 'delivery';
           if (formatRow.stock !== null && formatRow.stock < cartItem.quantity) {
-            throw new AppError(`Insufficient stock remaining for "${product.name}". Only ${formatRow.stock} physical copies left.`, 409);
+            throw new AppError(
+              `Insufficient stock for "${product.name}". Only ${formatRow.stock} physical copies left.`,
+              409
+            );
           }
         } else {
           deliveryMethod = 'digital';
@@ -426,7 +449,7 @@ export async function placeOrder(
         isPhysical = true;
         deliveryMethod = customerData.deliveryType || 'delivery';
         if (product.stock < cartItem.quantity) {
-          throw new AppError(`Insufficient stock remaining for "${product.name}". Only ${product.stock} left.`, 409);
+          throw new AppError(`Insufficient stock for "${product.name}". Only ${product.stock} left.`, 409);
         }
       }
 
@@ -545,8 +568,8 @@ export async function placeOrder(
         if (item.formatId) {
           const decFormatRes = await client.query(
             `UPDATE product_formats
-             SET    stock = stock - $1, updated_at = NOW()
-             WHERE  id = $2 AND format = 'hardcopy' AND (stock IS NULL OR stock >= $1)`,
+             SET stock = stock - $1, updated_at = NOW()
+             WHERE id = $2 AND format = 'hardcopy' AND (stock IS NULL OR stock >= $1)`,
             [item.quantity, item.formatId]
           );
           if (decFormatRes.rowCount === 0) {
@@ -561,7 +584,7 @@ export async function placeOrder(
 
     let checkoutRequestId: string | undefined;
 
-   if  (isAutomatedDaraja) {
+    if (isAutomatedDaraja) {
       const recentPending = await findRecentPendingMpesaTransaction(orderId, 60);
 
       if (recentPending) {
@@ -608,7 +631,13 @@ export async function getPublicOrderDetails(
   storeSlug: string,
   orderId: string,
   verifyingPhone?: string
-): Promise<PublicOrderConfirmation & { downloads: any[]; isVerifiedCustomer: boolean; notes: string | null }> {
+): Promise<
+  PublicOrderConfirmation & {
+    downloads: any[];
+    isVerifiedCustomer: boolean;
+    notes: string | null;
+  }
+> {
   const normalizedSlug = (storeSlug || '').trim().toLowerCase();
   const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
   if (!store) {
@@ -640,10 +669,16 @@ export async function getPublicOrderDetails(
   const items = await publicQueries.getPublicOrderItems(order.id);
 
   const cleanVerifying = verifyingPhone ? normalizeCustomerPhone(verifyingPhone) : null;
-  const isVerifiedCustomer = Boolean(cleanVerifying && cleanVerifying === normalizeCustomerPhone(order.customer_phone));
+  const isVerifiedCustomer = Boolean(
+    cleanVerifying && cleanVerifying === normalizeCustomerPhone(order.customer_phone)
+  );
 
   let downloads: any[] = [];
-  if (order.payment_status === 'paid') {
+
+  // ===========================================================================
+  // SECURITY SHIELD GATE: Download tokens strictly gated behind phone match
+  // ===========================================================================
+  if (order.payment_status === 'paid' && isVerifiedCustomer) {
     const downloadsRes = await pool.query<{
       token: string;
       max_downloads: number;
@@ -656,11 +691,11 @@ export async function getPublicOrderDetails(
               dd.max_downloads,
               dd.download_count,
               dd.expires_at,
-              pf.format,
-              p.name AS book_title
+              COALESCE(dd.format, pf.format, 'pdf') AS format,
+              COALESCE(dd.book_title, p.name, 'Book') AS book_title
        FROM digital_downloads dd
-       INNER JOIN product_formats pf ON pf.id = dd.format_id
-       INNER JOIN products p ON p.id = pf.product_id
+       LEFT JOIN product_formats pf ON pf.id = dd.format_id
+       LEFT JOIN products p ON p.id = pf.product_id
        INNER JOIN order_items oi ON oi.id = dd.order_item_id
        WHERE oi.order_id = $1`,
       [order.id]
@@ -701,5 +736,5 @@ export async function getPublicOrderDetails(
     })),
     downloads,
     isVerifiedCustomer,
-  };}
-    
+  };
+}

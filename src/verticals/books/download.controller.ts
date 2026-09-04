@@ -1,7 +1,6 @@
 // =============================================================================
 // soko-api/src/verticals/books/download.controller.ts
-// Public token-based download controller for digital book files.
-// Issues signed delivery URLs using Cloudflare R2 with fallback to Cloudinary.
+// Public token-based download controller reading from resilient snapshots.
 // =============================================================================
 
 import { Request, Response, NextFunction } from 'express';
@@ -18,14 +17,15 @@ cloudinary.config({
   api_secret: env.CLOUDINARY_API_SECRET,
 });
 
-interface DownloadLookupRow {
+interface DownloadSnapshotRow {
   id: string;
   order_item_id: string;
-  format_id: string;
+  format_id: string | null;
   download_token: string;
   max_downloads: number;
   download_count: number;
   expires_at: Date;
+  last_download_at: Date | null;
   file_url: string | null;
   file_public_id: string | null;
   file_size_bytes: string | null;
@@ -33,11 +33,11 @@ interface DownloadLookupRow {
   book_title: string;
 }
 
-async function generateSignedDeliveryUrl(row: DownloadLookupRow): Promise<string> {
-  const safeTitle = row.book_title.replace(/[^a-zA-Z0-9_-]/g, '_');
+async function generateSignedDeliveryUrl(row: DownloadSnapshotRow): Promise<string> {
+  const safeTitle = (row.book_title || 'book').replace(/[^a-zA-Z0-9_-]/g, '_');
   const fileName = `${safeTitle}.${row.format}`;
 
-  // 1. Cloudflare R2 Private Bucket (Key stored in file_public_id or file_url)
+  // 1. Cloudflare R2 Private Bucket
   const r2Key = row.file_public_id || (row.file_url?.startsWith('ebooks/') ? row.file_url : null);
   if (r2Key && r2Key.startsWith('ebooks/')) {
     try {
@@ -47,7 +47,7 @@ async function generateSignedDeliveryUrl(row: DownloadLookupRow): Promise<string
     }
   }
 
-  // 2. Cloudinary Media fallback
+  // 2. Cloudinary Media Fallback
   if (row.file_public_id && !row.file_public_id.startsWith('ebooks/')) {
     const expiresAtEpoch = Math.floor(Date.now() / 1000) + 3600;
     try {
@@ -86,7 +86,8 @@ export async function downloadBookHandler(
       throw new AppError('Invalid download token', 400);
     }
 
-    const result = await query<DownloadLookupRow>(
+    // Direct snapshot resolution (no vulnerable inner joins to mutable catalog tables)
+    const result = await query<DownloadSnapshotRow>(
       `SELECT dd.id,
               dd.order_item_id,
               dd.format_id,
@@ -94,14 +95,15 @@ export async function downloadBookHandler(
               dd.max_downloads,
               dd.download_count,
               dd.expires_at,
-              pf.file_url,
-              pf.file_public_id,
-              pf.file_size_bytes::text AS file_size_bytes,
-              pf.format,
-              p.name AS book_title
+              dd.last_download_at,
+              COALESCE(dd.file_url, pf.file_url) AS file_url,
+              COALESCE(dd.file_public_id, pf.file_public_id) AS file_public_id,
+              COALESCE(dd.file_size_bytes::text, pf.file_size_bytes::text) AS file_size_bytes,
+              COALESCE(dd.format, pf.format, 'pdf') AS format,
+              COALESCE(dd.book_title, p.name, 'Book') AS book_title
        FROM digital_downloads dd
-       INNER JOIN product_formats pf ON pf.id = dd.format_id
-       INNER JOIN products p ON p.id = pf.product_id
+       LEFT JOIN product_formats pf ON pf.id = dd.format_id
+       LEFT JOIN products p ON p.id = pf.product_id
        WHERE dd.download_token = $1`,
       [token.trim()]
     );
@@ -112,36 +114,43 @@ export async function downloadBookHandler(
       throw new AppError('Download link is invalid or does not exist', 404);
     }
 
-    // 1. Expiration Verification (7 Days TTL)
+    // 1. Expiration Verification (90 Days)
     if (new Date(record.expires_at).getTime() < Date.now()) {
       throw new AppError(
-        'This download link has expired. Digital access is valid for 7 days from purchase.',
+        'This download link has expired. Please verify your phone number on your order page to refresh access.',
         410
       );
     }
 
-    // 2. Download Limit Verification (5 Max)
+    // 2. Download Limit Verification (15 Max)
     if (record.download_count >= record.max_downloads) {
       throw new AppError(
-        `Download limit reached. You have already downloaded this book ${record.max_downloads} times.`,
+        `Download limit reached (${record.max_downloads} downloads used). Contact concierge if you need a reset.`,
         410
       );
     }
 
-    // 3. Atomically increment download counter
-    await query(
-      `UPDATE digital_downloads
-       SET download_count = download_count + 1
-       WHERE id = $1 AND download_count < max_downloads`,
-      [record.id]
-    );
+    // 3. Prevent Premature Quota Burn on HEAD or Mobile Range Probes
+    const isHeadRequest = req.method === 'HEAD';
+    const now = Date.now();
+    const lastDownloadedEpoch = record.last_download_at ? new Date(record.last_download_at).getTime() : 0;
+    const isDuplicateRetry = (now - lastDownloadedEpoch) < 60_000; // 60s Grace Window
+
+    if (!isHeadRequest && !isDuplicateRetry) {
+      await query(
+        `UPDATE digital_downloads
+         SET download_count = download_count + 1,
+             last_download_at = NOW()
+         WHERE id = $1 AND download_count < max_downloads`,
+        [record.id]
+      );
+    }
 
     const signedUrl = await generateSignedDeliveryUrl(record);
-    const remainingDownloads = Math.max(0, record.max_downloads - (record.download_count + 1));
-    const safeTitle = record.book_title.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const remainingDownloads = Math.max(0, record.max_downloads - record.download_count);
+    const safeTitle = (record.book_title || 'book').replace(/[^a-zA-Z0-9_-]/g, '_');
     const fileName = `${safeTitle}.${record.format}`;
 
-    // Direct 302 redirect to Cloudflare R2 presigned download stream
     if (req.query.redirect === 'true') {
       res.redirect(signedUrl);
       return;
@@ -152,7 +161,7 @@ export async function downloadBookHandler(
       format: record.format,
       fileName,
       downloadUrl: signedUrl,
-      downloadCount: record.download_count + 1,
+      downloadCount: record.download_count,
       maxDownloads: record.max_downloads,
       remainingDownloads,
       expiresAt: record.expires_at.toISOString(),

@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/verticals/books/import/import.worker.ts
-// Background BullMQ Spreadsheet Ingestion Worker with Inverted Cover Hierarchy.
+// Background Ingestion Worker with Compare-At Discount Mapping Support.
 // =============================================================================
 
 import { Worker, Job } from 'bullmq';
@@ -44,11 +44,14 @@ interface ParsedBookRow {
   isbn?: string;
   category?: string;
   description?: string;
-  hardcopyPrice?: number;
+  regularPrice?: number;
+  salePrice?: number;
   hardcopyStock?: number;
   pdfPrice?: number;
+  pdfCompareAtPrice?: number;
   pdfFileUrl?: string;
   epubPrice?: number;
+  epubCompareAtPrice?: number;
   epubFileUrl?: string;
   coverImageUrl?: string;
   coverBuffer?: Buffer;
@@ -167,7 +170,7 @@ async function processExcelFile(
       }
     }
   } catch {
-    // Non-blocking preview extract
+    // Ignore non-blocking preview extraction
   }
 
   const totalRows = Math.max(0, worksheet.rowCount - 1);
@@ -197,12 +200,17 @@ async function processExcelFile(
       const sku = extractCellString(getVal(['sellersku', 'sku', 'isbn', 'barcode']));
       const category = extractCellString(getVal(['primarycategory', 'category', 'genre']));
       const author = extractCellString(getVal(['author', 'authorname']));
-      const hardcopyPrice = parseFloat(extractCellString(getVal(['salepricekes', 'pricekes', 'price', 'hardcopyprice'])) || '0');
-      const hardcopyStock = parseInt(extractCellString(getVal(['stock', 'quantity', 'hardcopystock'])) || '0', 10);
+
+      // Align Price_KES and Sale_Price_KES to compare_at_price and price
+      const regularPrice = parseFloat(extractCellString(getVal(['pricekes', 'price', 'regularprice'])) || '0');
+      const salePrice = parseFloat(extractCellString(getVal(['salepricekes', 'saleprice', 'discountedprice'])) || '0');
+      const hardcopyStock = parseInt(extractCellString(getVal(['stock', 'quantity', 'hardcopystock'])) || '10', 10);
+
       const pdfFileUrl = sanitizeGoogleDriveUrl(getVal(['pdffile', 'pdffileurl', 'pdfurl', 'pdflink']));
       const pdfPrice = parseFloat(extractCellString(getVal(['pdfsprice', 'pdfprice', 'ebookprice'])) || '0');
       const epubFileUrl = sanitizeGoogleDriveUrl(getVal(['epubfile', 'epubfileurl', 'epuburl', 'epublink']));
       const epubPrice = parseFloat(extractCellString(getVal(['epubsprice', 'epubprice'])) || '0');
+
       const coverImageUrl = extractCellString(getVal(['image1', 'image2', 'coverimageurl', 'coverurl']));
       const coverBuffer = imageMapByRow[r];
 
@@ -214,7 +222,8 @@ async function processExcelFile(
         isbn: sku || undefined,
         category: category || 'General',
         description: description || undefined,
-        hardcopyPrice: hardcopyPrice > 0 ? hardcopyPrice : undefined,
+        regularPrice: regularPrice > 0 ? regularPrice : undefined,
+        salePrice: salePrice > 0 ? salePrice : (regularPrice > 0 ? regularPrice : undefined),
         hardcopyStock: hardcopyStock >= 0 ? hardcopyStock : 10,
         pdfPrice: pdfPrice > 0 ? pdfPrice : undefined,
         pdfFileUrl,
@@ -294,10 +303,11 @@ async function processGoogleSheet(
       const sku = getVal(['sellersku', 'sku', 'isbn', 'barcode']);
       const category = getVal(['primarycategory', 'category', 'genre']) || 'General';
       const author = getVal(['author', 'authorname']);
-      const hardcopyPrice = parseFloat(getVal(['salepricekes', 'pricekes', 'price']) || '0');
-      const hardcopyStock = parseInt(getVal(['stock', 'quantity']) || '10', 10);
+      const regularPrice = parseFloat(getVal(['pricekes', 'price', 'regularprice']) || '0');
+      const salePrice = parseFloat(getVal(['salepricekes', 'saleprice', 'discountedprice']) || '0');
+      const hardcopyStock = parseInt(getVal(['stock', 'quantity', 'hardcopystock']) || '10', 10);
       const pdfFileUrl = sanitizeGoogleDriveUrl(getVal(['pdffile', 'pdfurl', 'pdffileurl']));
-      const pdfPrice = parseFloat(getVal(['pdfsprice', 'pdfprice']) || '0');
+      const pdfPrice = parseFloat(getVal(['pdfsprice', 'pdfprice', 'ebookprice']) || '0');
       const epubFileUrl = sanitizeGoogleDriveUrl(getVal(['epubfile', 'epuburl']));
       const epubPrice = parseFloat(getVal(['epubsprice', 'epubprice']) || '0');
       const coverImageUrl = getVal(['image1', 'image2', 'coverimageurl', 'coverurl']);
@@ -310,8 +320,9 @@ async function processGoogleSheet(
         isbn: sku,
         category,
         description,
-        hardcopyPrice: hardcopyPrice > 0 ? hardcopyPrice : undefined,
-        hardcopyStock,
+        regularPrice: regularPrice > 0 ? regularPrice : undefined,
+        salePrice: salePrice > 0 ? salePrice : (regularPrice > 0 ? regularPrice : undefined),
+        hardcopyStock: hardcopyStock >= 0 ? hardcopyStock : 10,
         pdfPrice: pdfPrice > 0 ? pdfPrice : undefined,
         pdfFileUrl,
         epubPrice: epubPrice > 0 ? epubPrice : undefined,
@@ -349,7 +360,7 @@ async function createBookWithFormatsFromImport(
     const categoryName = row.category || 'General';
     const categoryId = await findOrCreateCategoryByName(client, orgId, categoryName);
 
-    // 2. Inverted Cover Resolution Waterfall
+    // 2. Cover Art Discovery
     let targetImageUrl: string | null = null;
     let targetImageBuffer: Buffer | undefined = undefined;
 
@@ -358,8 +369,8 @@ async function createBookWithFormatsFromImport(
       if (discovered.coverUrl) {
         targetImageUrl = discovered.coverUrl;
       }
-    } catch (err) {
-      console.warn(`Cover discovery non-blocking failure for "${row.title}":`, err);
+    } catch {
+      // Non-blocking fallback
     }
 
     if (!targetImageUrl) {
@@ -382,12 +393,20 @@ async function createBookWithFormatsFromImport(
       }
     }
 
-    const basePrice = row.hardcopyPrice || row.pdfPrice || row.epubPrice || 999;
+    // Edge Case: Validate that compare_at_price is strictly greater than price
+    let sellingPrice = row.salePrice || row.regularPrice || row.pdfPrice || row.epubPrice || 999;
+    let compareAtPrice: number | null = null;
+
+    if (row.regularPrice && row.salePrice && row.regularPrice > row.salePrice) {
+      sellingPrice = row.salePrice;
+      compareAtPrice = row.regularPrice;
+    }
+
     const baseStock = row.hardcopyStock || 0;
     const cleanSlugTitle = row.title.toLowerCase().trim().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').slice(0, 50);
     const slug = `${cleanSlugTitle}-${Date.now().toString().slice(-4)}`;
 
-    // 3. Insert Product
+    // 3. Insert Product with Strike-Through Price Support
     const productId = await insertProductTransactional(client, orgId, {
       category_id: categoryId,
       name: row.title,
@@ -395,7 +414,9 @@ async function createBookWithFormatsFromImport(
       sku: row.sku || null,
       description: row.description || (row.author ? `By ${row.author}` : null),
       cost_price: null,
-      price: basePrice,
+      price: sellingPrice,
+      compare_at_price: compareAtPrice,
+      badge: compareAtPrice && compareAtPrice > sellingPrice ? 'FLASH_SALE' : null,
       status: 'published',
     });
 
@@ -415,11 +436,12 @@ async function createBookWithFormatsFromImport(
 
     await client.query('COMMIT');
 
-    // 6. Hardcopy Format
-    if (row.hardcopyPrice) {
+    // 6. Hardcopy Format (with Isolated Compare-at Price)
+    if (sellingPrice) {
       await createProductFormat(orgId, productId, {
         format: 'hardcopy',
-        price: row.hardcopyPrice,
+        price: sellingPrice,
+        compareAtPrice: compareAtPrice,
         stock: row.hardcopyStock ?? 10,
       });
     }
@@ -439,14 +461,15 @@ async function createBookWithFormatsFromImport(
           );
           r2Key = streamResult.key;
           r2SizeBytes = streamResult.fileSizeBytes;
-        } catch (err) {
-          console.warn(`Direct R2 stream failed for ${row.title}:`, err);
+        } catch {
+          // Direct fallback
         }
       }
 
       await createProductFormat(orgId, productId, {
         format: 'pdf',
         price: row.pdfPrice,
+        compareAtPrice: null, // Isolated from hardcopy discount!
         fileUrl: r2Key || row.pdfFileUrl,
         filePublicId: r2Key,
         fileSizeBytes: r2SizeBytes,
@@ -468,14 +491,15 @@ async function createBookWithFormatsFromImport(
           );
           r2Key = streamResult.key;
           r2SizeBytes = streamResult.fileSizeBytes;
-        } catch (err) {
-          console.warn(`Direct R2 EPUB stream failed for ${row.title}:`, err);
+        } catch {
+          // Direct fallback
         }
       }
 
       await createProductFormat(orgId, productId, {
         format: 'epub',
         price: row.epubPrice,
+        compareAtPrice: null, // Isolated from hardcopy discount!
         fileUrl: r2Key || row.epubFileUrl,
         filePublicId: r2Key,
         fileSizeBytes: r2SizeBytes,
