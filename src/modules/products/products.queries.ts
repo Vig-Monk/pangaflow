@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/products/products.queries.ts
-// Product catalog queries with promotions, compare-at pricing, and smart deletes.
+// Product and Category catalog queries with slugification, badges, and smart deletes.
 // =============================================================================
 
 import { PoolClient } from "pg";
@@ -89,7 +89,14 @@ export interface ListInventoryOptions {
 
 export interface CategoryRow {
     id: string;
+    org_id: string;
     name: string;
+    slug: string;
+    description: string | null;
+    is_featured: boolean;
+    sort_order: number;
+    created_at: Date;
+    product_count?: number;
 }
 
 export interface VariantInputData {
@@ -105,12 +112,28 @@ export interface VariantInputData {
     is_active?: boolean;
 }
 
+function slugifyCategory(input: string): string {
+    const base = input
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+    return base.length > 0 ? base : 'category';
+}
+
 export async function listCategories(orgId: string): Promise<CategoryRow[]> {
     const result = await query<CategoryRow>(
-        `SELECT id, name 
-         FROM   categories 
-         WHERE  org_id = $1 
-         ORDER  BY name ASC`,
+        `SELECT c.id, c.org_id, c.name, c.slug, c.description, c.is_featured, c.sort_order, c.created_at,
+                COALESCE((
+                    SELECT COUNT(*) 
+                    FROM products p 
+                    WHERE p.category_id = c.id AND p.deleted_at IS NULL
+                ), 0)::int AS product_count
+         FROM   categories c
+         WHERE  c.org_id = $1 
+         ORDER  BY c.is_featured DESC, c.sort_order ASC, c.name ASC`,
         [orgId]
     );
     return result.rows;
@@ -122,9 +145,11 @@ export async function findOrCreateCategoryByName(
     name: string
 ): Promise<string> {
     const trimmedName = name.trim();
+    const slug = slugifyCategory(trimmedName);
 
+    // Case-insensitive lookup to avoid duplicates
     const checkResult = await client.query<{ id: string }>(
-        `SELECT id FROM categories WHERE org_id = $1 AND name = $2`,
+        `SELECT id FROM categories WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) LIMIT 1`,
         [orgId, trimmedName]
     );
 
@@ -133,11 +158,11 @@ export async function findOrCreateCategoryByName(
     }
 
     const insertResult = await client.query<{ id: string }>(
-        `INSERT INTO categories (org_id, name) 
-         VALUES ($1, $2) 
-         ON CONFLICT (org_id, name) DO UPDATE SET name = EXCLUDED.name
+        `INSERT INTO categories (org_id, name, slug) 
+         VALUES ($1, $2, $3) 
+         ON CONFLICT (org_id, LOWER(TRIM(name))) DO UPDATE SET name = EXCLUDED.name
          RETURNING id`,
-        [orgId, trimmedName]
+        [orgId, trimmedName, slug]
     );
 
     return insertResult.rows[0].id;
@@ -145,14 +170,33 @@ export async function findOrCreateCategoryByName(
 
 export async function createCategory(
     orgId: string,
-    name: string
+    data: {
+        name: string;
+        description?: string | null;
+        isFeatured?: boolean;
+        sortOrder?: number;
+    }
 ): Promise<CategoryRow> {
+    const trimmedName = data.name.trim();
+    const slug = slugifyCategory(trimmedName);
+
     const result = await query<CategoryRow>(
-        `INSERT INTO categories (org_id, name)
-         VALUES ($1, $2)
-         ON CONFLICT (org_id, name) DO UPDATE SET name = EXCLUDED.name
-         RETURNING id, name`,
-        [orgId, name.trim()]
+        `INSERT INTO categories (org_id, name, slug, description, is_featured, sort_order)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (org_id, LOWER(TRIM(name))) DO UPDATE SET
+             slug = EXCLUDED.slug,
+             description = COALESCE(EXCLUDED.description, categories.description),
+             is_featured = COALESCE(EXCLUDED.is_featured, categories.is_featured),
+             sort_order = COALESCE(EXCLUDED.sort_order, categories.sort_order)
+         RETURNING id, org_id, name, slug, description, is_featured, sort_order, created_at`,
+        [
+            orgId,
+            trimmedName,
+            slug,
+            data.description?.trim() || null,
+            data.isFeatured ?? false,
+            data.sortOrder ?? 0,
+        ]
     );
     return result.rows[0];
 }
@@ -491,10 +535,6 @@ export async function unarchiveProduct(
     );
     return result.rowCount !== null && result.rowCount > 0;
 }
-
-// ---------------------------------------------------------------------------
-// Smart Deletion Database Operations
-// ---------------------------------------------------------------------------
 
 export async function getProductOrderCount(
     client: PoolClient,

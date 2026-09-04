@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/app.ts
-// Multi-Frontend CORS Support (Flemela + KauntaOS + Vercel Previews)
+// Multi-Frontend CORS Support & Master Express Route Registrations
 // =============================================================================
 
 import express, { Request, Response, NextFunction } from "express";
@@ -32,6 +32,7 @@ import publicRoutes from "./modules/public/public.routes";
 import mpesaCredentialsRoutes from "./modules/mpesa-credentials/mpesa-credentials.routes";
 import analyticsRoutes from "./modules/analytics/analytics.routes";
 import booksRoutes from "./verticals/books/books.routes";
+import bannersRoutes from "./modules/banners/banners.routes";
 
 const app = express();
 
@@ -44,7 +45,7 @@ const allowedOrigins = [
   'http://localhost:3333',
 ];
 
-// Support comma-separated URLs in FRONTEND_URL (e.g. "https://flemela.vercel.app,https://kauntaos.vercel.app")
+// Support comma-separated URLs in FRONTEND_URL
 if (env.FRONTEND_URL) {
   const customOrigins = env.FRONTEND_URL.split(',').map((o) => o.trim().replace(/\/$/, ''));
   allowedOrigins.push(...customOrigins);
@@ -53,15 +54,12 @@ if (env.FRONTEND_URL) {
 app.use(
   cors({
     origin: (requestOrigin, callback) => {
-      // Allow server-to-server or mobile requests without origin
       if (!requestOrigin) return callback(null, true);
 
-      // 1. Check exact domain match
       if (allowedOrigins.includes(requestOrigin)) {
         return callback(null, true);
       }
 
-      // 2. Allow all Vercel preview & production deployments (*.vercel.app)
       if (requestOrigin.endsWith('.vercel.app')) {
         return callback(null, true);
       }
@@ -140,6 +138,8 @@ apiRouter.use("/orders", ordersRoutes);
 apiRouter.use("/mpesa-credentials", mpesaCredentialsRoutes);
 apiRouter.use("/analytics", analyticsRoutes);
 apiRouter.use("/books", booksRoutes);
+apiRouter.use("/banners", bannersRoutes);
+
 app.use("/api/v1", apiRouter);
 
 app.use((req: Request, _res: Response, next: NextFunction) => {

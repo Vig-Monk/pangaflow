@@ -1,6 +1,6 @@
 // =============================================================================
-// src/verticals/books/import/import.queries.ts
-// Database queries for the import_jobs table. Raw pg only.
+// soko-api/src/verticals/books/import/import.queries.ts
+// Database queries for import_jobs with granular telemetry metrics.
 // =============================================================================
 
 import { query } from '../../../config/db';
@@ -21,18 +21,29 @@ export interface ImportJobRow {
   status: ImportJobStatus;
   total_rows: number | null;
   processed_rows: number;
+  inserted_rows: number;
+  updated_rows: number;
+  skipped_rows: number;
   error_rows: RowErrorDetail[];
   created_at: Date;
 }
+
+const IMPORT_JOB_FIELDS = `
+  id, org_id, source, status, total_rows, processed_rows,
+  inserted_rows, updated_rows, skipped_rows, error_rows, created_at
+`;
 
 export async function createImportJob(
   orgId: string,
   source: ImportJobSource
 ): Promise<ImportJobRow> {
   const result = await query<ImportJobRow>(
-    `INSERT INTO import_jobs (org_id, source, status, total_rows, processed_rows, error_rows)
-     VALUES ($1, $2, 'queued', NULL, 0, '[]'::jsonb)
-     RETURNING id, org_id, source, status, total_rows, processed_rows, error_rows, created_at`,
+    `INSERT INTO import_jobs (
+       org_id, source, status, total_rows, processed_rows,
+       inserted_rows, updated_rows, skipped_rows, error_rows
+     )
+     VALUES ($1, $2, 'queued', NULL, 0, 0, 0, 0, '[]'::jsonb)
+     RETURNING ${IMPORT_JOB_FIELDS}`,
     [orgId, source]
   );
   return result.rows[0];
@@ -43,7 +54,7 @@ export async function getImportJobById(
   jobId: string
 ): Promise<ImportJobRow | null> {
   const result = await query<ImportJobRow>(
-    `SELECT id, org_id, source, status, total_rows, processed_rows, error_rows, created_at
+    `SELECT ${IMPORT_JOB_FIELDS}
      FROM   import_jobs
      WHERE  org_id = $1 AND id = $2`,
     [orgId, jobId]
@@ -53,25 +64,34 @@ export async function getImportJobById(
 
 export async function updateJobProgress(
   jobId: string,
-  processedRows: number,
-  totalRows?: number,
+  counts: {
+    processedRows: number;
+    insertedRows?: number;
+    updatedRows?: number;
+    skippedRows?: number;
+    totalRows?: number;
+  },
   status: ImportJobStatus = 'processing'
 ): Promise<void> {
-  if (totalRows !== undefined) {
-    await query(
-      `UPDATE import_jobs
-       SET processed_rows = $2, total_rows = $3, status = $4
-       WHERE id = $1`,
-      [jobId, processedRows, totalRows, status]
-    );
-  } else {
-    await query(
-      `UPDATE import_jobs
-       SET processed_rows = $2, status = $3
-       WHERE id = $1`,
-      [jobId, processedRows, status]
-    );
-  }
+  await query(
+    `UPDATE import_jobs
+     SET processed_rows = $2,
+         inserted_rows  = COALESCE($3, inserted_rows),
+         updated_rows   = COALESCE($4, updated_rows),
+         skipped_rows   = COALESCE($5, skipped_rows),
+         total_rows     = COALESCE($6, total_rows),
+         status         = $7
+     WHERE id = $1`,
+    [
+      jobId,
+      counts.processedRows,
+      counts.insertedRows ?? null,
+      counts.updatedRows ?? null,
+      counts.skippedRows ?? null,
+      counts.totalRows ?? null,
+      status,
+    ]
+  );
 }
 
 export async function appendJobError(
@@ -89,14 +109,30 @@ export async function appendJobError(
 export async function finalizeImportJob(
   jobId: string,
   status: 'done' | 'failed',
-  finalProcessedCount?: number
+  finalCounts?: {
+    processedRows: number;
+    insertedRows: number;
+    updatedRows: number;
+    skippedRows: number;
+  }
 ): Promise<void> {
-  if (finalProcessedCount !== undefined) {
+  if (finalCounts) {
     await query(
       `UPDATE import_jobs
-       SET status = $2, processed_rows = $3
+       SET status         = $2,
+           processed_rows = $3,
+           inserted_rows  = $4,
+           updated_rows   = $5,
+           skipped_rows   = $6
        WHERE id = $1`,
-      [jobId, status, finalProcessedCount]
+      [
+        jobId,
+        status,
+        finalCounts.processedRows,
+        finalCounts.insertedRows,
+        finalCounts.updatedRows,
+        finalCounts.skippedRows,
+      ]
     );
   } else {
     await query(
