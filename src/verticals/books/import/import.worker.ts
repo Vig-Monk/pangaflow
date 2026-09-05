@@ -123,15 +123,37 @@ async function upsertBookFromImport(
     }
 
     // 3. Price & Discount Normalization (Respects chk_products_compare_at_price constraint)
-    let sellingPrice = row.salePrice || row.regularPrice || row.pdfPrice || row.epubPrice || 999;
+    let sellingPrice = 999;
     let compareAtPrice: number | null = null;
 
-    if (row.regularPrice && row.salePrice && row.regularPrice > row.salePrice) {
-      sellingPrice = row.salePrice;
-      compareAtPrice = row.regularPrice;
+    if (row.regularPrice && row.salePrice) {
+      const minP = Math.min(row.regularPrice, row.salePrice);
+      const maxP = Math.max(row.regularPrice, row.salePrice);
+      if (maxP > minP) {
+        sellingPrice = minP;
+        compareAtPrice = maxP;
+      } else {
+        sellingPrice = minP;
+      }
+    } else {
+      sellingPrice = row.salePrice || row.regularPrice || 999;
     }
 
-    // 4. Auto-discover cover art if no image link was provided
+    // 4. Synchronize PDF & EPUB eBook prices to be identical
+    const digitalPrice = row.pdfPrice && row.pdfPrice > 0
+      ? row.pdfPrice
+      : (row.epubPrice && row.epubPrice > 0 ? row.epubPrice : 149);
+
+    // Compute matching digital strike-through price if book is on sale
+    let digitalCompareAt: number | null = null;
+    if (compareAtPrice && compareAtPrice > sellingPrice) {
+      const discountRatio = (compareAtPrice - sellingPrice) / compareAtPrice;
+      if (discountRatio > 0 && discountRatio < 1) {
+        digitalCompareAt = Math.round(digitalPrice / (1 - discountRatio));
+      }
+    }
+
+    // 5. Auto-discover cover art if no image link was provided
     let targetImageUrl: string | null = row.coverImageUrl || null;
 
     if (!targetImageUrl) {
@@ -254,39 +276,37 @@ async function upsertBookFromImport(
       );
     }
 
-    // 6. Digital PDF Format
-    if (productId && (row.pdfFileUrl || row.pdfPrice)) {
-      const formatPrice = row.pdfPrice && row.pdfPrice > 0 ? row.pdfPrice : sellingPrice;
-
+    // 6. Digital PDF Format (uses digitalPrice & digitalCompareAt)
+    if (productId) {
       await client.query(
         `INSERT INTO product_formats (
            product_id, format, price, compare_at_price, file_url, file_public_id
          )
-         VALUES ($1, 'pdf', $2, NULL, $3, $3)
+         VALUES ($1, 'pdf', $2, $3, $4, $4)
          ON CONFLICT (product_id, format) DO UPDATE SET
            price            = EXCLUDED.price,
+           compare_at_price = EXCLUDED.compare_at_price,
            file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
            file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
            updated_at       = NOW()`,
-        [productId, formatPrice, row.pdfFileUrl || null]
+        [productId, digitalPrice, digitalCompareAt, row.pdfFileUrl || null]
       );
     }
 
-    // 7. Digital EPUB Format
-    if (productId && (row.epubFileUrl || row.epubPrice)) {
-      const formatPrice = row.epubPrice && row.epubPrice > 0 ? row.epubPrice : sellingPrice;
-
+    // 7. Digital EPUB Format (uses identical digitalPrice & digitalCompareAt)
+    if (productId) {
       await client.query(
         `INSERT INTO product_formats (
            product_id, format, price, compare_at_price, file_url, file_public_id
          )
-         VALUES ($1, 'epub', $2, NULL, $3, $3)
+         VALUES ($1, 'epub', $2, $3, $4, $4)
          ON CONFLICT (product_id, format) DO UPDATE SET
            price            = EXCLUDED.price,
+           compare_at_price = EXCLUDED.compare_at_price,
            file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
            file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
            updated_at       = NOW()`,
-        [productId, formatPrice, row.epubFileUrl || null]
+        [productId, digitalPrice, digitalCompareAt, row.epubFileUrl || null]
       );
     }
 
