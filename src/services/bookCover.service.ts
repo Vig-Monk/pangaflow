@@ -21,6 +21,16 @@ function cleanQueryString(input: string): string {
     .trim();
 }
 
+/**
+ * Sanitizes Google Books public image URL (uses unrestricted public content stream)
+ */
+function cleanGoogleBooksUrl(rawUrl: string, volumeId?: string): string {
+  if (volumeId) {
+    return `https://books.google.com/books/content?id=${volumeId}&printsec=frontcover&img=1&zoom=1`;
+  }
+  return rawUrl.replace(/^http:\/\//i, 'https://').replace(/&edge=curl/g, '');
+}
+
 export async function findBestBookCover(
   rawTitle: string,
   rawAuthor?: string,
@@ -35,7 +45,49 @@ export async function findBestBookCover(
     return { coverUrl: null, title: rawTitle, source: null };
   }
 
-  // 1. Direct Open Library Work Search (Zero Rate Limits, Returns Stable Cover ID)
+  // 1. Strict Google Books query: matches exact title and author metadata
+  try {
+    const query = hasValidIsbn
+      ? `isbn:${cleanIsbn}`
+      : author
+        ? `intitle:"${title}"+inauthor:"${author}"`
+        : `intitle:"${title}"`;
+
+    const gbooksUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(
+      query
+    )}&maxResults=1&printType=books`;
+    const res = await axios.get(gbooksUrl, { timeout: 4500 });
+
+    const items = res.data?.items || [];
+    if (items.length > 0) {
+      const item = items[0];
+      const volumeId = item.id;
+      const volumeInfo = item.volumeInfo || {};
+      const imageLinks = volumeInfo.imageLinks;
+
+      if (imageLinks) {
+        const rawCover =
+          imageLinks.extraLarge ||
+          imageLinks.large ||
+          imageLinks.medium ||
+          imageLinks.thumbnail ||
+          imageLinks.smallThumbnail;
+
+        if (rawCover && typeof rawCover === 'string' && rawCover.length > 10) {
+          return {
+            coverUrl: cleanGoogleBooksUrl(rawCover, volumeId),
+            title: volumeInfo.title || rawTitle,
+            author: volumeInfo.authors?.[0] || rawAuthor,
+            source: 'googlebooks',
+          };
+        }
+      }
+    }
+  } catch {
+    // Non-blocking fallback to Open Library
+  }
+
+  // 2. Direct Open Library Work Search (Zero Rate Limits, Returns Stable Cover ID)
   try {
     const olUrl = `https://openlibrary.org/search.json?title=${encodeURIComponent(title)}${
       author ? `&author=${encodeURIComponent(author)}` : ''
@@ -57,34 +109,7 @@ export async function findBestBookCover(
       }
     }
   } catch {
-    // Non-blocking cascade to Tier 2
-  }
-
-  // 2. Google Books Public Content Stream
-  try {
-    const query = hasValidIsbn ? `isbn:${cleanIsbn}` : `${title} ${author}`.trim();
-    const gbooksUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(
-      query
-    )}&maxResults=3&printType=books`;
-    const res = await axios.get(gbooksUrl, { timeout: 4500 });
-
-    for (const item of res.data?.items || []) {
-      const links = item.volumeInfo?.imageLinks;
-      if (links) {
-        const cover =
-          links.extraLarge || links.large || links.medium || links.thumbnail || links.smallThumbnail;
-        if (cover) {
-          return {
-            coverUrl: `https://books.google.com/books/content?id=${item.id}&printsec=frontcover&img=1&zoom=1`,
-            title: item.volumeInfo.title || rawTitle,
-            author: item.volumeInfo.authors?.[0] || rawAuthor,
-            source: 'googlebooks',
-          };
-        }
-      }
-    }
-  } catch {
-    // Non-blocking cascade
+    // Non-blocking fallback
   }
 
   return { coverUrl: null, title: rawTitle, source: null };
