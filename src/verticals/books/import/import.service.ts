@@ -1,44 +1,31 @@
 // src/verticals/books/import/import.service.ts
 // =============================================================================
-// Service layer handling BullMQ queue dispatch with Render Redis isolation.
+// soko-api/src/verticals/books/import/import.service.ts
+// Direct In-Process Ingestion Engine with Graceful Server Shutdown Support
 // =============================================================================
 
-import { Queue } from 'bullmq';
 import Redis from 'ioredis';
 import { z } from 'zod';
 import { env } from '../../../config/env';
 import { AppError } from '../../../utils/error';
 import * as importQueries from './import.queries';
 import type { ImportJobRow } from './import.queries';
+import { processExcelFile, processGoogleSheet } from './import.worker';
 
 const redisUrl = env.REDIS_URL || process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 
-/**
- * Creates isolated Redis connection instances with TLS support for Render cloud instances.
- */
-export function createRedisConnection(): Redis {
-  const isTls = redisUrl.startsWith('rediss://');
-
-  return new Redis(redisUrl, {
-    maxRetriesPerRequest: null,
-    lazyConnect: false,
-    enableReadyCheck: false,
-    tls: isTls ? { rejectUnauthorized: false } : undefined,
-    retryStrategy(times) {
-      return Math.min(times * 200, 2000);
-    },
-  });
-}
-
-// Dedicated connection for the Queue producer
-export const redisConnection = createRedisConnection();
-
-redisConnection.on('error', (err) => {
-  console.warn('Redis queue connection event:', err.message);
+// Exported for src/server.ts graceful shutdown; lazyConnect prevents boot-time hangs
+export const redisConnection = new Redis(redisUrl, {
+  maxRetriesPerRequest: null,
+  lazyConnect: true,
+  enableReadyCheck: false,
+  retryStrategy(times) {
+    return Math.min(times * 200, 2000);
+  },
 });
 
-export const bookImportQueue = new Queue('book-import-queue', {
-  connection: redisConnection,
+redisConnection.on('error', () => {
+  // Silent fallback so server does not crash if Redis is absent
 });
 
 export const GoogleSheetImportSchema = z.object({
@@ -49,21 +36,18 @@ export async function enqueueExcelImport(
   orgId: string,
   filePath: string
 ): Promise<{ jobId: string; status: string }> {
+  await importQueries.ensureImportSchema();
   const jobRecord = await importQueries.createImportJob(orgId, 'excel');
 
-  await bookImportQueue.add(
-    'process-excel-import',
-    {
-      jobId: jobRecord.id,
-      orgId,
-      source: 'excel',
-      filePath,
-    },
-    {
-      removeOnComplete: true, // Prevents exceeding Render's 25 MB Redis RAM cap
-      removeOnFail: 10,
+  // Process directly in-process asynchronously (responds to HTTP in < 100ms)
+  setImmediate(async () => {
+    try {
+      await processExcelFile(jobRecord.id, orgId, filePath);
+    } catch (err: any) {
+      console.error('[Import Worker Error]', err);
+      await importQueries.finalizeImportJob(jobRecord.id, 'failed', undefined, err.message);
     }
-  );
+  });
 
   return {
     jobId: jobRecord.id,
@@ -80,21 +64,17 @@ export async function enqueueGoogleSheetImport(
     throw new AppError(parsed.error.issues[0]?.message || 'Invalid sheet URL', 400);
   }
 
+  await importQueries.ensureImportSchema();
   const jobRecord = await importQueries.createImportJob(orgId, 'google_sheet');
 
-  await bookImportQueue.add(
-    'process-google-sheet-import',
-    {
-      jobId: jobRecord.id,
-      orgId,
-      source: 'google_sheet',
-      sheetUrl: parsed.data.sheetUrl,
-    },
-    {
-      removeOnComplete: true,
-      removeOnFail: 10,
+  setImmediate(async () => {
+    try {
+      await processGoogleSheet(jobRecord.id, orgId, parsed.data.sheetUrl);
+    } catch (err: any) {
+      console.error('[Google Sheet Error]', err);
+      await importQueries.finalizeImportJob(jobRecord.id, 'failed', undefined, err.message);
     }
-  );
+  });
 
   return {
     jobId: jobRecord.id,

@@ -1,6 +1,6 @@
-// src/verticals/books/import/import.queries.ts
 // =============================================================================
-// Database queries for import_jobs with granular telemetry metrics and diagnostics.
+// soko-api/src/verticals/books/import/import.queries.ts
+// Database queries for import_jobs with auto-migration safety
 // =============================================================================
 
 import { query } from '../../../config/db';
@@ -32,6 +32,15 @@ const IMPORT_JOB_FIELDS = `
   id, org_id, source, status, total_rows, processed_rows,
   inserted_rows, updated_rows, skipped_rows, error_rows, created_at
 `;
+
+export async function ensureImportSchema(): Promise<void> {
+  await query(`
+    ALTER TABLE import_jobs 
+      ADD COLUMN IF NOT EXISTS inserted_rows INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS updated_rows  INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS skipped_rows  INTEGER NOT NULL DEFAULT 0;
+  `);
+}
 
 export async function createImportJob(
   orgId: string,

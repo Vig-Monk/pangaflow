@@ -139,17 +139,22 @@ export async function listCategories(orgId: string): Promise<CategoryRow[]> {
     return result.rows;
 }
 
+// In soko/src/modules/products/products.queries.ts
+// Replace findOrCreateCategoryByName (lines 144-173):
+
 export async function findOrCreateCategoryByName(
     client: PoolClient,
     orgId: string,
     name: string
 ): Promise<string> {
-    const trimmedName = name.trim();
+    const trimmedName = (name || 'General').trim();
     const slug = slugifyCategory(trimmedName);
 
-    // Case-insensitive lookup to avoid duplicates
+    // 1. Check existing category (case-insensitive)
     const checkResult = await client.query<{ id: string }>(
-        `SELECT id FROM categories WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) LIMIT 1`,
+        `SELECT id FROM categories 
+         WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) 
+         LIMIT 1`,
         [orgId, trimmedName]
     );
 
@@ -157,17 +162,25 @@ export async function findOrCreateCategoryByName(
         return checkResult.rows[0].id;
     }
 
-    const insertResult = await client.query<{ id: string }>(
-        `INSERT INTO categories (org_id, name, slug) 
-         VALUES ($1, $2, $3) 
-         ON CONFLICT (org_id, LOWER(TRIM(name))) DO UPDATE SET name = EXCLUDED.name
-         RETURNING id`,
-        [orgId, trimmedName, slug]
-    );
-
-    return insertResult.rows[0].id;
+    // 2. Safe insert with fallback if concurrent insert occurred
+    try {
+        const insertResult = await client.query<{ id: string }>(
+            `INSERT INTO categories (org_id, name, slug) 
+             VALUES ($1, $2, $3) 
+             RETURNING id`,
+            [orgId, trimmedName, slug]
+        );
+        return insertResult.rows[0].id;
+    } catch {
+        const fallback = await client.query<{ id: string }>(
+            `SELECT id FROM categories 
+             WHERE org_id = $1 AND (LOWER(TRIM(name)) = LOWER(TRIM($2)) OR slug = $3) 
+             LIMIT 1`,
+            [orgId, trimmedName, slug]
+        );
+        return fallback.rows[0]?.id || checkResult.rows[0]?.id;
+    }
 }
-
 export async function createCategory(
     orgId: string,
     data: {
