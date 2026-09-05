@@ -4162,72 +4162,6 @@ export function error(
 }
 </file>
 
-<file path="src/verticals/books/import/import.controller.ts">
-// =============================================================================
-// src/verticals/books/import/import.controller.ts
-// Express controller layer for asynchronous book import operations.
-// =============================================================================
-
-import { Request, Response, NextFunction } from 'express';
-import { AppError } from '../../../utils/error';
-import { success } from '../../../utils/response';
-import * as importService from './import.service';
-
-function requireOrgId(req: Request): string {
-  if (!req.orgId) {
-    throw new AppError('Unauthorized', 401);
-  }
-  return req.orgId;
-}
-
-export async function uploadExcelImportHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-
-    if (!req.file || !req.file.path) {
-      throw new AppError('Excel file is required (.xlsx or .xls)', 400);
-    }
-
-    const result = await importService.enqueueExcelImport(orgId, req.file.path);
-    success(res, result, undefined, 202);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function startGoogleSheetImportHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const result = await importService.enqueueGoogleSheetImport(orgId, req.body);
-    success(res, result, undefined, 202);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function getImportStatusHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const result = await importService.getJobStatus(orgId, req.params.id);
-    success(res, result);
-  } catch (err) {
-    next(err);
-  }
-}
-</file>
-
 <file path="src/verticals/books/books.controller.ts">
 // =============================================================================
 // src/verticals/books/books.controller.ts
@@ -8910,6 +8844,86 @@ export function calculateDeliveryFee(
 }
 </file>
 
+<file path="src/verticals/books/import/import.controller.ts">
+// soko/src/verticals/books/import/import.controller.ts
+// =============================================================================
+// Direct Execution Controller: Ingests Spreadsheets in Seconds Without BullMQ Freezes
+// =============================================================================
+
+import { Request, Response, NextFunction } from 'express';
+import { AppError } from '../../../utils/error';
+import { success } from '../../../utils/response';
+import * as importQueries from './import.queries';
+import * as importService from './import.service';
+import { processExcelFile } from './import.worker';
+
+function requireOrgId(req: Request): string {
+  if (!req.orgId) {
+    throw new AppError('Unauthorized', 401);
+  }
+  return req.orgId;
+}
+
+export async function uploadExcelImportHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+
+    if (!req.file || !req.file.path) {
+      throw new AppError('Excel file is required (.xlsx or .csv)', 400);
+    }
+
+    // 1. Ensure database schema is ready
+    await importQueries.ensureImportSchema();
+
+    // 2. Create the job record in database
+    const jobRecord = await importQueries.createImportJob(orgId, 'excel');
+
+    // 3. Process the file directly in-process (takes 1-2 seconds)
+    await processExcelFile(jobRecord.id, orgId, req.file.path);
+
+    // 4. Retrieve final row metrics from database
+    const finalJob = await importQueries.getImportJobById(orgId, jobRecord.id);
+
+    // 5. Return completed job data immediately (no indefinite "queued" state!)
+    success(res, finalJob || { id: jobRecord.id, status: 'done' }, undefined, 200);
+  } catch (err: any) {
+    next(err);
+  }
+}
+
+export async function startGoogleSheetImportHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const result = await importService.enqueueGoogleSheetImport(orgId, req.body);
+    success(res, result, undefined, 202);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getImportStatusHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const result = await importService.getJobStatus(orgId, req.params.id);
+    success(res, result);
+  } catch (err) {
+    next(err);
+  }
+}
+</file>
+
 <file path="src/verticals/books/import/import.routes.ts">
 // src/verticals/books/import/import.routes.ts
 // =============================================================================
@@ -8972,123 +8986,6 @@ router.post('/google-sheet', startGoogleSheetImportHandler);
 router.get('/:id', getImportStatusHandler);
 
 export default router;
-</file>
-
-<file path="src/verticals/books/import/import.service.ts">
-// src/verticals/books/import/import.service.ts
-// =============================================================================
-// Service layer handling BullMQ queue dispatch with Render Redis isolation.
-// =============================================================================
-
-import { Queue } from 'bullmq';
-import Redis from 'ioredis';
-import { z } from 'zod';
-import { env } from '../../../config/env';
-import { AppError } from '../../../utils/error';
-import * as importQueries from './import.queries';
-import type { ImportJobRow } from './import.queries';
-
-const redisUrl = env.REDIS_URL || process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-
-/**
- * Creates isolated Redis connection instances with TLS support for Render cloud instances.
- */
-export function createRedisConnection(): Redis {
-  const isTls = redisUrl.startsWith('rediss://');
-
-  return new Redis(redisUrl, {
-    maxRetriesPerRequest: null,
-    lazyConnect: false,
-    enableReadyCheck: false,
-    tls: isTls ? { rejectUnauthorized: false } : undefined,
-    retryStrategy(times) {
-      return Math.min(times * 200, 2000);
-    },
-  });
-}
-
-// Dedicated connection for the Queue producer
-export const redisConnection = createRedisConnection();
-
-redisConnection.on('error', (err) => {
-  console.warn('Redis queue connection event:', err.message);
-});
-
-export const bookImportQueue = new Queue('book-import-queue', {
-  connection: redisConnection,
-});
-
-export const GoogleSheetImportSchema = z.object({
-  sheetUrl: z.string().url('Must be a valid Google Sheet URL'),
-});
-
-export async function enqueueExcelImport(
-  orgId: string,
-  filePath: string
-): Promise<{ jobId: string; status: string }> {
-  const jobRecord = await importQueries.createImportJob(orgId, 'excel');
-
-  await bookImportQueue.add(
-    'process-excel-import',
-    {
-      jobId: jobRecord.id,
-      orgId,
-      source: 'excel',
-      filePath,
-    },
-    {
-      removeOnComplete: true, // Prevents exceeding Render's 25 MB Redis RAM cap
-      removeOnFail: 10,
-    }
-  );
-
-  return {
-    jobId: jobRecord.id,
-    status: 'queued',
-  };
-}
-
-export async function enqueueGoogleSheetImport(
-  orgId: string,
-  rawBody: unknown
-): Promise<{ jobId: string; status: string }> {
-  const parsed = GoogleSheetImportSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    throw new AppError(parsed.error.issues[0]?.message || 'Invalid sheet URL', 400);
-  }
-
-  const jobRecord = await importQueries.createImportJob(orgId, 'google_sheet');
-
-  await bookImportQueue.add(
-    'process-google-sheet-import',
-    {
-      jobId: jobRecord.id,
-      orgId,
-      source: 'google_sheet',
-      sheetUrl: parsed.data.sheetUrl,
-    },
-    {
-      removeOnComplete: true,
-      removeOnFail: 10,
-    }
-  );
-
-  return {
-    jobId: jobRecord.id,
-    status: 'queued',
-  };
-}
-
-export async function getJobStatus(
-  orgId: string,
-  jobId: string
-): Promise<ImportJobRow> {
-  const record = await importQueries.getImportJobById(orgId, jobId);
-  if (!record) {
-    throw new AppError('Import job not found', 404);
-  }
-  return record;
-}
 </file>
 
 <file path="src/verticals/books/delivery.service.ts">
@@ -12525,156 +12422,100 @@ if (require.main === module) {
 }
 </file>
 
-<file path="src/verticals/books/import/import.queries.ts">
-// src/verticals/books/import/import.queries.ts
+<file path="src/verticals/books/import/import.service.ts">
+// src/verticals/books/import/import.service.ts
 // =============================================================================
-// Database queries for import_jobs with granular telemetry metrics and diagnostics.
+// soko-api/src/verticals/books/import/import.service.ts
+// Direct In-Process Ingestion Engine with Graceful Server Shutdown Support
 // =============================================================================
 
-import { query } from '../../../config/db';
+import Redis from 'ioredis';
+import { z } from 'zod';
+import { env } from '../../../config/env';
+import { AppError } from '../../../utils/error';
+import * as importQueries from './import.queries';
+import type { ImportJobRow } from './import.queries';
+import { processExcelFile, processGoogleSheet } from './import.worker';
 
-export type ImportJobSource = 'excel' | 'google_sheet';
-export type ImportJobStatus = 'queued' | 'processing' | 'done' | 'failed';
+const redisUrl = env.REDIS_URL || process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 
-export interface RowErrorDetail {
-  row: number;
-  title?: string;
-  error: string;
-}
+// Exported for src/server.ts graceful shutdown; lazyConnect prevents boot-time hangs
+export const redisConnection = new Redis(redisUrl, {
+  maxRetriesPerRequest: null,
+  lazyConnect: true,
+  enableReadyCheck: false,
+  retryStrategy(times) {
+    return Math.min(times * 200, 2000);
+  },
+});
 
-export interface ImportJobRow {
-  id: string;
-  org_id: string;
-  source: ImportJobSource;
-  status: ImportJobStatus;
-  total_rows: number | null;
-  processed_rows: number;
-  inserted_rows: number;
-  updated_rows: number;
-  skipped_rows: number;
-  error_rows: RowErrorDetail[];
-  created_at: Date;
-}
+redisConnection.on('error', () => {
+  // Silent fallback so server does not crash if Redis is absent
+});
 
-const IMPORT_JOB_FIELDS = `
-  id, org_id, source, status, total_rows, processed_rows,
-  inserted_rows, updated_rows, skipped_rows, error_rows, created_at
-`;
+export const GoogleSheetImportSchema = z.object({
+  sheetUrl: z.string().url('Must be a valid Google Sheet URL'),
+});
 
-export async function createImportJob(
+export async function enqueueExcelImport(
   orgId: string,
-  source: ImportJobSource
-): Promise<ImportJobRow> {
-  const result = await query<ImportJobRow>(
-    `INSERT INTO import_jobs (
-       org_id, source, status, total_rows, processed_rows,
-       inserted_rows, updated_rows, skipped_rows, error_rows
-     )
-     VALUES ($1, $2, 'queued', NULL, 0, 0, 0, 0, '[]'::jsonb)
-     RETURNING ${IMPORT_JOB_FIELDS}`,
-    [orgId, source]
-  );
-  return result.rows[0];
+  filePath: string
+): Promise<{ jobId: string; status: string }> {
+  await importQueries.ensureImportSchema();
+  const jobRecord = await importQueries.createImportJob(orgId, 'excel');
+
+  // Process directly in-process asynchronously (responds to HTTP in < 100ms)
+  setImmediate(async () => {
+    try {
+      await processExcelFile(jobRecord.id, orgId, filePath);
+    } catch (err: any) {
+      console.error('[Import Worker Error]', err);
+      await importQueries.finalizeImportJob(jobRecord.id, 'failed', undefined, err.message);
+    }
+  });
+
+  return {
+    jobId: jobRecord.id,
+    status: 'queued',
+  };
 }
 
-export async function getImportJobById(
+export async function enqueueGoogleSheetImport(
+  orgId: string,
+  rawBody: unknown
+): Promise<{ jobId: string; status: string }> {
+  const parsed = GoogleSheetImportSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    throw new AppError(parsed.error.issues[0]?.message || 'Invalid sheet URL', 400);
+  }
+
+  await importQueries.ensureImportSchema();
+  const jobRecord = await importQueries.createImportJob(orgId, 'google_sheet');
+
+  setImmediate(async () => {
+    try {
+      await processGoogleSheet(jobRecord.id, orgId, parsed.data.sheetUrl);
+    } catch (err: any) {
+      console.error('[Google Sheet Error]', err);
+      await importQueries.finalizeImportJob(jobRecord.id, 'failed', undefined, err.message);
+    }
+  });
+
+  return {
+    jobId: jobRecord.id,
+    status: 'queued',
+  };
+}
+
+export async function getJobStatus(
   orgId: string,
   jobId: string
-): Promise<ImportJobRow | null> {
-  const result = await query<ImportJobRow>(
-    `SELECT ${IMPORT_JOB_FIELDS}
-     FROM   import_jobs
-     WHERE  org_id = $1 AND id = $2`,
-    [orgId, jobId]
-  );
-  return result.rows[0] ?? null;
-}
-
-export async function updateJobProgress(
-  jobId: string,
-  counts: {
-    processedRows: number;
-    insertedRows?: number;
-    updatedRows?: number;
-    skippedRows?: number;
-    totalRows?: number;
-  },
-  status: ImportJobStatus = 'processing'
-): Promise<void> {
-  await query(
-    `UPDATE import_jobs
-     SET processed_rows = $2,
-         inserted_rows  = COALESCE($3, inserted_rows),
-         updated_rows   = COALESCE($4, updated_rows),
-         skipped_rows   = COALESCE($5, skipped_rows),
-         total_rows     = COALESCE($6, total_rows),
-         status         = $7
-     WHERE id = $1`,
-    [
-      jobId,
-      counts.processedRows,
-      counts.insertedRows ?? null,
-      counts.updatedRows ?? null,
-      counts.skippedRows ?? null,
-      counts.totalRows ?? null,
-      status,
-    ]
-  );
-}
-
-export async function appendJobError(
-  jobId: string,
-  errorDetail: RowErrorDetail
-): Promise<void> {
-  await query(
-    `UPDATE import_jobs
-     SET error_rows = error_rows || $2::jsonb
-     WHERE id = $1`,
-    [jobId, JSON.stringify([errorDetail])]
-  );
-}
-
-export async function finalizeImportJob(
-  jobId: string,
-  status: 'done' | 'failed',
-  finalCounts?: {
-    processedRows: number;
-    insertedRows: number;
-    updatedRows: number;
-    skippedRows: number;
-  },
-  topLevelError?: string
-): Promise<void> {
-  if (topLevelError) {
-    await appendJobError(jobId, { row: 0, error: topLevelError });
+): Promise<ImportJobRow> {
+  const record = await importQueries.getImportJobById(orgId, jobId);
+  if (!record) {
+    throw new AppError('Import job not found', 404);
   }
-
-  if (finalCounts) {
-    await query(
-      `UPDATE import_jobs
-       SET status         = $2,
-           processed_rows = $3,
-           inserted_rows  = $4,
-           updated_rows   = $5,
-           skipped_rows   = $6
-       WHERE id = $1`,
-      [
-        jobId,
-        status,
-        finalCounts.processedRows,
-        finalCounts.insertedRows,
-        finalCounts.updatedRows,
-        finalCounts.skippedRows,
-      ]
-    );
-  } else {
-    await query(
-      `UPDATE import_jobs
-       SET status = $2
-       WHERE id = $1`,
-      [jobId, status]
-    );
-  }
+  return record;
 }
 </file>
 
@@ -13395,18 +13236,26 @@ export interface CoverSearchResult {
   source: 'googlebooks' | 'openlibrary' | null;
 }
 
-function cleanQueryString(input: string): string {
+function cleanTitleString(input: string): string {
   return (input || '')
-    .replace(/\s*[\(\[\{][^\)\]\}]*[\)\]\}]/g, ' ')
-    .replace(/:\s*.*$/, '')
-    .replace(/[^\w\s-]/g, ' ')
+    .replace(/^by\s+/i, '')
+    .replace(/\s*[\(\[\{][^\)\]\}]*[\)\]\}]/g, ' ') // Strip (Anniversary Edition), [Paperback], etc.
+    .replace(/[:–—\-]\s*.*$/, '')                   // Strip subtitles after colon or hyphen
+    .replace(/[^\w\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-/**
- * Sanitizes Google Books public image URL (uses unrestricted public content stream)
- */
+function cleanAuthorString(input: string): string {
+  return (input || '')
+    .replace(/^by\s+/i, '')
+    .replace(/\s+(and|with|&)\s+.*$/i, '')          // Keep primary author only
+    .replace(/\s*[\(\[\{][^\)\]\}]*[\)\]\}]/g, ' ')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function cleanGoogleBooksUrl(rawUrl: string, volumeId?: string): string {
   if (volumeId) {
     return `https://books.google.com/books/content?id=${volumeId}&printsec=frontcover&img=1&zoom=1`;
@@ -13419,8 +13268,8 @@ export async function findBestBookCover(
   rawAuthor?: string,
   rawIsbn?: string
 ): Promise<CoverSearchResult> {
-  const title = cleanQueryString(rawTitle);
-  const author = rawAuthor ? cleanQueryString(rawAuthor) : '';
+  const title = cleanTitleString(rawTitle);
+  const author = rawAuthor ? cleanAuthorString(rawAuthor) : '';
   const cleanIsbn = (rawIsbn || '').replace(/[^0-9X]/gi, '');
   const hasValidIsbn = cleanIsbn.length === 10 || cleanIsbn.length === 13;
 
@@ -13428,18 +13277,18 @@ export async function findBestBookCover(
     return { coverUrl: null, title: rawTitle, source: null };
   }
 
-  // 1. Strict Google Books query: matches exact title and author metadata
+  // 1. Google Books API with 2.5s timeout
   try {
     const query = hasValidIsbn
       ? `isbn:${cleanIsbn}`
       : author
-        ? `intitle:"${title}"+inauthor:"${author}"`
-        : `intitle:"${title}"`;
+        ? `intitle:${title} inauthor:${author}`
+        : `intitle:${title}`;
 
     const gbooksUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(
       query
     )}&maxResults=1&printType=books`;
-    const res = await axios.get(gbooksUrl, { timeout: 4500 });
+    const res = await axios.get(gbooksUrl, { timeout: 2500 });
 
     const items = res.data?.items || [];
     if (items.length > 0) {
@@ -13467,16 +13316,16 @@ export async function findBestBookCover(
       }
     }
   } catch {
-    // Non-blocking fallback to Open Library
+    // Cascade immediately to Open Library
   }
 
-  // 2. Direct Open Library Work Search (Zero Rate Limits, Returns Stable Cover ID)
+  // 2. Open Library Work Search (Zero rate limits, returns stable Cover ID)
   try {
     const olUrl = `https://openlibrary.org/search.json?title=${encodeURIComponent(title)}${
       author ? `&author=${encodeURIComponent(author)}` : ''
     }&limit=3`;
     const olRes = await axios.get(olUrl, {
-      timeout: 4000,
+      timeout: 2500,
       headers: { 'User-Agent': 'FlemelaBookstore/2.0 (contact@flemela.co.ke)' },
     });
 
@@ -13499,679 +13348,166 @@ export async function findBestBookCover(
 }
 </file>
 
-<file path="src/verticals/books/import/import.worker.ts">
+<file path="src/verticals/books/import/import.queries.ts">
 // =============================================================================
-// soko-api/src/verticals/books/import/import.worker.ts
-// Ingestion Worker: Resilient Dual Parser, Currency Sanitizer & Atomic Transactions.
+// soko-api/src/verticals/books/import/import.queries.ts
+// Database queries for import_jobs with auto-migration safety
 // =============================================================================
 
-import { Worker, Job } from 'bullmq';
-import ExcelJS from 'exceljs';
-import axios from 'axios';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import crypto from 'crypto';
-import { v2 as cloudinary } from 'cloudinary';
-import { pool } from '../../../config/db';
-import { env } from '../../../config/env';
-import { createRedisConnection } from './import.service';
-import * as importQueries from './import.queries';
-import { findBestBookCover } from '../../../services/bookCover.service';
-import {
-  findOrCreateCategoryByName,
-  insertProductTransactional,
-  insertInventoryTransactional,
-  insertProductImageTransactional,
-} from '../../../modules/products/products.queries';
+import { query } from '../../../config/db';
 
-cloudinary.config({
-  cloud_name: env.CLOUDINARY_CLOUD_NAME,
-  api_key: env.CLOUDINARY_API_KEY,
-  api_secret: env.CLOUDINARY_API_SECRET,
-});
+export type ImportJobSource = 'excel' | 'google_sheet';
+export type ImportJobStatus = 'queued' | 'processing' | 'done' | 'failed';
 
-interface ImportJobPayload {
-  jobId: string;
-  orgId: string;
-  source: 'excel' | 'google_sheet';
-  filePath?: string;
-  sheetUrl?: string;
+export interface RowErrorDetail {
+  row: number;
+  title?: string;
+  error: string;
 }
 
-interface ParsedBookRow {
-  rowNumber: number;
-  title: string;
-  author?: string;
-  sku?: string;
-  isbn?: string;
-  category?: string;
-  description?: string;
-  regularPrice?: number;
-  salePrice?: number;
-  hardcopyStock?: number;
-  pdfPrice?: number;
-  pdfCompareAtPrice?: number;
-  pdfFileUrl?: string;
-  epubPrice?: number;
-  epubCompareAtPrice?: number;
-  epubFileUrl?: string;
-  coverImageUrl?: string;
-  coverBuffer?: Buffer;
+export interface ImportJobRow {
+  id: string;
+  org_id: string;
+  source: ImportJobSource;
+  status: ImportJobStatus;
+  total_rows: number | null;
+  processed_rows: number;
+  inserted_rows: number;
+  updated_rows: number;
+  skipped_rows: number;
+  error_rows: RowErrorDetail[];
+  created_at: Date;
 }
 
-function extractCellString(cellValue: any): string {
-  if (cellValue === null || cellValue === undefined) return '';
-  if (typeof cellValue === 'string') return cellValue.trim();
-  if (typeof cellValue === 'number' || typeof cellValue === 'boolean') return String(cellValue).trim();
+const IMPORT_JOB_FIELDS = `
+  id, org_id, source, status, total_rows, processed_rows,
+  inserted_rows, updated_rows, skipped_rows, error_rows, created_at
+`;
 
-  if (typeof cellValue === 'object') {
-    if (cellValue.hyperlink) return String(cellValue.hyperlink).trim();
-    if (cellValue.text) return String(cellValue.text).trim();
-    if (cellValue.result) return String(cellValue.result).trim();
-    if (Array.isArray(cellValue.richText)) {
-      return cellValue.richText.map((t: any) => t.text || '').join('').trim();
-    }
-  }
-
-  return String(cellValue).trim();
+export async function ensureImportSchema(): Promise<void> {
+  await query(`
+    ALTER TABLE import_jobs 
+      ADD COLUMN IF NOT EXISTS inserted_rows INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS updated_rows  INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS skipped_rows  INTEGER NOT NULL DEFAULT 0;
+  `);
 }
 
-/**
- * Strips currency symbols (KSh, $, etc.), commas, spaces, and parses numbers safely.
- */
-function parseCleanNumber(val: any, fallback = 0): number {
-  if (val === null || val === undefined) return fallback;
-  if (typeof val === 'number') return isNaN(val) ? fallback : Math.max(0, val);
-
-  const rawStr = extractCellString(val);
-  if (!rawStr) return fallback;
-
-  const cleaned = rawStr.replace(/[^0-9.]/g, '');
-  const parsed = parseFloat(cleaned);
-  return isNaN(parsed) ? fallback : Math.max(0, parsed);
-}
-
-function parseCleanInt(val: any, fallback = 10): number {
-  if (val === null || val === undefined) return fallback;
-  const rawStr = extractCellString(val);
-  if (rawStr === '') return fallback;
-
-  const cleaned = rawStr.replace(/[^0-9-]/g, '');
-  const parsed = parseInt(cleaned, 10);
-  return isNaN(parsed) ? fallback : Math.max(0, parsed);
-}
-
-function sanitizeGoogleDriveUrl(rawVal: any): string | undefined {
-  const urlStr = extractCellString(rawVal);
-  if (!urlStr || urlStr.length < 5) return undefined;
-
-  const match = urlStr.match(/\/d\/([a-zA-Z0-9_-]+)/) || urlStr.match(/id=([a-zA-Z0-9_-]+)/);
-  if (match && match[1]) {
-    return `https://drive.google.com/uc?export=download&id=${match[1]}&confirm=t`;
-  }
-  return urlStr;
-}
-
-function normalizeHeader(val: any): string {
-  return String(val || '')
-    .toLowerCase()
-    .replace(/^\uFEFF/, '') // Strip UTF-8 BOM
-    .trim()
-    .replace(/[^a-z0-9]/g, '');
-}
-
-/**
- * Sniffs delimiters (comma, semicolon, tab) by checking the first line of a CSV.
- */
-function sniffCsvDelimiter(filePath: string): string {
-  try {
-    const buffer = Buffer.alloc(2048);
-    const fd = fs.openSync(filePath, 'r');
-    const bytesRead = fs.readSync(fd, buffer, 0, 2048, 0);
-    fs.closeSync(fd);
-
-    const text = buffer.toString('utf8', 0, bytesRead).split(/\r?\n/)[0] || '';
-    const commas = (text.match(/,/g) || []).length;
-    const semicolons = (text.match(/;/g) || []).length;
-    const tabs = (text.match(/\t/g) || []).length;
-
-    if (semicolons > commas && semicolons > tabs) return ';';
-    if (tabs > commas && tabs > semicolons) return '\t';
-    return ',';
-  } catch {
-    return ',';
-  }
-}
-
-async function loadWorkbookSafely(filePath: string): Promise<ExcelJS.Workbook> {
-  const ext = path.extname(filePath).toLowerCase();
-
-  // 1. Direct CSV branch
-  if (ext === '.csv') {
-    const csvWorkbook = new ExcelJS.Workbook();
-    const delimiter = sniffCsvDelimiter(filePath);
-    await csvWorkbook.csv.readFile(filePath, {
-      parserOptions: { delimiter },
-    });
-    return csvWorkbook;
-  }
-
-  // 2. XLSX branch with fallback for misnamed CSV files
-  const xlsxWorkbook = new ExcelJS.Workbook();
-  try {
-    await xlsxWorkbook.xlsx.readFile(filePath);
-    return xlsxWorkbook;
-  } catch (xlsxErr: any) {
-    try {
-      const fallbackCsvWorkbook = new ExcelJS.Workbook();
-      const delimiter = sniffCsvDelimiter(filePath);
-      await fallbackCsvWorkbook.csv.readFile(filePath, {
-        parserOptions: { delimiter },
-      });
-      return fallbackCsvWorkbook;
-    } catch {
-      throw new Error(
-        `Failed to parse spreadsheet. Ensure it is a valid .xlsx or .csv file. (${xlsxErr.message})`
-      );
-    }
-  }
-}
-
-async function uploadCoverToCloudinary(
+export async function createImportJob(
   orgId: string,
-  imageSource: { buffer?: Buffer; url?: string }
-): Promise<{ url: string; publicId: string } | null> {
-  const folder = `flemela/${orgId}/products`;
-
-  if (imageSource.buffer) {
-    return new Promise((resolve) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
-        { folder, resource_type: 'image' },
-        (error, result) => {
-          if (error || !result) resolve(null);
-          else resolve({ url: result.secure_url, publicId: result.public_id });
-        }
-      );
-      uploadStream.end(imageSource.buffer);
-    });
-  }
-
-  if (imageSource.url) {
-    try {
-      const result = await cloudinary.uploader.upload(imageSource.url, {
-        folder,
-        resource_type: 'image',
-      });
-      return { url: result.secure_url, publicId: result.public_id };
-    } catch {
-      return null;
-    }
-  }
-
-  return null;
+  source: ImportJobSource
+): Promise<ImportJobRow> {
+  const result = await query<ImportJobRow>(
+    `INSERT INTO import_jobs (
+       org_id, source, status, total_rows, processed_rows,
+       inserted_rows, updated_rows, skipped_rows, error_rows
+     )
+     VALUES ($1, $2, 'queued', NULL, 0, 0, 0, 0, '[]'::jsonb)
+     RETURNING ${IMPORT_JOB_FIELDS}`,
+    [orgId, source]
+  );
+  return result.rows[0];
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+export async function getImportJobById(
+  orgId: string,
+  jobId: string
+): Promise<ImportJobRow | null> {
+  const result = await query<ImportJobRow>(
+    `SELECT ${IMPORT_JOB_FIELDS}
+     FROM   import_jobs
+     WHERE  org_id = $1 AND id = $2`,
+    [orgId, jobId]
+  );
+  return result.rows[0] ?? null;
+}
 
-async function processExcelFile(
+export async function updateJobProgress(
   jobId: string,
-  orgId: string,
-  filePath: string
+  counts: {
+    processedRows: number;
+    insertedRows?: number;
+    updatedRows?: number;
+    skippedRows?: number;
+    totalRows?: number;
+  },
+  status: ImportJobStatus = 'processing'
 ): Promise<void> {
-  const workbook = await loadWorkbookSafely(filePath);
-  const worksheet = workbook.worksheets[0];
+  await query(
+    `UPDATE import_jobs
+     SET processed_rows = $2,
+         inserted_rows  = COALESCE($3, inserted_rows),
+         updated_rows   = COALESCE($4, updated_rows),
+         skipped_rows   = COALESCE($5, skipped_rows),
+         total_rows     = COALESCE($6, total_rows),
+         status         = $7
+     WHERE id = $1`,
+    [
+      jobId,
+      counts.processedRows,
+      counts.insertedRows ?? null,
+      counts.updatedRows ?? null,
+      counts.skippedRows ?? null,
+      counts.totalRows ?? null,
+      status,
+    ]
+  );
+}
 
-  if (!worksheet || worksheet.rowCount === 0) {
-    throw new Error('Spreadsheet contains no readable rows or valid worksheet.');
+export async function appendJobError(
+  jobId: string,
+  errorDetail: RowErrorDetail
+): Promise<void> {
+  await query(
+    `UPDATE import_jobs
+     SET error_rows = error_rows || $2::jsonb
+     WHERE id = $1`,
+    [jobId, JSON.stringify([errorDetail])]
+  );
+}
+
+export async function finalizeImportJob(
+  jobId: string,
+  status: 'done' | 'failed',
+  finalCounts?: {
+    processedRows: number;
+    insertedRows: number;
+    updatedRows: number;
+    skippedRows: number;
+  },
+  topLevelError?: string
+): Promise<void> {
+  if (topLevelError) {
+    await appendJobError(jobId, { row: 0, error: topLevelError });
   }
 
-  const headerMap: Record<string, number> = {};
-  const firstRow = worksheet.getRow(1);
-
-  firstRow.eachCell((cell, colNumber) => {
-    const norm = normalizeHeader(cell.value);
-    if (norm) {
-      headerMap[norm] = colNumber;
-    }
-  });
-
-  const titleCol =
-    headerMap['name'] ||
-    headerMap['title'] ||
-    headerMap['booktitle'] ||
-    headerMap['productname'] ||
-    headerMap['itemname'];
-
-  if (!titleCol) {
-    throw new Error(
-      'Spreadsheet must have a "Name" or "Title" column header. Found headers: ' +
-        Object.keys(headerMap).slice(0, 8).join(', ')
+  if (finalCounts) {
+    await query(
+      `UPDATE import_jobs
+       SET status         = $2,
+           processed_rows = $3,
+           inserted_rows  = $4,
+           updated_rows   = $5,
+           skipped_rows   = $6
+       WHERE id = $1`,
+      [
+        jobId,
+        status,
+        finalCounts.processedRows,
+        finalCounts.insertedRows,
+        finalCounts.updatedRows,
+        finalCounts.skippedRows,
+      ]
+    );
+  } else {
+    await query(
+      `UPDATE import_jobs
+       SET status = $2
+       WHERE id = $1`,
+      [jobId, status]
     );
   }
-
-  const imageMapByRow: Record<number, Buffer> = {};
-  try {
-    const images = worksheet.getImages();
-    for (const img of images) {
-      const media = workbook.model.media?.find((m: any) => m.index === (img as any).imageId);
-      if (media && media.buffer) {
-        const row = Math.floor((img as any).range.tl.row) + 1;
-        imageMapByRow[row] = Buffer.from(media.buffer);
-      }
-    }
-  } catch {
-    // Non-blocking image preview extraction
-  }
-
-  // Pre-scan non-empty rows for accurate progress calculations
-  let actualDataRows = 0;
-  for (let r = 2; r <= worksheet.rowCount; r++) {
-    const val = extractCellString(worksheet.getRow(r).getCell(titleCol).value);
-    if (val) actualDataRows++;
-  }
-
-  const totalRows = Math.max(1, actualDataRows);
-  await importQueries.updateJobProgress(jobId, { processedRows: 0, totalRows }, 'processing');
-
-  let processedCount = 0;
-  let insertedCount = 0;
-  let updatedCount = 0;
-  let skippedCount = 0;
-
-  const getVal = (row: ExcelJS.Row, keys: string[]): any => {
-    for (const k of keys) {
-      const col = headerMap[k];
-      if (col) {
-        const v = row.getCell(col).value;
-        if (v !== null && v !== undefined) return v;
-      }
-    }
-    return null;
-  };
-
-  for (let r = 2; r <= worksheet.rowCount; r++) {
-    const row = worksheet.getRow(r);
-    const titleVal = extractCellString(row.getCell(titleCol).value);
-
-    if (!titleVal) continue;
-
-    try {
-      const description = extractCellString(getVal(row, ['description', 'synopsis', 'summary', 'about', 'details']));
-      const sku = extractCellString(getVal(row, ['sellersku', 'sku', 'isbn', 'isbn13', 'isbn10', 'barcode']));
-      const category = extractCellString(getVal(row, ['primarycategory', 'category', 'genre', 'categories', 'collection']));
-      const author = extractCellString(getVal(row, ['author', 'authorname', 'writer', 'authors']));
-
-      const regularPrice = parseCleanNumber(getVal(row, ['pricekes', 'price', 'regularprice', 'listprice', 'msrp', 'amount']), 0);
-      const salePrice = parseCleanNumber(getVal(row, ['salepricekes', 'saleprice', 'discountedprice', 'offerprice', 'specialprice']), 0);
-      const hardcopyStock = parseCleanInt(getVal(row, ['stock', 'quantity', 'hardcopystock', 'qty', 'inventory']), 10);
-
-      const pdfFileUrl = sanitizeGoogleDriveUrl(getVal(row, ['pdffile', 'pdffileurl', 'pdfurl', 'pdflink', 'pdf', 'ebookurl']));
-      const pdfPrice = parseCleanNumber(getVal(row, ['pdfsprice', 'pdfprice', 'ebookprice']), 0);
-      const epubFileUrl = sanitizeGoogleDriveUrl(getVal(row, ['epubfile', 'epubfileurl', 'epuburl', 'epublink', 'epub']));
-      const epubPrice = parseCleanNumber(getVal(row, ['epubsprice', 'epubprice']), 0);
-
-      const coverImageUrl = extractCellString(getVal(row, ['image1', 'image2', 'coverimageurl', 'coverurl', 'cover', 'photo', 'image']));
-      const coverBuffer = imageMapByRow[r];
-
-      const outcome = await upsertBookFromImport(orgId, {
-        rowNumber: r,
-        title: titleVal,
-        author: author || undefined,
-        sku: sku || undefined,
-        isbn: sku || undefined,
-        category: category || 'General',
-        description: description || undefined,
-        regularPrice: regularPrice > 0 ? regularPrice : undefined,
-        salePrice: salePrice > 0 ? salePrice : regularPrice > 0 ? regularPrice : undefined,
-        hardcopyStock,
-        pdfPrice: pdfPrice > 0 ? pdfPrice : regularPrice > 0 ? regularPrice : undefined,
-        pdfFileUrl,
-        epubPrice: epubPrice > 0 ? epubPrice : regularPrice > 0 ? regularPrice : undefined,
-        epubFileUrl,
-        coverImageUrl: coverImageUrl || undefined,
-        coverBuffer,
-      });
-
-      if (outcome === 'inserted') insertedCount++;
-      else if (outcome === 'updated') updatedCount++;
-      else skippedCount++;
-
-      processedCount++;
-    } catch (rowErr: any) {
-      await importQueries.appendJobError(jobId, {
-        row: r,
-        title: titleVal,
-        error: rowErr.message || 'Row processing failed',
-      });
-      skippedCount++;
-    } finally {
-      if (r % 5 === 0 || r === worksheet.rowCount) {
-        await importQueries.updateJobProgress(
-          jobId,
-          {
-            processedRows: processedCount,
-            insertedRows: insertedCount,
-            updatedRows: updatedCount,
-            skippedRows: skippedCount,
-          },
-          'processing'
-        );
-      }
-      await sleep(30);
-    }
-  }
-
-  await importQueries.finalizeImportJob(jobId, 'done', {
-    processedRows: processedCount,
-    insertedRows: insertedCount,
-    updatedRows: updatedCount,
-    skippedRows: skippedCount,
-  });
 }
-
-/**
- * Processes public Google Sheet URLs by exporting directly to CSV.
- */
-async function processGoogleSheet(
-  jobId: string,
-  orgId: string,
-  sheetUrl: string
-): Promise<void> {
-  const match = sheetUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
-  if (!match || !match[1]) {
-    throw new Error('Invalid Google Sheet URL format. Unable to extract Sheet ID.');
-  }
-
-  const sheetId = match[1];
-  const exportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
-  const tempFilePath = path.join(os.tmpdir(), `gsheet-${jobId}-${Date.now()}.csv`);
-
-  try {
-    const response = await axios.get(exportUrl, {
-      responseType: 'stream',
-      timeout: 20000,
-    });
-
-    await new Promise<void>((resolve, reject) => {
-      const writer = fs.createWriteStream(tempFilePath);
-      response.data.pipe(writer);
-      writer.on('finish', () => resolve());
-      writer.on('error', (err) => reject(err));
-    });
-
-    await processExcelFile(jobId, orgId, tempFilePath);
-  } finally {
-    if (fs.existsSync(tempFilePath)) {
-      fs.unlink(tempFilePath, () => {});
-    }
-  }
-}
-
-/**
- * Atomic per-book transaction: inserts/updates products, inventory, images, and formats
- * in a single committed unit.
- */
-async function upsertBookFromImport(
-  orgId: string,
-  row: ParsedBookRow
-): Promise<'inserted' | 'updated' | 'skipped'> {
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN');
-
-    // 1. Resolve Category safely
-    const categoryName = row.category || 'General';
-    const categoryId = await findOrCreateCategoryByName(client, orgId, categoryName);
-
-    // 2. Pre-Flight Duplicate Check (SKU first, fallback to exact Title)
-    let existingProductId: string | null = null;
-
-    if (row.sku && row.sku.trim()) {
-      const skuCheck = await client.query<{ id: string }>(
-        `SELECT id FROM products 
-         WHERE org_id = $1 AND LOWER(TRIM(sku)) = LOWER(TRIM($2)) AND deleted_at IS NULL 
-         LIMIT 1`,
-        [orgId, row.sku.trim()]
-      );
-      if (skuCheck.rows.length > 0) {
-        existingProductId = skuCheck.rows[0].id;
-      }
-    }
-
-    if (!existingProductId) {
-      const titleCheck = await client.query<{ id: string }>(
-        `SELECT id FROM products 
-         WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) AND deleted_at IS NULL 
-         LIMIT 1`,
-        [orgId, row.title.trim()]
-      );
-      if (titleCheck.rows.length > 0) {
-        existingProductId = titleCheck.rows[0].id;
-      }
-    }
-
-    // 3. Normalize Price and Discounts (Respecting chk_products_compare_at_price)
-    let sellingPrice = row.salePrice || row.regularPrice || row.pdfPrice || row.epubPrice || 999;
-    let compareAtPrice: number | null = null;
-
-    if (row.regularPrice && row.salePrice && row.regularPrice > row.salePrice) {
-      sellingPrice = row.salePrice;
-      compareAtPrice = row.regularPrice;
-    }
-
-    // 4. Resolve Cover Art
-    let targetImageUrl: string | null = null;
-    let targetImageBuffer: Buffer | undefined = undefined;
-
-    if (!existingProductId) {
-      try {
-        const discovered = await findBestBookCover(row.title, row.author, row.isbn || row.sku);
-        if (discovered.coverUrl) {
-          targetImageUrl = discovered.coverUrl;
-        }
-      } catch {
-        // Non-blocking cover discovery fallback
-      }
-
-      if (!targetImageUrl) {
-        targetImageUrl = row.coverImageUrl || null;
-        targetImageBuffer = row.coverBuffer;
-      }
-    }
-
-    let finalImageUrl: string | null = targetImageUrl;
-    let finalImagePublicId = 'cover_img';
-
-    if (targetImageBuffer || targetImageUrl) {
-      const uploadedImage = await uploadCoverToCloudinary(orgId, {
-        buffer: targetImageBuffer,
-        url: targetImageUrl || undefined,
-      });
-
-      if (uploadedImage) {
-        finalImageUrl = uploadedImage.url;
-        finalImagePublicId = uploadedImage.publicId;
-      }
-    }
-
-    let productId = existingProductId;
-    let outcome: 'inserted' | 'updated' = 'inserted';
-
-    if (existingProductId) {
-      // -----------------------------------------------------------------------
-      // EXISTING BOOK: Sync details & stock
-      // -----------------------------------------------------------------------
-      outcome = 'updated';
-      await client.query(
-        `UPDATE products
-         SET category_id      = $2,
-             price            = $3,
-             compare_at_price = COALESCE($4, compare_at_price),
-             sku              = COALESCE(products.sku, $5),
-             description      = COALESCE($6, products.description),
-             badge            = (CASE WHEN $4 IS NOT NULL THEN 'FLASH_SALE' ELSE products.badge END),
-             updated_at       = NOW()
-         WHERE id = $1 AND org_id = $7`,
-        [
-          existingProductId,
-          categoryId,
-          sellingPrice,
-          compareAtPrice,
-          row.sku || null,
-          row.description || (row.author ? `By ${row.author}` : null),
-          orgId,
-        ]
-      );
-
-      if (row.hardcopyStock !== undefined) {
-        await client.query(
-          `UPDATE inventory 
-           SET stock = $2, updated_at = NOW() 
-           WHERE product_id = $1`,
-          [existingProductId, row.hardcopyStock]
-        );
-      }
-    } else {
-      // -----------------------------------------------------------------------
-      // NEW BOOK: Collision-proof cryptographic slug
-      // -----------------------------------------------------------------------
-      outcome = 'inserted';
-      const cleanSlugTitle = row.title
-        .toLowerCase()
-        .trim()
-        .replace(/[^a-z0-9]/g, '-')
-        .replace(/-+/g, '-')
-        .slice(0, 45);
-      const slugSuffix = crypto.randomBytes(3).toString('hex');
-      const slug = `${cleanSlugTitle}-${slugSuffix}`;
-
-      productId = await insertProductTransactional(client, orgId, {
-        category_id: categoryId,
-        name: row.title,
-        slug,
-        sku: row.sku || null,
-        description: row.description || (row.author ? `By ${row.author}` : null),
-        cost_price: null,
-        price: sellingPrice,
-        compare_at_price: compareAtPrice,
-        badge: compareAtPrice ? 'FLASH_SALE' : null,
-        status: 'published',
-      });
-
-      await insertInventoryTransactional(client, productId, row.hardcopyStock || 10);
-
-      if (finalImageUrl) {
-        await insertProductImageTransactional(
-          client,
-          productId,
-          finalImageUrl,
-          finalImagePublicId,
-          0
-        );
-      }
-    }
-
-    // 5. Hardcopy Format
-    if (productId && sellingPrice) {
-      await client.query(
-        `INSERT INTO product_formats (
-           product_id, format, price, compare_at_price, stock
-         )
-         VALUES ($1, 'hardcopy', $2, $3, $4)
-         ON CONFLICT (product_id, format) DO UPDATE SET
-           price            = EXCLUDED.price,
-           compare_at_price = EXCLUDED.compare_at_price,
-           stock            = EXCLUDED.stock,
-           updated_at       = NOW()`,
-        [productId, sellingPrice, compareAtPrice, row.hardcopyStock ?? 10]
-      );
-    }
-
-    // 6. Digital PDF Format (Inherits price if omitted)
-    if (productId && (row.pdfFileUrl || row.pdfPrice)) {
-      const formatPrice = row.pdfPrice && row.pdfPrice > 0 ? row.pdfPrice : sellingPrice;
-
-      await client.query(
-        `INSERT INTO product_formats (
-           product_id, format, price, compare_at_price, file_url, file_public_id
-         )
-         VALUES ($1, 'pdf', $2, NULL, $3, $3)
-         ON CONFLICT (product_id, format) DO UPDATE SET
-           price            = EXCLUDED.price,
-           file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
-           file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
-           updated_at       = NOW()`,
-        [productId, formatPrice, row.pdfFileUrl || null]
-      );
-    }
-
-    // 7. Digital EPUB Format
-    if (productId && (row.epubFileUrl || row.epubPrice)) {
-      const formatPrice = row.epubPrice && row.epubPrice > 0 ? row.epubPrice : sellingPrice;
-
-      await client.query(
-        `INSERT INTO product_formats (
-           product_id, format, price, compare_at_price, file_url, file_public_id
-         )
-         VALUES ($1, 'epub', $2, NULL, $3, $3)
-         ON CONFLICT (product_id, format) DO UPDATE SET
-           price            = EXCLUDED.price,
-           file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
-           file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
-           updated_at       = NOW()`,
-        [productId, formatPrice, row.epubFileUrl || null]
-      );
-    }
-
-    await client.query('COMMIT');
-    return outcome;
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-// Dedicated BullMQ Worker with isolated Redis connection
-export const bookImportWorker = new Worker<ImportJobPayload>(
-  'book-import-queue',
-  async (job: Job<ImportJobPayload>) => {
-    const { jobId, orgId, source, filePath, sheetUrl } = job.data;
-
-    try {
-      if (source === 'excel' && filePath) {
-        await processExcelFile(jobId, orgId, filePath);
-      } else if (source === 'google_sheet' && sheetUrl) {
-        await processGoogleSheet(jobId, orgId, sheetUrl);
-      } else {
-        throw new Error('Invalid import source or missing payload parameters.');
-      }
-    } catch (err: any) {
-      await importQueries.finalizeImportJob(jobId, 'failed', undefined, err.message);
-      throw err;
-    } finally {
-      if (filePath && fs.existsSync(filePath)) {
-        fs.unlink(filePath, () => {});
-      }
-    }
-  },
-  {
-    connection: createRedisConnection(),
-    concurrency: 1, // Safe sequential processing to eliminate database contention on Render Free
-    lockDuration: 60000, // 60s lock duration prevents false stalling during network downloads
-  }
-);
-
-bookImportWorker.on('completed', (job) => {
-  console.log(`[BullMQ] Book import job ${job.id} completed successfully.`);
-});
-
-bookImportWorker.on('failed', (job, err) => {
-  console.error(`[BullMQ] Book import job ${job?.id} failed with error:`, err.message);
-})
 </file>
 
 <file path="render.yaml">
@@ -14545,805 +13881,6 @@ export async function handleMpesaCallback(rawPayload: unknown): Promise<void> {
     } finally {
         client.release();
     }
-}
-</file>
-
-<file path="src/modules/products/products.queries.ts">
-// =============================================================================
-// soko-api/src/modules/products/products.queries.ts
-// Product and Category catalog queries with slugification, badges, and smart deletes.
-// =============================================================================
-
-import { PoolClient } from "pg";
-import { query, pool } from "../../config/db";
-
-export type FormatType = 'pdf' | 'epub' | 'hardcopy';
-
-export interface ProductFormatRow {
-    id: string;
-    product_id: string;
-    format: FormatType;
-    price: string;
-    compare_at_price: string | null;
-    file_url: string | null;
-    file_public_id: string | null;
-    file_size_bytes: string | null;
-    stock: number | null;
-    created_at: Date;
-    updated_at: Date;
-}
-
-export interface ProductVariant {
-    id: string;
-    product_id: string;
-    title: string;
-    sku: string | null;
-    options: Record<string, string>;
-    price: string;
-    cost_price: string;
-    stock: number;
-    low_stock_at: number;
-    image_url: string | null;
-    is_active: boolean;
-}
-
-export interface ProductWithImages {
-    id: string;
-    org_id: string;
-    category_id: string;
-    category_name: string | null;
-    name: string;
-    slug: string;
-    sku: string | null;
-    description: string | null;
-    cost_price: string | null;
-    price: string;
-    compare_at_price: string | null;
-    badge: string | null;
-    sale_ends_at: Date | null;
-    status: "draft" | "published" | "archived";
-    created_at: Date;
-    updated_at: Date;
-    images: Array<{
-        image_url: string;
-        image_public_id: string;
-        sort_order: number;
-    }>;
-    variants: ProductVariant[];
-    formats: ProductFormatRow[];
-}
-
-export interface InventoryWithProduct {
-    id: string;
-    product_id: string;
-    product_name: string;
-    product_sku: string | null;
-    stock: number;
-    low_stock_at: number;
-    updated_at: Date;
-    variants_count: number;
-}
-
-export interface ListProductsOptions {
-    categoryId?: string;
-    searchQuery?: string;
-    badge?: string;
-    page: number;
-    limit: number;
-}
-
-export interface ListInventoryOptions {
-    lowStockOnly?: boolean;
-    page: number;
-    limit: number;
-}
-
-export interface CategoryRow {
-    id: string;
-    org_id: string;
-    name: string;
-    slug: string;
-    description: string | null;
-    is_featured: boolean;
-    sort_order: number;
-    created_at: Date;
-    product_count?: number;
-}
-
-export interface VariantInputData {
-    id?: string;
-    title: string;
-    sku?: string | null;
-    options?: Record<string, string>;
-    price: number;
-    cost_price?: number;
-    stock: number;
-    low_stock_at?: number;
-    image_url?: string | null;
-    is_active?: boolean;
-}
-
-function slugifyCategory(input: string): string {
-    const base = input
-        .toLowerCase()
-        .trim()
-        .replace(/[^a-z0-9\s-]/g, '')
-        .replace(/\s+/g, '-')
-        .replace(/-+/g, '-')
-        .replace(/^-|-$/g, '');
-    return base.length > 0 ? base : 'category';
-}
-
-export async function listCategories(orgId: string): Promise<CategoryRow[]> {
-    const result = await query<CategoryRow>(
-        `SELECT c.id, c.org_id, c.name, c.slug, c.description, c.is_featured, c.sort_order, c.created_at,
-                COALESCE((
-                    SELECT COUNT(*) 
-                    FROM products p 
-                    WHERE p.category_id = c.id AND p.deleted_at IS NULL
-                ), 0)::int AS product_count
-         FROM   categories c
-         WHERE  c.org_id = $1 
-         ORDER  BY c.is_featured DESC, c.sort_order ASC, c.name ASC`,
-        [orgId]
-    );
-    return result.rows;
-}
-
-export async function findOrCreateCategoryByName(
-    client: PoolClient,
-    orgId: string,
-    name: string
-): Promise<string> {
-    const trimmedName = name.trim();
-    const slug = slugifyCategory(trimmedName);
-
-    // Case-insensitive lookup to avoid duplicates
-    const checkResult = await client.query<{ id: string }>(
-        `SELECT id FROM categories WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) LIMIT 1`,
-        [orgId, trimmedName]
-    );
-
-    if (checkResult.rows.length > 0) {
-        return checkResult.rows[0].id;
-    }
-
-    const insertResult = await client.query<{ id: string }>(
-        `INSERT INTO categories (org_id, name, slug) 
-         VALUES ($1, $2, $3) 
-         ON CONFLICT (org_id, LOWER(TRIM(name))) DO UPDATE SET name = EXCLUDED.name
-         RETURNING id`,
-        [orgId, trimmedName, slug]
-    );
-
-    return insertResult.rows[0].id;
-}
-
-export async function createCategory(
-    orgId: string,
-    data: {
-        name: string;
-        description?: string | null;
-        isFeatured?: boolean;
-        sortOrder?: number;
-    }
-): Promise<CategoryRow> {
-    const trimmedName = data.name.trim();
-    const slug = slugifyCategory(trimmedName);
-
-    const result = await query<CategoryRow>(
-        `INSERT INTO categories (org_id, name, slug, description, is_featured, sort_order)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (org_id, LOWER(TRIM(name))) DO UPDATE SET
-             slug = EXCLUDED.slug,
-             description = COALESCE(EXCLUDED.description, categories.description),
-             is_featured = COALESCE(EXCLUDED.is_featured, categories.is_featured),
-             sort_order = COALESCE(EXCLUDED.sort_order, categories.sort_order)
-         RETURNING id, org_id, name, slug, description, is_featured, sort_order, created_at`,
-        [
-            orgId,
-            trimmedName,
-            slug,
-            data.description?.trim() || null,
-            data.isFeatured ?? false,
-            data.sortOrder ?? 0,
-        ]
-    );
-    return result.rows[0];
-}
-
-const PRODUCT_SELECT_FIELDS = `
-  p.id, p.org_id, p.category_id, p.name, p.slug, p.sku, p.description,
-  p.cost_price::text AS cost_price, p.price::text AS price,
-  p.compare_at_price::text AS compare_at_price, p.badge, p.sale_ends_at,
-  p.status, p.created_at, p.updated_at,
-  c.name AS category_name,
-  COALESCE(
-    (
-      SELECT json_agg(
-        json_build_object(
-          'image_url', pi.image_url,
-          'image_public_id', pi.image_public_id,
-          'sort_order', pi.sort_order
-        ) ORDER BY pi.sort_order ASC
-      )
-      FROM product_images pi
-      WHERE pi.product_id = p.id
-    ),
-    '[]'::json
-  ) AS images,
-  COALESCE(
-    (
-      SELECT json_agg(
-        json_build_object(
-          'id', pv.id,
-          'product_id', pv.product_id,
-          'title', pv.title,
-          'sku', pv.sku,
-          'options', pv.options,
-          'price', pv.price::text,
-          'cost_price', pv.cost_price::text,
-          'stock', pv.stock,
-          'low_stock_at', pv.low_stock_at,
-          'image_url', pv.image_url,
-          'is_active', pv.is_active
-        ) ORDER BY pv.created_at ASC
-      )
-      FROM product_variants pv
-      WHERE pv.product_id = p.id AND pv.is_active = TRUE
-    ),
-    '[]'::json
-  ) AS variants,
-  COALESCE(
-    (
-      SELECT json_agg(
-        json_build_object(
-          'id', pf.id,
-          'product_id', pf.product_id,
-          'format', pf.format,
-          'price', pf.price::text,
-          'compare_at_price', pf.compare_at_price::text,
-          'file_url', pf.file_url,
-          'file_public_id', pf.file_public_id,
-          'file_size_bytes', pf.file_size_bytes::text,
-          'stock', pf.stock,
-          'created_at', pf.created_at,
-          'updated_at', pf.updated_at
-        ) ORDER BY (
-          CASE pf.format
-            WHEN 'hardcopy' THEN 1
-            WHEN 'pdf' THEN 2
-            WHEN 'epub' THEN 3
-            ELSE 4
-          END
-        ) ASC
-      )
-      FROM product_formats pf
-      WHERE pf.product_id = p.id
-    ),
-    '[]'::json
-  ) AS formats
-`;
-
-export async function listProducts(
-    orgId: string,
-    options: ListProductsOptions
-): Promise<{ products: ProductWithImages[]; total: number }> {
-    const { categoryId, searchQuery, badge, page, limit } = options;
-    const offset = (page - 1) * limit;
-
-    const conditions: string[] = ["p.org_id = $1", "p.deleted_at IS NULL"];
-    const params: unknown[] = [orgId];
-    let paramIndex = 2;
-
-    if (categoryId) {
-        conditions.push(`p.category_id = $${paramIndex}`);
-        params.push(categoryId);
-        paramIndex++;
-    }
-
-    if (badge) {
-        conditions.push(`p.badge = $${paramIndex}`);
-        params.push(badge);
-        paramIndex++;
-    }
-
-    if (searchQuery && searchQuery.trim().length > 0) {
-        conditions.push(
-            `(p.name ILIKE $${paramIndex} OR p.sku ILIKE $${paramIndex} OR p.description ILIKE $${paramIndex})`
-        );
-        params.push(`%${searchQuery.trim()}%`);
-        paramIndex++;
-    }
-
-    const whereClause = conditions.join(" AND ");
-
-    const countResult = await query<{ count: string }>(
-        `SELECT COUNT(*) AS count 
-         FROM products p 
-         WHERE ${whereClause}`,
-        params
-    );
-    const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
-
-    if (total === 0) {
-        return { products: [], total: 0 };
-    }
-
-    const dataParams = [...params, limit, offset];
-    const dataResult = await query<ProductWithImages>(
-        `SELECT ${PRODUCT_SELECT_FIELDS}
-         FROM products p
-         LEFT JOIN categories c ON c.id = p.category_id
-         WHERE ${whereClause}
-         ORDER BY (CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, p.created_at DESC
-         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
-        dataParams
-    );
-
-    return { products: dataResult.rows, total };
-}
-
-export async function getProductById(
-    orgId: string,
-    productId: string
-): Promise<ProductWithImages | null> {
-    const result = await query<ProductWithImages>(
-        `SELECT ${PRODUCT_SELECT_FIELDS}
-         FROM products p
-         LEFT JOIN categories c ON c.id = p.category_id
-         WHERE p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL`,
-        [orgId, productId]
-    );
-    return result.rows[0] ?? null;
-}
-
-export async function updateProduct(
-    orgId: string,
-    productId: string,
-    fields: {
-        name?: string;
-        category_id?: string;
-        price?: number;
-        compare_at_price?: number | null;
-        cost_price?: number | null;
-        sku?: string | null;
-        badge?: string | null;
-        sale_ends_at?: string | null;
-        description?: string | null;
-        status?: "draft" | "published" | "archived";
-        variants?: VariantInputData[];
-        images?: Array<{ image_url: string; image_public_id?: string }>;
-    }
-): Promise<ProductWithImages | null> {
-    const client = await pool.connect();
-    try {
-        await client.query("BEGIN");
-
-        const setClauses: string[] = [];
-        const params: unknown[] = [orgId, productId];
-        let paramIndex = 3;
-
-        const { variants, images, sale_ends_at, ...directFields } = fields;
-
-        for (const [key, value] of Object.entries(directFields)) {
-            if (value !== undefined) {
-                setClauses.push(`${key} = $${paramIndex}`);
-                params.push(value);
-                paramIndex++;
-            }
-        }
-
-        if (sale_ends_at !== undefined) {
-            setClauses.push(`sale_ends_at = $${paramIndex}`);
-            params.push(sale_ends_at ? new Date(sale_ends_at) : null);
-            paramIndex++;
-        }
-
-        if (setClauses.length > 0) {
-            const updateQuery = `
-              UPDATE products
-              SET ${setClauses.join(", ")}, updated_at = NOW()
-              WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL
-            `;
-            await client.query(updateQuery, params);
-        }
-
-        if (images !== undefined) {
-            await client.query("DELETE FROM product_images WHERE product_id = $1", [productId]);
-            for (let s = 0; s < images.length; s++) {
-                if (images[s].image_url) {
-                    await insertProductImageTransactional(
-                        client,
-                        productId,
-                        images[s].image_url,
-                        images[s].image_public_id || 'cover_img',
-                        s
-                    );
-                }
-            }
-        }
-
-        if (variants !== undefined) {
-            await syncProductVariantsTransactional(client, orgId, productId, variants);
-        }
-
-        await client.query("COMMIT");
-        return getProductById(orgId, productId);
-    } catch (err) {
-        await client.query("ROLLBACK");
-        throw err;
-    } finally {
-        client.release();
-    }
-}
-
-export async function syncProductVariantsTransactional(
-    client: PoolClient,
-    orgId: string,
-    productId: string,
-    variants: VariantInputData[]
-): Promise<void> {
-    if (variants.length === 0) {
-        await client.query(
-            `UPDATE product_variants SET is_active = FALSE, updated_at = NOW() WHERE org_id = $1 AND product_id = $2`,
-            [orgId, productId]
-        );
-        return;
-    }
-
-    const keepVariantIds: string[] = [];
-
-    for (const v of variants) {
-        if (v.id) {
-            await client.query(
-                `UPDATE product_variants
-                 SET title        = $4,
-                     sku          = $5,
-                     options      = $6,
-                     price        = $7,
-                     cost_price   = $8,
-                     stock        = $9,
-                     low_stock_at = $10,
-                     image_url    = $11,
-                     is_active    = $12,
-                     updated_at   = NOW()
-                 WHERE id = $1 AND org_id = $2 AND product_id = $3`,
-                [
-                    v.id,
-                    orgId,
-                    productId,
-                    v.title.trim(),
-                    v.sku?.trim() || null,
-                    JSON.stringify(v.options || {}),
-                    v.price,
-                    v.cost_price ?? 0,
-                    v.stock,
-                    v.low_stock_at ?? 5,
-                    v.image_url || null,
-                    v.is_active ?? true
-                ]
-            );
-            keepVariantIds.push(v.id);
-        } else {
-            const inserted = await client.query<{ id: string }>(
-                `INSERT INTO product_variants (
-                   org_id, product_id, title, sku, options, price,
-                   cost_price, stock, low_stock_at, image_url, is_active
-                 )
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                 RETURNING id`,
-                [
-                    orgId,
-                    productId,
-                    v.title.trim(),
-                    v.sku?.trim() || null,
-                    JSON.stringify(v.options || {}),
-                    v.price,
-                    v.cost_price ?? 0,
-                    v.stock,
-                    v.low_stock_at ?? 5,
-                    v.image_url || null,
-                    v.is_active ?? true
-                ]
-            );
-            keepVariantIds.push(inserted.rows[0].id);
-        }
-    }
-
-    if (keepVariantIds.length > 0) {
-        await client.query(
-            `UPDATE product_variants
-             SET is_active = FALSE, updated_at = NOW()
-             WHERE org_id = $1 AND product_id = $2 AND NOT (id = ANY($3::uuid[]))`,
-            [orgId, productId, keepVariantIds]
-        );
-    }
-}
-
-export async function archiveProduct(
-    orgId: string,
-    productId: string
-): Promise<boolean> {
-    const result = await query(
-        `UPDATE products 
-         SET status = 'archived', updated_at = NOW() 
-         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
-        [orgId, productId]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function unarchiveProduct(
-    orgId: string,
-    productId: string
-): Promise<boolean> {
-    const result = await query(
-        `UPDATE products 
-         SET status = 'draft', updated_at = NOW() 
-         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
-        [orgId, productId]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function getProductOrderCount(
-    client: PoolClient,
-    orgId: string,
-    productId: string
-): Promise<number> {
-    const result = await client.query<{ count: string }>(
-        `SELECT COUNT(oi.id)::text AS count
-         FROM order_items oi
-         INNER JOIN orders o ON o.id = oi.order_id
-         WHERE o.org_id = $1 AND (
-           oi.product_id = $2 OR 
-           oi.format_id IN (SELECT id FROM product_formats WHERE product_id = $2)
-         )`,
-        [orgId, productId]
-    );
-    return parseInt(result.rows[0]?.count || '0', 10);
-}
-
-export async function softDeleteProductTransactional(
-    client: PoolClient,
-    orgId: string,
-    productId: string
-): Promise<void> {
-    const timestamp = Math.floor(Date.now() / 1000);
-    await client.query(
-        `UPDATE products
-         SET deleted_at = NOW(),
-             status     = 'archived',
-             slug       = slug || '-deleted-' || $3,
-             updated_at = NOW()
-         WHERE org_id = $1 AND id = $2`,
-        [orgId, productId, timestamp]
-    );
-}
-
-export async function hardDeleteProductTransactional(
-    client: PoolClient,
-    orgId: string,
-    productId: string
-): Promise<boolean> {
-    const result = await client.query(
-        `DELETE FROM products 
-         WHERE org_id = $1 AND id = $2`,
-        [orgId, productId]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function deleteProductPermanently(
-    orgId: string,
-    productId: string
-): Promise<boolean> {
-    const result = await query(
-        `DELETE FROM products 
-         WHERE org_id = $1 AND id = $2`,
-        [orgId, productId]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function setProductStatus(
-    orgId: string,
-    productId: string,
-    status: "draft" | "published" | "archived"
-): Promise<ProductWithImages | null> {
-    await query(
-        `UPDATE products 
-         SET status = $3, updated_at = NOW() 
-         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
-        [orgId, productId, status]
-    );
-    return getProductById(orgId, productId);
-}
-
-export async function listInventory(
-    orgId: string,
-    options: ListInventoryOptions
-): Promise<{ inventory: InventoryWithProduct[]; total: number }> {
-    const { lowStockOnly, page, limit } = options;
-    const offset = (page - 1) * limit;
-
-    const conditions: string[] = ["p.org_id = $1", "p.deleted_at IS NULL"];
-    const params: unknown[] = [orgId];
-    let paramIndex = 2;
-
-    if (lowStockOnly) {
-        conditions.push("i.stock <= i.low_stock_at");
-    }
-
-    const whereClause = conditions.join(" AND ");
-
-    const countResult = await query<{ count: string }>(
-        `SELECT COUNT(*) AS count 
-         FROM inventory i
-         INNER JOIN products p ON p.id = i.product_id
-         WHERE ${whereClause}`,
-        params
-    );
-    const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
-
-    if (total === 0) {
-        return { inventory: [], total: 0 };
-    }
-
-    const dataParams = [...params, limit, offset];
-    const dataResult = await query<InventoryWithProduct>(
-        `SELECT i.id, i.product_id, i.stock, i.low_stock_at, i.updated_at,
-                p.name AS product_name, p.sku AS product_sku,
-                COALESCE((SELECT COUNT(*) FROM product_variants pv WHERE pv.product_id = p.id AND pv.is_active = TRUE), 0)::int AS variants_count
-         FROM inventory i
-         INNER JOIN products p ON p.id = i.product_id
-         WHERE ${whereClause}
-         ORDER BY i.stock ASC, p.name ASC
-         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
-        dataParams
-    );
-
-    return { inventory: dataResult.rows, total };
-}
-
-export async function updateInventoryStock(
-    orgId: string,
-    productId: string,
-    stock: number
-): Promise<InventoryWithProduct | null> {
-    const result = await query<InventoryWithProduct>(
-        `UPDATE inventory i
-         SET stock = $3, updated_at = NOW()
-         FROM products p
-         WHERE p.id = i.product_id AND p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL
-         RETURNING i.id, i.product_id, i.stock, i.low_stock_at, i.updated_at,
-                   p.name AS product_name, p.sku AS product_sku,
-                   0::int AS variants_count`,
-        [orgId, productId, stock]
-    );
-    return result.rows[0] ?? null;
-}
-
-export async function checkCategoryExists(
-    client: PoolClient,
-    orgId: string,
-    categoryId: string
-): Promise<boolean> {
-    const result = await client.query(
-        "SELECT 1 FROM categories WHERE id = $1 AND org_id = $2",
-        [categoryId, orgId]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function checkSlugExists(
-    client: PoolClient,
-    orgId: string,
-    slug: string
-): Promise<boolean> {
-    const result = await client.query(
-        "SELECT 1 FROM products WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL",
-        [orgId, slug]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function insertProductTransactional(
-    client: PoolClient,
-    orgId: string,
-    data: {
-        category_id: string;
-        name: string;
-        slug: string;
-        sku: string | null;
-        description: string | null;
-        cost_price: number | null;
-        price: number;
-        compare_at_price?: number | null;
-        badge?: string | null;
-        sale_ends_at?: string | null;
-        status: "draft" | "published" | "archived";
-    }
-): Promise<string> {
-    const result = await client.query<{ id: string }>(
-        `INSERT INTO products 
-           (org_id, category_id, name, slug, sku, description, cost_price, price, compare_at_price, badge, sale_ends_at, status)
-         VALUES 
-           ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-         RETURNING id`,
-        [
-            orgId,
-            data.category_id,
-            data.name,
-            data.slug,
-            data.sku,
-            data.description,
-            data.cost_price,
-            data.price,
-            data.compare_at_price ?? null,
-            data.badge ?? null,
-            data.sale_ends_at ? new Date(data.sale_ends_at) : null,
-            data.status
-        ]
-    );
-    return result.rows[0].id;
-}
-
-export async function insertInventoryTransactional(
-    client: PoolClient,
-    productId: string,
-    stock: number
-): Promise<void> {
-    await client.query(
-        `INSERT INTO inventory (product_id, stock, low_stock_at)
-         VALUES ($1, $2, 5)`,
-        [productId, stock]
-    );
-}
-
-export async function insertProductImageTransactional(
-    client: PoolClient,
-    productId: string,
-    imageUrl: string,
-    imagePublicId: string,
-    sortOrder: number
-): Promise<void> {
-    await client.query(
-        `INSERT INTO product_images (product_id, image_url, image_public_id, sort_order)
-         VALUES ($1, $2, $3, $4)`,
-        [productId, imageUrl, imagePublicId, sortOrder]
-    );
-}
-
-export async function insertProductVariantTransactional(
-    client: PoolClient,
-    orgId: string,
-    productId: string,
-    variant: VariantInputData
-): Promise<string> {
-    const result = await client.query<{ id: string }>(
-        `INSERT INTO product_variants (
-           org_id, product_id, title, sku, options, price,
-           cost_price, stock, low_stock_at, image_url, is_active
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         RETURNING id`,
-        [
-            orgId,
-            productId,
-            variant.title.trim(),
-            variant.sku?.trim() || null,
-            JSON.stringify(variant.options || {}),
-            variant.price,
-            variant.cost_price ?? 0,
-            variant.stock,
-            variant.low_stock_at ?? 5,
-            variant.image_url || null,
-            variant.is_active ?? true
-        ]
-    );
-    return result.rows[0].id;
 }
 </file>
 
@@ -16455,6 +14992,818 @@ export async function getCashReconciliationSummary(
 }
 </file>
 
+<file path="src/modules/products/products.queries.ts">
+// =============================================================================
+// soko-api/src/modules/products/products.queries.ts
+// Product and Category catalog queries with slugification, badges, and smart deletes.
+// =============================================================================
+
+import { PoolClient } from "pg";
+import { query, pool } from "../../config/db";
+
+export type FormatType = 'pdf' | 'epub' | 'hardcopy';
+
+export interface ProductFormatRow {
+    id: string;
+    product_id: string;
+    format: FormatType;
+    price: string;
+    compare_at_price: string | null;
+    file_url: string | null;
+    file_public_id: string | null;
+    file_size_bytes: string | null;
+    stock: number | null;
+    created_at: Date;
+    updated_at: Date;
+}
+
+export interface ProductVariant {
+    id: string;
+    product_id: string;
+    title: string;
+    sku: string | null;
+    options: Record<string, string>;
+    price: string;
+    cost_price: string;
+    stock: number;
+    low_stock_at: number;
+    image_url: string | null;
+    is_active: boolean;
+}
+
+export interface ProductWithImages {
+    id: string;
+    org_id: string;
+    category_id: string;
+    category_name: string | null;
+    name: string;
+    slug: string;
+    sku: string | null;
+    description: string | null;
+    cost_price: string | null;
+    price: string;
+    compare_at_price: string | null;
+    badge: string | null;
+    sale_ends_at: Date | null;
+    status: "draft" | "published" | "archived";
+    created_at: Date;
+    updated_at: Date;
+    images: Array<{
+        image_url: string;
+        image_public_id: string;
+        sort_order: number;
+    }>;
+    variants: ProductVariant[];
+    formats: ProductFormatRow[];
+}
+
+export interface InventoryWithProduct {
+    id: string;
+    product_id: string;
+    product_name: string;
+    product_sku: string | null;
+    stock: number;
+    low_stock_at: number;
+    updated_at: Date;
+    variants_count: number;
+}
+
+export interface ListProductsOptions {
+    categoryId?: string;
+    searchQuery?: string;
+    badge?: string;
+    page: number;
+    limit: number;
+}
+
+export interface ListInventoryOptions {
+    lowStockOnly?: boolean;
+    page: number;
+    limit: number;
+}
+
+export interface CategoryRow {
+    id: string;
+    org_id: string;
+    name: string;
+    slug: string;
+    description: string | null;
+    is_featured: boolean;
+    sort_order: number;
+    created_at: Date;
+    product_count?: number;
+}
+
+export interface VariantInputData {
+    id?: string;
+    title: string;
+    sku?: string | null;
+    options?: Record<string, string>;
+    price: number;
+    cost_price?: number;
+    stock: number;
+    low_stock_at?: number;
+    image_url?: string | null;
+    is_active?: boolean;
+}
+
+function slugifyCategory(input: string): string {
+    const base = input
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+    return base.length > 0 ? base : 'category';
+}
+
+export async function listCategories(orgId: string): Promise<CategoryRow[]> {
+    const result = await query<CategoryRow>(
+        `SELECT c.id, c.org_id, c.name, c.slug, c.description, c.is_featured, c.sort_order, c.created_at,
+                COALESCE((
+                    SELECT COUNT(*) 
+                    FROM products p 
+                    WHERE p.category_id = c.id AND p.deleted_at IS NULL
+                ), 0)::int AS product_count
+         FROM   categories c
+         WHERE  c.org_id = $1 
+         ORDER  BY c.is_featured DESC, c.sort_order ASC, c.name ASC`,
+        [orgId]
+    );
+    return result.rows;
+}
+
+// In soko/src/modules/products/products.queries.ts
+// Replace findOrCreateCategoryByName (lines 144-173):
+
+export async function findOrCreateCategoryByName(
+    client: PoolClient,
+    orgId: string,
+    name: string
+): Promise<string> {
+    const trimmedName = (name || 'General').trim();
+    const slug = slugifyCategory(trimmedName);
+
+    // 1. Check existing category (case-insensitive)
+    const checkResult = await client.query<{ id: string }>(
+        `SELECT id FROM categories 
+         WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) 
+         LIMIT 1`,
+        [orgId, trimmedName]
+    );
+
+    if (checkResult.rows.length > 0) {
+        return checkResult.rows[0].id;
+    }
+
+    // 2. Safe insert with fallback if concurrent insert occurred
+    try {
+        const insertResult = await client.query<{ id: string }>(
+            `INSERT INTO categories (org_id, name, slug) 
+             VALUES ($1, $2, $3) 
+             RETURNING id`,
+            [orgId, trimmedName, slug]
+        );
+        return insertResult.rows[0].id;
+    } catch {
+        const fallback = await client.query<{ id: string }>(
+            `SELECT id FROM categories 
+             WHERE org_id = $1 AND (LOWER(TRIM(name)) = LOWER(TRIM($2)) OR slug = $3) 
+             LIMIT 1`,
+            [orgId, trimmedName, slug]
+        );
+        return fallback.rows[0]?.id || checkResult.rows[0]?.id;
+    }
+}
+export async function createCategory(
+    orgId: string,
+    data: {
+        name: string;
+        description?: string | null;
+        isFeatured?: boolean;
+        sortOrder?: number;
+    }
+): Promise<CategoryRow> {
+    const trimmedName = data.name.trim();
+    const slug = slugifyCategory(trimmedName);
+
+    const result = await query<CategoryRow>(
+        `INSERT INTO categories (org_id, name, slug, description, is_featured, sort_order)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (org_id, LOWER(TRIM(name))) DO UPDATE SET
+             slug = EXCLUDED.slug,
+             description = COALESCE(EXCLUDED.description, categories.description),
+             is_featured = COALESCE(EXCLUDED.is_featured, categories.is_featured),
+             sort_order = COALESCE(EXCLUDED.sort_order, categories.sort_order)
+         RETURNING id, org_id, name, slug, description, is_featured, sort_order, created_at`,
+        [
+            orgId,
+            trimmedName,
+            slug,
+            data.description?.trim() || null,
+            data.isFeatured ?? false,
+            data.sortOrder ?? 0,
+        ]
+    );
+    return result.rows[0];
+}
+
+const PRODUCT_SELECT_FIELDS = `
+  p.id, p.org_id, p.category_id, p.name, p.slug, p.sku, p.description,
+  p.cost_price::text AS cost_price, p.price::text AS price,
+  p.compare_at_price::text AS compare_at_price, p.badge, p.sale_ends_at,
+  p.status, p.created_at, p.updated_at,
+  c.name AS category_name,
+  COALESCE(
+    (
+      SELECT json_agg(
+        json_build_object(
+          'image_url', pi.image_url,
+          'image_public_id', pi.image_public_id,
+          'sort_order', pi.sort_order
+        ) ORDER BY pi.sort_order ASC
+      )
+      FROM product_images pi
+      WHERE pi.product_id = p.id
+    ),
+    '[]'::json
+  ) AS images,
+  COALESCE(
+    (
+      SELECT json_agg(
+        json_build_object(
+          'id', pv.id,
+          'product_id', pv.product_id,
+          'title', pv.title,
+          'sku', pv.sku,
+          'options', pv.options,
+          'price', pv.price::text,
+          'cost_price', pv.cost_price::text,
+          'stock', pv.stock,
+          'low_stock_at', pv.low_stock_at,
+          'image_url', pv.image_url,
+          'is_active', pv.is_active
+        ) ORDER BY pv.created_at ASC
+      )
+      FROM product_variants pv
+      WHERE pv.product_id = p.id AND pv.is_active = TRUE
+    ),
+    '[]'::json
+  ) AS variants,
+  COALESCE(
+    (
+      SELECT json_agg(
+        json_build_object(
+          'id', pf.id,
+          'product_id', pf.product_id,
+          'format', pf.format,
+          'price', pf.price::text,
+          'compare_at_price', pf.compare_at_price::text,
+          'file_url', pf.file_url,
+          'file_public_id', pf.file_public_id,
+          'file_size_bytes', pf.file_size_bytes::text,
+          'stock', pf.stock,
+          'created_at', pf.created_at,
+          'updated_at', pf.updated_at
+        ) ORDER BY (
+          CASE pf.format
+            WHEN 'hardcopy' THEN 1
+            WHEN 'pdf' THEN 2
+            WHEN 'epub' THEN 3
+            ELSE 4
+          END
+        ) ASC
+      )
+      FROM product_formats pf
+      WHERE pf.product_id = p.id
+    ),
+    '[]'::json
+  ) AS formats
+`;
+
+export async function listProducts(
+    orgId: string,
+    options: ListProductsOptions
+): Promise<{ products: ProductWithImages[]; total: number }> {
+    const { categoryId, searchQuery, badge, page, limit } = options;
+    const offset = (page - 1) * limit;
+
+    const conditions: string[] = ["p.org_id = $1", "p.deleted_at IS NULL"];
+    const params: unknown[] = [orgId];
+    let paramIndex = 2;
+
+    if (categoryId) {
+        conditions.push(`p.category_id = $${paramIndex}`);
+        params.push(categoryId);
+        paramIndex++;
+    }
+
+    if (badge) {
+        conditions.push(`p.badge = $${paramIndex}`);
+        params.push(badge);
+        paramIndex++;
+    }
+
+    if (searchQuery && searchQuery.trim().length > 0) {
+        conditions.push(
+            `(p.name ILIKE $${paramIndex} OR p.sku ILIKE $${paramIndex} OR p.description ILIKE $${paramIndex})`
+        );
+        params.push(`%${searchQuery.trim()}%`);
+        paramIndex++;
+    }
+
+    const whereClause = conditions.join(" AND ");
+
+    const countResult = await query<{ count: string }>(
+        `SELECT COUNT(*) AS count 
+         FROM products p 
+         WHERE ${whereClause}`,
+        params
+    );
+    const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
+
+    if (total === 0) {
+        return { products: [], total: 0 };
+    }
+
+    const dataParams = [...params, limit, offset];
+    const dataResult = await query<ProductWithImages>(
+        `SELECT ${PRODUCT_SELECT_FIELDS}
+         FROM products p
+         LEFT JOIN categories c ON c.id = p.category_id
+         WHERE ${whereClause}
+         ORDER BY (CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, p.created_at DESC
+         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+        dataParams
+    );
+
+    return { products: dataResult.rows, total };
+}
+
+export async function getProductById(
+    orgId: string,
+    productId: string
+): Promise<ProductWithImages | null> {
+    const result = await query<ProductWithImages>(
+        `SELECT ${PRODUCT_SELECT_FIELDS}
+         FROM products p
+         LEFT JOIN categories c ON c.id = p.category_id
+         WHERE p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL`,
+        [orgId, productId]
+    );
+    return result.rows[0] ?? null;
+}
+
+export async function updateProduct(
+    orgId: string,
+    productId: string,
+    fields: {
+        name?: string;
+        category_id?: string;
+        price?: number;
+        compare_at_price?: number | null;
+        cost_price?: number | null;
+        sku?: string | null;
+        badge?: string | null;
+        sale_ends_at?: string | null;
+        description?: string | null;
+        status?: "draft" | "published" | "archived";
+        variants?: VariantInputData[];
+        images?: Array<{ image_url: string; image_public_id?: string }>;
+    }
+): Promise<ProductWithImages | null> {
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+
+        const setClauses: string[] = [];
+        const params: unknown[] = [orgId, productId];
+        let paramIndex = 3;
+
+        const { variants, images, sale_ends_at, ...directFields } = fields;
+
+        for (const [key, value] of Object.entries(directFields)) {
+            if (value !== undefined) {
+                setClauses.push(`${key} = $${paramIndex}`);
+                params.push(value);
+                paramIndex++;
+            }
+        }
+
+        if (sale_ends_at !== undefined) {
+            setClauses.push(`sale_ends_at = $${paramIndex}`);
+            params.push(sale_ends_at ? new Date(sale_ends_at) : null);
+            paramIndex++;
+        }
+
+        if (setClauses.length > 0) {
+            const updateQuery = `
+              UPDATE products
+              SET ${setClauses.join(", ")}, updated_at = NOW()
+              WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL
+            `;
+            await client.query(updateQuery, params);
+        }
+
+        if (images !== undefined) {
+            await client.query("DELETE FROM product_images WHERE product_id = $1", [productId]);
+            for (let s = 0; s < images.length; s++) {
+                if (images[s].image_url) {
+                    await insertProductImageTransactional(
+                        client,
+                        productId,
+                        images[s].image_url,
+                        images[s].image_public_id || 'cover_img',
+                        s
+                    );
+                }
+            }
+        }
+
+        if (variants !== undefined) {
+            await syncProductVariantsTransactional(client, orgId, productId, variants);
+        }
+
+        await client.query("COMMIT");
+        return getProductById(orgId, productId);
+    } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+    } finally {
+        client.release();
+    }
+}
+
+export async function syncProductVariantsTransactional(
+    client: PoolClient,
+    orgId: string,
+    productId: string,
+    variants: VariantInputData[]
+): Promise<void> {
+    if (variants.length === 0) {
+        await client.query(
+            `UPDATE product_variants SET is_active = FALSE, updated_at = NOW() WHERE org_id = $1 AND product_id = $2`,
+            [orgId, productId]
+        );
+        return;
+    }
+
+    const keepVariantIds: string[] = [];
+
+    for (const v of variants) {
+        if (v.id) {
+            await client.query(
+                `UPDATE product_variants
+                 SET title        = $4,
+                     sku          = $5,
+                     options      = $6,
+                     price        = $7,
+                     cost_price   = $8,
+                     stock        = $9,
+                     low_stock_at = $10,
+                     image_url    = $11,
+                     is_active    = $12,
+                     updated_at   = NOW()
+                 WHERE id = $1 AND org_id = $2 AND product_id = $3`,
+                [
+                    v.id,
+                    orgId,
+                    productId,
+                    v.title.trim(),
+                    v.sku?.trim() || null,
+                    JSON.stringify(v.options || {}),
+                    v.price,
+                    v.cost_price ?? 0,
+                    v.stock,
+                    v.low_stock_at ?? 5,
+                    v.image_url || null,
+                    v.is_active ?? true
+                ]
+            );
+            keepVariantIds.push(v.id);
+        } else {
+            const inserted = await client.query<{ id: string }>(
+                `INSERT INTO product_variants (
+                   org_id, product_id, title, sku, options, price,
+                   cost_price, stock, low_stock_at, image_url, is_active
+                 )
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                 RETURNING id`,
+                [
+                    orgId,
+                    productId,
+                    v.title.trim(),
+                    v.sku?.trim() || null,
+                    JSON.stringify(v.options || {}),
+                    v.price,
+                    v.cost_price ?? 0,
+                    v.stock,
+                    v.low_stock_at ?? 5,
+                    v.image_url || null,
+                    v.is_active ?? true
+                ]
+            );
+            keepVariantIds.push(inserted.rows[0].id);
+        }
+    }
+
+    if (keepVariantIds.length > 0) {
+        await client.query(
+            `UPDATE product_variants
+             SET is_active = FALSE, updated_at = NOW()
+             WHERE org_id = $1 AND product_id = $2 AND NOT (id = ANY($3::uuid[]))`,
+            [orgId, productId, keepVariantIds]
+        );
+    }
+}
+
+export async function archiveProduct(
+    orgId: string,
+    productId: string
+): Promise<boolean> {
+    const result = await query(
+        `UPDATE products 
+         SET status = 'archived', updated_at = NOW() 
+         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
+        [orgId, productId]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
+}
+
+export async function unarchiveProduct(
+    orgId: string,
+    productId: string
+): Promise<boolean> {
+    const result = await query(
+        `UPDATE products 
+         SET status = 'draft', updated_at = NOW() 
+         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
+        [orgId, productId]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
+}
+
+export async function getProductOrderCount(
+    client: PoolClient,
+    orgId: string,
+    productId: string
+): Promise<number> {
+    const result = await client.query<{ count: string }>(
+        `SELECT COUNT(oi.id)::text AS count
+         FROM order_items oi
+         INNER JOIN orders o ON o.id = oi.order_id
+         WHERE o.org_id = $1 AND (
+           oi.product_id = $2 OR 
+           oi.format_id IN (SELECT id FROM product_formats WHERE product_id = $2)
+         )`,
+        [orgId, productId]
+    );
+    return parseInt(result.rows[0]?.count || '0', 10);
+}
+
+export async function softDeleteProductTransactional(
+    client: PoolClient,
+    orgId: string,
+    productId: string
+): Promise<void> {
+    const timestamp = Math.floor(Date.now() / 1000);
+    await client.query(
+        `UPDATE products
+         SET deleted_at = NOW(),
+             status     = 'archived',
+             slug       = slug || '-deleted-' || $3,
+             updated_at = NOW()
+         WHERE org_id = $1 AND id = $2`,
+        [orgId, productId, timestamp]
+    );
+}
+
+export async function hardDeleteProductTransactional(
+    client: PoolClient,
+    orgId: string,
+    productId: string
+): Promise<boolean> {
+    const result = await client.query(
+        `DELETE FROM products 
+         WHERE org_id = $1 AND id = $2`,
+        [orgId, productId]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
+}
+
+export async function deleteProductPermanently(
+    orgId: string,
+    productId: string
+): Promise<boolean> {
+    const result = await query(
+        `DELETE FROM products 
+         WHERE org_id = $1 AND id = $2`,
+        [orgId, productId]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
+}
+
+export async function setProductStatus(
+    orgId: string,
+    productId: string,
+    status: "draft" | "published" | "archived"
+): Promise<ProductWithImages | null> {
+    await query(
+        `UPDATE products 
+         SET status = $3, updated_at = NOW() 
+         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
+        [orgId, productId, status]
+    );
+    return getProductById(orgId, productId);
+}
+
+export async function listInventory(
+    orgId: string,
+    options: ListInventoryOptions
+): Promise<{ inventory: InventoryWithProduct[]; total: number }> {
+    const { lowStockOnly, page, limit } = options;
+    const offset = (page - 1) * limit;
+
+    const conditions: string[] = ["p.org_id = $1", "p.deleted_at IS NULL"];
+    const params: unknown[] = [orgId];
+    let paramIndex = 2;
+
+    if (lowStockOnly) {
+        conditions.push("i.stock <= i.low_stock_at");
+    }
+
+    const whereClause = conditions.join(" AND ");
+
+    const countResult = await query<{ count: string }>(
+        `SELECT COUNT(*) AS count 
+         FROM inventory i
+         INNER JOIN products p ON p.id = i.product_id
+         WHERE ${whereClause}`,
+        params
+    );
+    const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
+
+    if (total === 0) {
+        return { inventory: [], total: 0 };
+    }
+
+    const dataParams = [...params, limit, offset];
+    const dataResult = await query<InventoryWithProduct>(
+        `SELECT i.id, i.product_id, i.stock, i.low_stock_at, i.updated_at,
+                p.name AS product_name, p.sku AS product_sku,
+                COALESCE((SELECT COUNT(*) FROM product_variants pv WHERE pv.product_id = p.id AND pv.is_active = TRUE), 0)::int AS variants_count
+         FROM inventory i
+         INNER JOIN products p ON p.id = i.product_id
+         WHERE ${whereClause}
+         ORDER BY i.stock ASC, p.name ASC
+         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+        dataParams
+    );
+
+    return { inventory: dataResult.rows, total };
+}
+
+export async function updateInventoryStock(
+    orgId: string,
+    productId: string,
+    stock: number
+): Promise<InventoryWithProduct | null> {
+    const result = await query<InventoryWithProduct>(
+        `UPDATE inventory i
+         SET stock = $3, updated_at = NOW()
+         FROM products p
+         WHERE p.id = i.product_id AND p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL
+         RETURNING i.id, i.product_id, i.stock, i.low_stock_at, i.updated_at,
+                   p.name AS product_name, p.sku AS product_sku,
+                   0::int AS variants_count`,
+        [orgId, productId, stock]
+    );
+    return result.rows[0] ?? null;
+}
+
+export async function checkCategoryExists(
+    client: PoolClient,
+    orgId: string,
+    categoryId: string
+): Promise<boolean> {
+    const result = await client.query(
+        "SELECT 1 FROM categories WHERE id = $1 AND org_id = $2",
+        [categoryId, orgId]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
+}
+
+export async function checkSlugExists(
+    client: PoolClient,
+    orgId: string,
+    slug: string
+): Promise<boolean> {
+    const result = await client.query(
+        "SELECT 1 FROM products WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL",
+        [orgId, slug]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
+}
+
+export async function insertProductTransactional(
+    client: PoolClient,
+    orgId: string,
+    data: {
+        category_id: string;
+        name: string;
+        slug: string;
+        sku: string | null;
+        description: string | null;
+        cost_price: number | null;
+        price: number;
+        compare_at_price?: number | null;
+        badge?: string | null;
+        sale_ends_at?: string | null;
+        status: "draft" | "published" | "archived";
+    }
+): Promise<string> {
+    const result = await client.query<{ id: string }>(
+        `INSERT INTO products 
+           (org_id, category_id, name, slug, sku, description, cost_price, price, compare_at_price, badge, sale_ends_at, status)
+         VALUES 
+           ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING id`,
+        [
+            orgId,
+            data.category_id,
+            data.name,
+            data.slug,
+            data.sku,
+            data.description,
+            data.cost_price,
+            data.price,
+            data.compare_at_price ?? null,
+            data.badge ?? null,
+            data.sale_ends_at ? new Date(data.sale_ends_at) : null,
+            data.status
+        ]
+    );
+    return result.rows[0].id;
+}
+
+export async function insertInventoryTransactional(
+    client: PoolClient,
+    productId: string,
+    stock: number
+): Promise<void> {
+    await client.query(
+        `INSERT INTO inventory (product_id, stock, low_stock_at)
+         VALUES ($1, $2, 5)`,
+        [productId, stock]
+    );
+}
+
+export async function insertProductImageTransactional(
+    client: PoolClient,
+    productId: string,
+    imageUrl: string,
+    imagePublicId: string,
+    sortOrder: number
+): Promise<void> {
+    await client.query(
+        `INSERT INTO product_images (product_id, image_url, image_public_id, sort_order)
+         VALUES ($1, $2, $3, $4)`,
+        [productId, imageUrl, imagePublicId, sortOrder]
+    );
+}
+
+export async function insertProductVariantTransactional(
+    client: PoolClient,
+    orgId: string,
+    productId: string,
+    variant: VariantInputData
+): Promise<string> {
+    const result = await client.query<{ id: string }>(
+        `INSERT INTO product_variants (
+           org_id, product_id, title, sku, options, price,
+           cost_price, stock, low_stock_at, image_url, is_active
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         RETURNING id`,
+        [
+            orgId,
+            productId,
+            variant.title.trim(),
+            variant.sku?.trim() || null,
+            JSON.stringify(variant.options || {}),
+            variant.price,
+            variant.cost_price ?? 0,
+            variant.stock,
+            variant.low_stock_at ?? 5,
+            variant.image_url || null,
+            variant.is_active ?? true
+        ]
+    );
+    return result.rows[0].id;
+}
+</file>
+
 <file path="src/modules/products/products.service.ts">
 // =============================================================================
 // soko-api/src/modules/products/products.service.ts
@@ -17123,6 +16472,222 @@ export async function getPublicOrderItems(orderId: string): Promise<PublicOrderI
     [orderId]
   );
   return result.rows;
+}
+</file>
+
+<file path="src/verticals/books/import/import.worker.ts">
+async function upsertBookFromImport(
+  orgId: string,
+  row: ParsedBookRow
+): Promise<'inserted' | 'updated' | 'skipped'> {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // 1. Safe Category Resolution
+    const categoryName = row.category || 'General';
+    const categoryId = await findOrCreateCategoryByName(client, orgId, categoryName);
+
+    // 2. Pre-Flight Duplicate Check (SKU first, fallback to Title)
+    let existingProductId: string | null = null;
+
+    if (row.sku && row.sku.trim()) {
+      const skuCheck = await client.query<{ id: string }>(
+        `SELECT id FROM products 
+         WHERE org_id = $1 AND LOWER(TRIM(sku)) = LOWER(TRIM($2)) AND deleted_at IS NULL 
+         LIMIT 1`,
+        [orgId, row.sku.trim()]
+      );
+      if (skuCheck.rows.length > 0) {
+        existingProductId = skuCheck.rows[0].id;
+      }
+    }
+
+    if (!existingProductId) {
+      const titleCheck = await client.query<{ id: string }>(
+        `SELECT id FROM products 
+         WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) AND deleted_at IS NULL 
+         LIMIT 1`,
+        [orgId, row.title.trim()]
+      );
+      if (titleCheck.rows.length > 0) {
+        existingProductId = titleCheck.rows[0].id;
+      }
+    }
+
+    // 3. Price & Discount Normalization (Strict chk_products_compare_at_price constraint protection)
+    let sellingPrice = row.salePrice || row.regularPrice || row.pdfPrice || row.epubPrice || 999;
+    let compareAtPrice: number | null = null;
+
+    if (row.regularPrice && row.salePrice && row.regularPrice > row.salePrice) {
+      sellingPrice = row.salePrice;
+      compareAtPrice = row.regularPrice;
+    }
+
+    // 4. Auto-discover cover art if no image link was provided in the sheet
+    let targetImageUrl: string | null = row.coverImageUrl || null;
+
+    if (!targetImageUrl) {
+      try {
+        const discovered = await findBestBookCover(row.title, row.author, row.sku);
+        if (discovered?.coverUrl) {
+          targetImageUrl = discovered.coverUrl;
+        }
+      } catch {
+        // Non-blocking fallback
+      }
+    }
+
+    let productId = existingProductId;
+    let outcome: 'inserted' | 'updated' = 'inserted';
+
+    if (existingProductId) {
+      outcome = 'updated';
+      await client.query(
+        `UPDATE products
+         SET category_id      = $2,
+             price            = $3,
+             compare_at_price = COALESCE($4, compare_at_price),
+             sku              = COALESCE(products.sku, $5),
+             description      = COALESCE($6, products.description),
+             badge            = (CASE WHEN $4 IS NOT NULL THEN 'FLASH_SALE' ELSE products.badge END),
+             updated_at       = NOW()
+         WHERE id = $1 AND org_id = $7`,
+        [
+          existingProductId,
+          categoryId,
+          sellingPrice,
+          compareAtPrice,
+          row.sku || null,
+          row.description || (row.author ? `By ${row.author}` : null),
+          orgId,
+        ]
+      );
+
+      if (row.hardcopyStock !== undefined) {
+        await client.query(
+          `UPDATE inventory 
+           SET stock = $2, updated_at = NOW() 
+           WHERE product_id = $1`,
+          [existingProductId, row.hardcopyStock]
+        );
+      }
+
+      // Attach discovered cover if existing book has no image
+      if (targetImageUrl) {
+        const hasImg = await client.query(
+          `SELECT 1 FROM product_images WHERE product_id = $1 LIMIT 1`,
+          [existingProductId]
+        );
+        if (hasImg.rows.length === 0) {
+          await insertProductImageTransactional(
+            client,
+            existingProductId,
+            targetImageUrl,
+            'auto_cover',
+            0
+          );
+        }
+      }
+    } else {
+      outcome = 'inserted';
+      const cleanSlugTitle = row.title
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]/g, '-')
+        .replace(/-+/g, '-')
+        .slice(0, 40);
+      const slugSuffix = crypto.randomBytes(3).toString('hex');
+      const slug = `${cleanSlugTitle}-${slugSuffix}`;
+
+      productId = await insertProductTransactional(client, orgId, {
+        category_id: categoryId,
+        name: row.title,
+        slug,
+        sku: row.sku || null,
+        description: row.description || (row.author ? `By ${row.author}` : null),
+        cost_price: null,
+        price: sellingPrice,
+        compare_at_price: compareAtPrice,
+        badge: compareAtPrice ? 'FLASH_SALE' : null,
+        status: 'published',
+      });
+
+      await insertInventoryTransactional(client, productId, row.hardcopyStock || 10);
+
+      // Attach cover if found or provided
+      if (targetImageUrl) {
+        await insertProductImageTransactional(
+          client,
+          productId,
+          targetImageUrl,
+          'auto_cover',
+          0
+        );
+      }
+    }
+
+    // 5. Hardcopy Format
+    if (productId && sellingPrice) {
+      await client.query(
+        `INSERT INTO product_formats (
+           product_id, format, price, compare_at_price, stock
+         )
+         VALUES ($1, 'hardcopy', $2, $3, $4)
+         ON CONFLICT (product_id, format) DO UPDATE SET
+           price            = EXCLUDED.price,
+           compare_at_price = EXCLUDED.compare_at_price,
+           stock            = EXCLUDED.stock,
+           updated_at       = NOW()`,
+        [productId, sellingPrice, compareAtPrice, row.hardcopyStock ?? 10]
+      );
+    }
+
+    // 6. Digital PDF Format
+    if (productId && (row.pdfFileUrl || row.pdfPrice)) {
+      const formatPrice = row.pdfPrice && row.pdfPrice > 0 ? row.pdfPrice : sellingPrice;
+
+      await client.query(
+        `INSERT INTO product_formats (
+           product_id, format, price, compare_at_price, file_url, file_public_id
+         )
+         VALUES ($1, 'pdf', $2, NULL, $3, $3)
+         ON CONFLICT (product_id, format) DO UPDATE SET
+           price            = EXCLUDED.price,
+           file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
+           file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
+           updated_at       = NOW()`,
+        [productId, formatPrice, row.pdfFileUrl || null]
+      );
+    }
+
+    // 7. Digital EPUB Format
+    if (productId && (row.epubFileUrl || row.epubPrice)) {
+      const formatPrice = row.epubPrice && row.epubPrice > 0 ? row.epubPrice : sellingPrice;
+
+      await client.query(
+        `INSERT INTO product_formats (
+           product_id, format, price, compare_at_price, file_url, file_public_id
+         )
+         VALUES ($1, 'epub', $2, NULL, $3, $3)
+         ON CONFLICT (product_id, format) DO UPDATE SET
+           price            = EXCLUDED.price,
+           file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
+           file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
+           updated_at       = NOW()`,
+        [productId, formatPrice, row.epubFileUrl || null]
+      );
+    }
+
+    await client.query('COMMIT');
+    return outcome;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 </file>
 
