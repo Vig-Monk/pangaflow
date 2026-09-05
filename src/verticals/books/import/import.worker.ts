@@ -75,9 +75,6 @@ function extractCellString(cellValue: any): string {
   return String(cellValue).trim();
 }
 
-/**
- * Strips currency symbols (KSh, $, etc.), commas, spaces, and parses numbers safely.
- */
 function parseCleanNumber(val: any, fallback = 0): number {
   if (val === null || val === undefined) return fallback;
   if (typeof val === 'number') return isNaN(val) ? fallback : Math.max(0, val);
@@ -114,14 +111,11 @@ function sanitizeGoogleDriveUrl(rawVal: any): string | undefined {
 function normalizeHeader(val: any): string {
   return String(val || '')
     .toLowerCase()
-    .replace(/^\uFEFF/, '') // Strip UTF-8 BOM
+    .replace(/^\uFEFF/, '')
     .trim()
     .replace(/[^a-z0-9]/g, '');
 }
 
-/**
- * Sniffs delimiters (comma, semicolon, tab) by checking the first line of a CSV.
- */
 function sniffCsvDelimiter(filePath: string): string {
   try {
     const buffer = Buffer.alloc(2048);
@@ -145,7 +139,6 @@ function sniffCsvDelimiter(filePath: string): string {
 async function loadWorkbookSafely(filePath: string): Promise<ExcelJS.Workbook> {
   const ext = path.extname(filePath).toLowerCase();
 
-  // 1. Direct CSV branch
   if (ext === '.csv') {
     const csvWorkbook = new ExcelJS.Workbook();
     const delimiter = sniffCsvDelimiter(filePath);
@@ -155,7 +148,6 @@ async function loadWorkbookSafely(filePath: string): Promise<ExcelJS.Workbook> {
     return csvWorkbook;
   }
 
-  // 2. XLSX branch with fallback for misnamed CSV files
   const xlsxWorkbook = new ExcelJS.Workbook();
   try {
     await xlsxWorkbook.xlsx.readFile(filePath);
@@ -210,8 +202,6 @@ async function uploadCoverToCloudinary(
   return null;
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 async function processExcelFile(
   jobId: string,
   orgId: string,
@@ -248,21 +238,6 @@ async function processExcelFile(
     );
   }
 
-  const imageMapByRow: Record<number, Buffer> = {};
-  try {
-    const images = worksheet.getImages();
-    for (const img of images) {
-      const media = workbook.model.media?.find((m: any) => m.index === (img as any).imageId);
-      if (media && media.buffer) {
-        const row = Math.floor((img as any).range.tl.row) + 1;
-        imageMapByRow[row] = Buffer.from(media.buffer);
-      }
-    }
-  } catch {
-    // Non-blocking image preview extraction
-  }
-
-  // Pre-scan non-empty rows for accurate progress calculations
   let actualDataRows = 0;
   for (let r = 2; r <= worksheet.rowCount; r++) {
     const val = extractCellString(worksheet.getRow(r).getCell(titleCol).value);
@@ -310,7 +285,6 @@ async function processExcelFile(
       const epubPrice = parseCleanNumber(getVal(row, ['epubsprice', 'epubprice']), 0);
 
       const coverImageUrl = extractCellString(getVal(row, ['image1', 'image2', 'coverimageurl', 'coverurl', 'cover', 'photo', 'image']));
-      const coverBuffer = imageMapByRow[r];
 
       const outcome = await upsertBookFromImport(orgId, {
         rowNumber: r,
@@ -328,7 +302,6 @@ async function processExcelFile(
         epubPrice: epubPrice > 0 ? epubPrice : regularPrice > 0 ? regularPrice : undefined,
         epubFileUrl,
         coverImageUrl: coverImageUrl || undefined,
-        coverBuffer,
       });
 
       if (outcome === 'inserted') insertedCount++;
@@ -344,19 +317,17 @@ async function processExcelFile(
       });
       skippedCount++;
     } finally {
-      if (r % 5 === 0 || r === worksheet.rowCount) {
-        await importQueries.updateJobProgress(
-          jobId,
-          {
-            processedRows: processedCount,
-            insertedRows: insertedCount,
-            updatedRows: updatedCount,
-            skippedRows: skippedCount,
-          },
-          'processing'
-        );
-      }
-      await sleep(30);
+      // Updates progress on every row immediately so the progress bar is responsive
+      await importQueries.updateJobProgress(
+        jobId,
+        {
+          processedRows: processedCount,
+          insertedRows: insertedCount,
+          updatedRows: updatedCount,
+          skippedRows: skippedCount,
+        },
+        'processing'
+      );
     }
   }
 
@@ -368,9 +339,6 @@ async function processExcelFile(
   });
 }
 
-/**
- * Processes public Google Sheet URLs by exporting directly to CSV.
- */
 async function processGoogleSheet(
   jobId: string,
   orgId: string,
@@ -406,10 +374,6 @@ async function processGoogleSheet(
   }
 }
 
-/**
- * Atomic per-book transaction: inserts/updates products, inventory, images, and formats
- * in a single committed unit.
- */
 async function upsertBookFromImport(
   orgId: string,
   row: ParsedBookRow
@@ -419,11 +383,9 @@ async function upsertBookFromImport(
   try {
     await client.query('BEGIN');
 
-    // 1. Resolve Category safely
     const categoryName = row.category || 'General';
     const categoryId = await findOrCreateCategoryByName(client, orgId, categoryName);
 
-    // 2. Pre-Flight Duplicate Check (SKU first, fallback to exact Title)
     let existingProductId: string | null = null;
 
     if (row.sku && row.sku.trim()) {
@@ -450,7 +412,6 @@ async function upsertBookFromImport(
       }
     }
 
-    // 3. Normalize Price and Discounts (Respecting chk_products_compare_at_price)
     let sellingPrice = row.salePrice || row.regularPrice || row.pdfPrice || row.epubPrice || 999;
     let compareAtPrice: number | null = null;
 
@@ -459,35 +420,24 @@ async function upsertBookFromImport(
       compareAtPrice = row.regularPrice;
     }
 
-    // 4. Resolve Cover Art
-    let targetImageUrl: string | null = null;
-    let targetImageBuffer: Buffer | undefined = undefined;
+    let targetImageUrl: string | null = row.coverImageUrl || null;
 
-    if (!existingProductId) {
+    if (!existingProductId && !targetImageUrl) {
       try {
         const discovered = await findBestBookCover(row.title, row.author, row.isbn || row.sku);
         if (discovered.coverUrl) {
           targetImageUrl = discovered.coverUrl;
         }
       } catch {
-        // Non-blocking cover discovery fallback
-      }
-
-      if (!targetImageUrl) {
-        targetImageUrl = row.coverImageUrl || null;
-        targetImageBuffer = row.coverBuffer;
+        // Fallback safely
       }
     }
 
     let finalImageUrl: string | null = targetImageUrl;
     let finalImagePublicId = 'cover_img';
 
-    if (targetImageBuffer || targetImageUrl) {
-      const uploadedImage = await uploadCoverToCloudinary(orgId, {
-        buffer: targetImageBuffer,
-        url: targetImageUrl || undefined,
-      });
-
+    if (targetImageUrl && targetImageUrl.startsWith('http') && !targetImageUrl.includes('cloudinary.com')) {
+      const uploadedImage = await uploadCoverToCloudinary(orgId, { url: targetImageUrl });
       if (uploadedImage) {
         finalImageUrl = uploadedImage.url;
         finalImagePublicId = uploadedImage.publicId;
@@ -498,9 +448,6 @@ async function upsertBookFromImport(
     let outcome: 'inserted' | 'updated' = 'inserted';
 
     if (existingProductId) {
-      // -----------------------------------------------------------------------
-      // EXISTING BOOK: Sync details & stock
-      // -----------------------------------------------------------------------
       outcome = 'updated';
       await client.query(
         `UPDATE products
@@ -532,9 +479,6 @@ async function upsertBookFromImport(
         );
       }
     } else {
-      // -----------------------------------------------------------------------
-      // NEW BOOK: Collision-proof cryptographic slug
-      // -----------------------------------------------------------------------
       outcome = 'inserted';
       const cleanSlugTitle = row.title
         .toLowerCase()
@@ -571,7 +515,6 @@ async function upsertBookFromImport(
       }
     }
 
-    // 5. Hardcopy Format
     if (productId && sellingPrice) {
       await client.query(
         `INSERT INTO product_formats (
@@ -587,7 +530,6 @@ async function upsertBookFromImport(
       );
     }
 
-    // 6. Digital PDF Format (Inherits price if omitted)
     if (productId && (row.pdfFileUrl || row.pdfPrice)) {
       const formatPrice = row.pdfPrice && row.pdfPrice > 0 ? row.pdfPrice : sellingPrice;
 
@@ -605,7 +547,6 @@ async function upsertBookFromImport(
       );
     }
 
-    // 7. Digital EPUB Format
     if (productId && (row.epubFileUrl || row.epubPrice)) {
       const formatPrice = row.epubPrice && row.epubPrice > 0 ? row.epubPrice : sellingPrice;
 
@@ -633,7 +574,6 @@ async function upsertBookFromImport(
   }
 }
 
-// Dedicated BullMQ Worker with isolated Redis connection
 export const bookImportWorker = new Worker<ImportJobPayload>(
   'book-import-queue',
   async (job: Job<ImportJobPayload>) => {
@@ -645,7 +585,7 @@ export const bookImportWorker = new Worker<ImportJobPayload>(
       } else if (source === 'google_sheet' && sheetUrl) {
         await processGoogleSheet(jobId, orgId, sheetUrl);
       } else {
-        throw new Error('Invalid import source or missing payload parameters.');
+        throw new Error('Invalid import source or missing parameters.');
       }
     } catch (err: any) {
       await importQueries.finalizeImportJob(jobId, 'failed', undefined, err.message);
@@ -658,15 +598,7 @@ export const bookImportWorker = new Worker<ImportJobPayload>(
   },
   {
     connection: createRedisConnection(),
-    concurrency: 1, // Safe sequential processing to eliminate database contention on Render Free
-    lockDuration: 60000, // 60s lock duration prevents false stalling during network downloads
+    concurrency: 1,
+    lockDuration: 60000,
   }
 );
-
-bookImportWorker.on('completed', (job) => {
-  console.log(`[BullMQ] Book import job ${job.id} completed successfully.`);
-});
-
-bookImportWorker.on('failed', (job, err) => {
-  console.error(`[BullMQ] Book import job ${job?.id} failed with error:`, err.message);
-})

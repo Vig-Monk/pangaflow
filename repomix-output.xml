@@ -208,142 +208,6 @@ tsconfig.json
 <files>
 This section contains the contents of the repository's files.
 
-<file path="src/scripts/restore-tenant-boundaries.ts">
-// =============================================================================
-// soko-api/src/scripts/restore-tenant-boundaries.ts
-// Restores strict multi-tenant boundaries and removes foreign items from Flemela.
-// Run via: npx tsx src/scripts/restore-tenant-boundaries.ts
-// =============================================================================
-
-import { pool } from '../config/db';
-import dotenv from 'dotenv';
-
-dotenv.config();
-
-const FLEMELA_SLUG = (process.env.NUXT_PUBLIC_STORE_SLUG || 'flemela').trim().toLowerCase();
-
-async function restoreBoundaries(): Promise<void> {
-  console.log('====================================================');
-  console.log('   CLEANING FOREIGN PRODUCTS FROM FLEMELA CATALOG   ');
-  console.log('====================================================\n');
-
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN');
-
-    // 1. Resolve Flemela Org ID
-    const flemelaRes = await client.query<{ id: string }>(
-      `SELECT id FROM organizations WHERE slug = $1 LIMIT 1`,
-      [FLEMELA_SLUG]
-    );
-
-    if (flemelaRes.rows.length === 0) {
-      throw new Error(`Organization with slug "${FLEMELA_SLUG}" not found.`);
-    }
-
-    const flemelaOrgId = flemelaRes.rows[0].id;
-    console.log(`Flemela Org ID: ${flemelaOrgId}\n`);
-
-    // 2. Identify all non-book or test organizations in the database
-    const otherOrgs = await client.query<{ id: string; name: string; slug: string; business_type: string }>(
-      `SELECT id, name, slug, business_type FROM organizations WHERE id != $1 AND deleted_at IS NULL`,
-      [flemelaOrgId]
-    );
-    console.log(`Found ${otherOrgs.rows.length} other organization(s) in system.`);
-
-    // 3. Find products in Flemela that are NOT books:
-    // Books have entries in product_formats (pdf, epub, hardcopy) OR canonical bookstore categories.
-    // Non-books (e.g. "Nike Air Force 1", "Classic Running Shoes", etc.) have NO formats and non-book names.
-    const foreignProducts = await client.query<{ id: string; name: string; sku: string | null }>(
-      `SELECT p.id, p.name, p.sku
-       FROM products p
-       LEFT JOIN product_formats pf ON pf.product_id = p.id
-       WHERE p.org_id = $1
-         AND pf.id IS NULL
-         AND (
-           p.name ILIKE '%shoe%' OR
-           p.name ILIKE '%nike%' OR
-           p.name ILIKE '%running%' OR
-           p.name ILIKE '%test%' OR
-           p.name ILIKE '%DELETE_PROBE%'
-         )`,
-      [flemelaOrgId]
-    );
-
-    console.log(`\nIdentified ${foreignProducts.rows.length} non-book / test product(s) in Flemela:`);
-    for (const prod of foreignProducts.rows) {
-      console.log(`  - [ID: ${prod.id}] "${prod.name}" (SKU: ${prod.sku || 'none'})`);
-    }
-
-    // 4. Remove foreign test products from Flemela
-    if (foreignProducts.rows.length > 0) {
-      const foreignIds = foreignProducts.rows.map((p) => p.id);
-
-      await client.query(`DELETE FROM product_images WHERE product_id = ANY($1::uuid[])`, [foreignIds]);
-      await client.query(`DELETE FROM inventory WHERE product_id = ANY($1::uuid[])`, [foreignIds]);
-      await client.query(`DELETE FROM product_variants WHERE product_id = ANY($1::uuid[])`, [foreignIds]);
-      await client.query(`DELETE FROM products WHERE id = ANY($1::uuid[])`, [foreignIds]);
-
-      console.log(`\n✓ Successfully removed ${foreignProducts.rows.length} foreign product(s) from Flemela.`);
-    }
-
-    // 5. Clean up any categories belonging to other businesses that were copied into Flemela
-    const nonBookCategories = await client.query<{ id: string; name: string }>(
-      `SELECT id, name FROM categories 
-       WHERE org_id = $1 
-         AND name NOT IN (
-           'Business & Finance',
-           'Psychology & Self-Help',
-           'Self-Help',
-           'Fiction & Literature',
-           'Christian Books',
-           'Education & Textbooks',
-           'Biographies & Memoir',
-           'General'
-         )
-         AND NOT EXISTS (
-           SELECT 1 FROM products p 
-           JOIN product_formats pf ON pf.product_id = p.id 
-           WHERE p.category_id = categories.id
-         )`,
-      [flemelaOrgId]
-    );
-
-    if (nonBookCategories.rows.length > 0) {
-      console.log(`\nIdentified ${nonBookCategories.rows.length} foreign category row(s) to remove:`);
-      for (const cat of nonBookCategories.rows) {
-        console.log(`  - "${cat.name}"`);
-        await client.query(`DELETE FROM categories WHERE id = $1`, [cat.id]);
-      }
-    }
-
-    // 6. Report remaining clean catalog count
-    const remainingRes = await client.query<{ count: string }>(
-      `SELECT COUNT(*) AS count FROM products WHERE org_id = $1 AND deleted_at IS NULL`,
-      [flemelaOrgId]
-    );
-
-    await client.query('COMMIT');
-
-    console.log('\n====================================================');
-    console.log(`✅ CLEANUP COMPLETE:`);
-    console.log(`   Clean bookstore titles in Flemela: ${remainingRes.rows[0].count}`);
-    console.log('   All foreign items removed. Tenant boundary restored.');
-    console.log('====================================================\n');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('\n❌ Cleanup failed:', err);
-    process.exit(1);
-  } finally {
-    client.release();
-    await pool.end();
-  }
-}
-
-restoreBoundaries();
-</file>
-
 <file path=".github/workflows/ci.yml">
 name: CI
 
@@ -2298,272 +2162,6 @@ export async function reorderBannersHandler(
 }
 </file>
 
-<file path="src/modules/banners/banners.queries.ts">
-// =============================================================================
-// soko-api/src/modules/banners/banner.queries.ts
-// Database access layer for store promotional hero banners.
-// =============================================================================
-
-import { query, pool } from '../../config/db';
-
-export interface StoreBannerRow {
-  id: string;
-  org_id: string;
-  title: string | null;
-  subtitle: string | null;
-  badge: string | null;
-  image_url: string;
-  mobile_image_url: string | null;
-  cta_label: string | null;
-  cta_link: string | null;
-  bg_color: string;
-  sort_order: number;
-  is_active: boolean;
-  starts_at: Date | null;
-  ends_at: Date | null;
-  click_count: number;
-  created_at: Date;
-  updated_at: Date;
-}
-
-export interface CreateBannerInput {
-  title?: string | null;
-  subtitle?: string | null;
-  badge?: string | null;
-  image_url: string;
-  mobile_image_url?: string | null;
-  cta_label?: string | null;
-  cta_link?: string | null;
-  bg_color?: string;
-  sort_order?: number;
-  is_active?: boolean;
-  starts_at?: Date | null;
-  ends_at?: Date | null;
-}
-
-export interface UpdateBannerInput {
-  title?: string | null;
-  subtitle?: string | null;
-  badge?: string | null;
-  image_url?: string;
-  mobile_image_url?: string | null;
-  cta_label?: string | null;
-  cta_link?: string | null;
-  bg_color?: string;
-  sort_order?: number;
-  is_active?: boolean;
-  starts_at?: Date | null;
-  ends_at?: Date | null;
-}
-
-const BANNER_SELECT_FIELDS = `
-  id, org_id, title, subtitle, badge, image_url, mobile_image_url,
-  cta_label, cta_link, bg_color, sort_order, is_active,
-  starts_at, ends_at, click_count, created_at, updated_at
-`;
-
-export async function listBannersAdmin(orgId: string): Promise<StoreBannerRow[]> {
-  const result = await query<StoreBannerRow>(
-    `SELECT ${BANNER_SELECT_FIELDS}
-     FROM   store_banners
-     WHERE  org_id = $1
-     ORDER  BY sort_order ASC, created_at DESC`,
-    [orgId]
-  );
-  return result.rows;
-}
-
-export async function listActiveBannersPublic(orgId: string): Promise<StoreBannerRow[]> {
-  const result = await query<StoreBannerRow>(
-    `SELECT ${BANNER_SELECT_FIELDS}
-     FROM   store_banners
-     WHERE  org_id = $1
-       AND  is_active = TRUE
-       AND  (starts_at IS NULL OR starts_at <= NOW())
-       AND  (ends_at IS NULL OR ends_at > NOW())
-     ORDER  BY sort_order ASC, created_at DESC`,
-    [orgId]
-  );
-  return result.rows;
-}
-
-export async function getBannerById(orgId: string, bannerId: string): Promise<StoreBannerRow | null> {
-  const result = await query<StoreBannerRow>(
-    `SELECT ${BANNER_SELECT_FIELDS}
-     FROM   store_banners
-     WHERE  org_id = $1 AND id = $2`,
-    [orgId, bannerId]
-  );
-  return result.rows[0] ?? null;
-}
-
-export async function createBanner(
-  orgId: string,
-  data: CreateBannerInput
-): Promise<StoreBannerRow> {
-  let nextSortOrder = data.sort_order;
-  if (nextSortOrder === undefined) {
-    const maxSortResult = await query<{ max_sort: number | null }>(
-      `SELECT MAX(sort_order) AS max_sort FROM store_banners WHERE org_id = $1`,
-      [orgId]
-    );
-    nextSortOrder = (maxSortResult.rows[0]?.max_sort ?? -1) + 1;
-  }
-
-  const result = await query<StoreBannerRow>(
-    `INSERT INTO store_banners (
-       org_id, title, subtitle, badge, image_url, mobile_image_url,
-       cta_label, cta_link, bg_color, sort_order, is_active, starts_at, ends_at
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-     RETURNING ${BANNER_SELECT_FIELDS}`,
-    [
-      orgId,
-      data.title?.trim() || '',
-      data.subtitle?.trim() || null,
-      data.badge?.trim().toUpperCase() || null,
-      data.image_url.trim(),
-      data.mobile_image_url?.trim() || null,
-      data.cta_label?.trim() || null,
-      data.cta_link?.trim() || null,
-      data.bg_color?.trim() || '#052219',
-      nextSortOrder,
-      data.is_active ?? true,
-      data.starts_at ?? null,
-      data.ends_at ?? null,
-    ]
-  );
-  return result.rows[0];
-}
-
-export async function updateBanner(
-  orgId: string,
-  bannerId: string,
-  data: UpdateBannerInput
-): Promise<StoreBannerRow | null> {
-  const setClauses: string[] = [];
-  const params: unknown[] = [orgId, bannerId];
-  let paramIdx = 3;
-
-  if (data.title !== undefined) {
-    setClauses.push(`title = $${paramIdx}`);
-    params.push(data.title?.trim() || '');
-    paramIdx++;
-  }
-  if (data.subtitle !== undefined) {
-    setClauses.push(`subtitle = $${paramIdx}`);
-    params.push(data.subtitle?.trim() || null);
-    paramIdx++;
-  }
-  if (data.badge !== undefined) {
-    setClauses.push(`badge = $${paramIdx}`);
-    params.push(data.badge?.trim().toUpperCase() || null);
-    paramIdx++;
-  }
-  if (data.image_url !== undefined) {
-    setClauses.push(`image_url = $${paramIdx}`);
-    params.push(data.image_url.trim());
-    paramIdx++;
-  }
-  if (data.mobile_image_url !== undefined) {
-    setClauses.push(`mobile_image_url = $${paramIdx}`);
-    params.push(data.mobile_image_url?.trim() || null);
-    paramIdx++;
-  }
-  if (data.cta_label !== undefined) {
-    setClauses.push(`cta_label = $${paramIdx}`);
-    params.push(data.cta_label?.trim() || null);
-    paramIdx++;
-  }
-  if (data.cta_link !== undefined) {
-    setClauses.push(`cta_link = $${paramIdx}`);
-    params.push(data.cta_link?.trim() || null);
-    paramIdx++;
-  }
-  if (data.bg_color !== undefined) {
-    setClauses.push(`bg_color = $${paramIdx}`);
-    params.push(data.bg_color.trim());
-    paramIdx++;
-  }
-  if (data.sort_order !== undefined) {
-    setClauses.push(`sort_order = $${paramIdx}`);
-    params.push(data.sort_order);
-    paramIdx++;
-  }
-  if (data.is_active !== undefined) {
-    setClauses.push(`is_active = $${paramIdx}`);
-    params.push(data.is_active);
-    paramIdx++;
-  }
-  if (data.starts_at !== undefined) {
-    setClauses.push(`starts_at = $${paramIdx}`);
-    params.push(data.starts_at);
-    paramIdx++;
-  }
-  if (data.ends_at !== undefined) {
-    setClauses.push(`ends_at = $${paramIdx}`);
-    params.push(data.ends_at);
-    paramIdx++;
-  }
-
-  if (setClauses.length === 0) {
-    return getBannerById(orgId, bannerId);
-  }
-
-  setClauses.push('updated_at = NOW()');
-
-  const result = await query<StoreBannerRow>(
-    `UPDATE store_banners
-     SET    ${setClauses.join(', ')}
-     WHERE  org_id = $1 AND id = $2
-     RETURNING ${BANNER_SELECT_FIELDS}`,
-    params
-  );
-  return result.rows[0] ?? null;
-}
-
-export async function deleteBanner(orgId: string, bannerId: string): Promise<boolean> {
-  const result = await query(
-    `DELETE FROM store_banners WHERE org_id = $1 AND id = $2`,
-    [orgId, bannerId]
-  );
-  return (result.rowCount ?? 0) > 0;
-}
-
-export async function reorderBannersTransactional(
-  orgId: string,
-  bannerIdsInOrder: string[]
-): Promise<void> {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    for (let i = 0; i < bannerIdsInOrder.length; i++) {
-      await client.query(
-        `UPDATE store_banners
-         SET    sort_order = $3, updated_at = NOW()
-         WHERE  org_id = $1 AND id = $2`,
-        [orgId, bannerIdsInOrder[i], i]
-      );
-    }
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-export async function trackBannerClick(bannerId: string): Promise<void> {
-  await query(
-    `UPDATE store_banners
-     SET    click_count = click_count + 1
-     WHERE  id = $1`,
-    [bannerId]
-  );
-}
-</file>
-
 <file path="src/modules/banners/banners.routes.ts">
 // =============================================================================
 // soko-api/src/modules/banners/banners.routes.ts
@@ -2602,184 +2200,6 @@ router.patch('/:id', updateBannerHandler);
 router.delete('/:id', deleteBannerHandler);
 
 export default router;
-</file>
-
-<file path="src/modules/banners/banners.service.ts">
-// =============================================================================
-// soko-api/src/modules/banners/banner.service.ts
-// Business logic for customizable promotional hero banners.
-// =============================================================================
-
-import { z } from 'zod';
-import { AppError } from '../../utils/error';
-import * as bannersQueries from './banner.queries';
-import type { StoreBannerRow } from './banner.queries';
-
-export const CreateBannerSchema = z.object({
-  title: z.string().max(200).trim().nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  subtitle: z.string().max(500).nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  badge: z.string().max(50).nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  image_url: z.string().url('A valid desktop image URL is required'),
-  mobile_image_url: z.string().url('Invalid mobile image URL').nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  cta_label: z.string().max(50).nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  cta_link: z.string().max(500).nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  bg_color: z.string().regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, 'Invalid hex color code').default('#052219'),
-  sort_order: z.number().int().optional(),
-  is_active: z.boolean().default(true),
-  starts_at: z.string().datetime().nullable().optional(),
-  ends_at: z.string().datetime().nullable().optional(),
-}).refine(data => {
-  if (data.starts_at && data.ends_at) {
-    return new Date(data.ends_at).getTime() > new Date(data.starts_at).getTime();
-  }
-  return true;
-}, {
-  message: 'Expiration date must be strictly after the start date',
-  path: ['ends_at'],
-});
-
-export const UpdateBannerSchema = z.object({
-  title: z.string().max(200).trim().nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  subtitle: z.string().max(500).nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  badge: z.string().max(50).nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  image_url: z.string().url().optional(),
-  mobile_image_url: z.string().url().nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  cta_label: z.string().max(50).nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  cta_link: z.string().max(500).nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  bg_color: z.string().regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/).optional(),
-  sort_order: z.number().int().optional(),
-  is_active: z.boolean().optional(),
-  starts_at: z.string().datetime().nullable().optional(),
-  ends_at: z.string().datetime().nullable().optional(),
-}).refine(data => {
-  if (data.starts_at && data.ends_at) {
-    return new Date(data.ends_at).getTime() > new Date(data.starts_at).getTime();
-  }
-  return true;
-}, {
-  message: 'Expiration date must be strictly after the start date',
-  path: ['ends_at'],
-});
-
-export const ReorderBannersSchema = z.object({
-  bannerIds: z.array(z.string().uuid()).min(1, 'At least one banner ID is required to reorder'),
-});
-
-export interface StoreBannerDto {
-  id: string;
-  org_id: string;
-  title: string | null;
-  subtitle: string | null;
-  badge: string | null;
-  image_url: string;
-  mobile_image_url: string | null;
-  cta_label: string | null;
-  cta_link: string | null;
-  bg_color: string;
-  sort_order: number;
-  is_active: boolean;
-  starts_at: string | null;
-  ends_at: string | null;
-  click_count: number;
-  created_at: string;
-  updated_at: string;
-}
-
-export function toBannerDto(row: StoreBannerRow): StoreBannerDto {
-  return {
-    id: row.id,
-    org_id: row.org_id,
-    title: row.title || null,
-    subtitle: row.subtitle,
-    badge: row.badge,
-    image_url: row.image_url,
-    mobile_image_url: row.mobile_image_url,
-    cta_label: row.cta_label || null,
-    cta_link: row.cta_link || null,
-    bg_color: row.bg_color,
-    sort_order: row.sort_order,
-    is_active: row.is_active,
-    starts_at: row.starts_at ? new Date(row.starts_at).toISOString() : null,
-    ends_at: row.ends_at ? new Date(row.ends_at).toISOString() : null,
-    click_count: row.click_count,
-    created_at: new Date(row.created_at).toISOString(),
-    updated_at: new Date(row.updated_at).toISOString(),
-  };
-}
-
-export async function getAdminBanners(orgId: string): Promise<StoreBannerDto[]> {
-  const rows = await bannersQueries.listBannersAdmin(orgId);
-  return rows.map(toBannerDto);
-}
-
-export async function getPublicActiveBanners(orgId: string): Promise<StoreBannerDto[]> {
-  const rows = await bannersQueries.listActiveBannersPublic(orgId);
-  return rows.map(toBannerDto);
-}
-
-export async function createBanner(orgId: string, rawBody: unknown): Promise<StoreBannerDto> {
-  const parsed = CreateBannerSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid banner payload', 400);
-  }
-
-  const row = await bannersQueries.createBanner(orgId, {
-    ...parsed.data,
-    title: parsed.data.title || null,
-    starts_at: parsed.data.starts_at ? new Date(parsed.data.starts_at) : null,
-    ends_at: parsed.data.ends_at ? new Date(parsed.data.ends_at) : null,
-  });
-
-  return toBannerDto(row);
-}
-
-export async function updateBanner(
-  orgId: string,
-  bannerId: string,
-  rawBody: unknown
-): Promise<StoreBannerDto> {
-  const existing = await bannersQueries.getBannerById(orgId, bannerId);
-  if (!existing) {
-    throw new AppError('Banner not found', 404);
-  }
-
-  const parsed = UpdateBannerSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid banner update payload', 400);
-  }
-
-  const row = await bannersQueries.updateBanner(orgId, bannerId, {
-    ...parsed.data,
-    starts_at: parsed.data.starts_at !== undefined ? (parsed.data.starts_at ? new Date(parsed.data.starts_at) : null) : undefined,
-    ends_at: parsed.data.ends_at !== undefined ? (parsed.data.ends_at ? new Date(parsed.data.ends_at) : null) : undefined,
-  });
-
-  if (!row) {
-    throw new AppError('Banner not found', 404);
-  }
-
-  return toBannerDto(row);
-}
-
-export async function deleteBanner(orgId: string, bannerId: string): Promise<void> {
-  const deleted = await bannersQueries.deleteBanner(orgId, bannerId);
-  if (!deleted) {
-    throw new AppError('Banner not found', 404);
-  }
-}
-
-export async function reorderBanners(orgId: string, rawBody: unknown): Promise<void> {
-  const parsed = ReorderBannersSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid reordering payload', 400);
-  }
-
-  await bannersQueries.reorderBannersTransactional(orgId, parsed.data.bannerIds);
-}
-
-export async function recordClick(bannerId: string): Promise<void> {
-  await bannersQueries.trackBannerClick(bannerId);
-}
 </file>
 
 <file path="src/modules/customers/customers.controller.ts">
@@ -3684,26 +3104,23 @@ async function healSystem(): Promise<void> {
 healSystem();
 </file>
 
-<file path="src/scripts/seed-admin.ts">
+<file path="src/scripts/restore-tenant-boundaries.ts">
 // =============================================================================
-// soko-api/src/scripts/seed-admin.ts
-// Securely verifies Flemela organization, storefront, and admin credentials
-// WITHOUT touching or reassigning products from other tenant accounts.
+// soko-api/src/scripts/restore-tenant-boundaries.ts
+// Restores strict multi-tenant boundaries and removes foreign items from Flemela.
+// Run via: npx tsx src/scripts/restore-tenant-boundaries.ts
 // =============================================================================
 
-import bcrypt from 'bcryptjs';
 import { pool } from '../config/db';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-const ADMIN_EMAIL = (process.env.FLEMELA_ADMIN_EMAIL || 'admin@flemela.co.ke').trim().toLowerCase();
-const ADMIN_PASSWORD = process.env.FLEMELA_ADMIN_PASSWORD || 'AdminPassword123!';
-const STORE_SLUG = (process.env.NUXT_PUBLIC_STORE_SLUG || 'flemela').trim().toLowerCase();
+const FLEMELA_SLUG = (process.env.NUXT_PUBLIC_STORE_SLUG || 'flemela').trim().toLowerCase();
 
-async function run(): Promise<void> {
+async function restoreBoundaries(): Promise<void> {
   console.log('====================================================');
-  console.log('    VERIFYING FLEMELA TENANT & ADMIN ACCESS         ');
+  console.log('   CLEANING FOREIGN PRODUCTS FROM FLEMELA CATALOG   ');
   console.log('====================================================\n');
 
   const client = await pool.connect();
@@ -3711,76 +3128,108 @@ async function run(): Promise<void> {
   try {
     await client.query('BEGIN');
 
-    // 1. Ensure Flagship Organization
-    const orgRes = await client.query<{ id: string }>(
-      `INSERT INTO organizations (name, slug, business_type, plan, plan_expires_at)
-       VALUES ('Flemela Bookstore', $1, 'books', 'lifetime', NULL)
-       ON CONFLICT (slug) DO UPDATE SET
-         business_type = 'books',
-         plan = 'lifetime',
-         deleted_at = NULL,
-         updated_at = NOW()
-       RETURNING id`,
-      [STORE_SLUG]
+    // 1. Resolve Flemela Org ID
+    const flemelaRes = await client.query<{ id: string }>(
+      `SELECT id FROM organizations WHERE slug = $1 LIMIT 1`,
+      [FLEMELA_SLUG]
     );
-    const orgId = orgRes.rows[0].id;
-    console.log(`✓ Organization confirmed [ID: ${orgId}, Slug: "${STORE_SLUG}"]`);
 
-    // 2. Hash password with bcryptjs (12 rounds)
-    const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, 12);
+    if (flemelaRes.rows.length === 0) {
+      throw new Error(`Organization with slug "${FLEMELA_SLUG}" not found.`);
+    }
 
-    // 3. Upsert User
-    const userRes = await client.query<{ id: string; email: string }>(
-      `INSERT INTO users (email, password_hash, name)
-       VALUES ($1, $2, 'Flemela Store Administrator')
-       ON CONFLICT (email) DO UPDATE SET
-         password_hash = EXCLUDED.password_hash,
-         deleted_at = NULL,
-         updated_at = NOW()
-       RETURNING id, email`,
-      [ADMIN_EMAIL, passwordHash]
+    const flemelaOrgId = flemelaRes.rows[0].id;
+    console.log(`Flemela Org ID: ${flemelaOrgId}\n`);
+
+    // 2. Identify all non-book or test organizations in the database
+    const otherOrgs = await client.query<{ id: string; name: string; slug: string; business_type: string }>(
+      `SELECT id, name, slug, business_type FROM organizations WHERE id != $1 AND deleted_at IS NULL`,
+      [flemelaOrgId]
     );
-    const userId = userRes.rows[0].id;
-    console.log(`✓ Admin User [ID: ${userId}, Email: "${ADMIN_EMAIL}"]`);
+    console.log(`Found ${otherOrgs.rows.length} other organization(s) in system.`);
 
-    // 4. Ensure Owner Membership
-    await client.query(
-      `INSERT INTO org_members (org_id, user_id, role)
-       VALUES ($1, $2, 'owner')
-       ON CONFLICT (org_id, user_id) DO UPDATE SET
-         role = 'owner'`,
-      [orgId, userId]
+    // 3. Find products in Flemela that are NOT books:
+    // Books have entries in product_formats (pdf, epub, hardcopy) OR canonical bookstore categories.
+    // Non-books (e.g. "Nike Air Force 1", "Classic Running Shoes", etc.) have NO formats and non-book names.
+    const foreignProducts = await client.query<{ id: string; name: string; sku: string | null }>(
+      `SELECT p.id, p.name, p.sku
+       FROM products p
+       LEFT JOIN product_formats pf ON pf.product_id = p.id
+       WHERE p.org_id = $1
+         AND pf.id IS NULL
+         AND (
+           p.name ILIKE '%shoe%' OR
+           p.name ILIKE '%nike%' OR
+           p.name ILIKE '%running%' OR
+           p.name ILIKE '%test%' OR
+           p.name ILIKE '%DELETE_PROBE%'
+         )`,
+      [flemelaOrgId]
     );
-    console.log(`✓ Organization Membership bound [Role: owner]`);
 
-    // 5. Ensure Published Storefront Record
-    await client.query(
-      `INSERT INTO stores (
-         org_id, slug, name, description, location, delivery_info, status, hero_layout
-       )
-       VALUES (
-         $1, $2, 'Flemela Bookstore',
-         'Books that inspire. Knowledge that transforms.',
-         'Sarit Centre, Westlands, Nairobi',
-         'Free delivery across Nairobi on orders above KSh 2,500',
-         'published', 'editorial'
-       )
-       ON CONFLICT (org_id) DO UPDATE SET
-         slug = EXCLUDED.slug,
-         status = 'published',
-         updated_at = NOW()`,
-      [orgId, STORE_SLUG]
+    console.log(`\nIdentified ${foreignProducts.rows.length} non-book / test product(s) in Flemela:`);
+    for (const prod of foreignProducts.rows) {
+      console.log(`  - [ID: ${prod.id}] "${prod.name}" (SKU: ${prod.sku || 'none'})`);
+    }
+
+    // 4. Remove foreign test products from Flemela
+    if (foreignProducts.rows.length > 0) {
+      const foreignIds = foreignProducts.rows.map((p) => p.id);
+
+      await client.query(`DELETE FROM product_images WHERE product_id = ANY($1::uuid[])`, [foreignIds]);
+      await client.query(`DELETE FROM inventory WHERE product_id = ANY($1::uuid[])`, [foreignIds]);
+      await client.query(`DELETE FROM product_variants WHERE product_id = ANY($1::uuid[])`, [foreignIds]);
+      await client.query(`DELETE FROM products WHERE id = ANY($1::uuid[])`, [foreignIds]);
+
+      console.log(`\n✓ Successfully removed ${foreignProducts.rows.length} foreign product(s) from Flemela.`);
+    }
+
+    // 5. Clean up any categories belonging to other businesses that were copied into Flemela
+    const nonBookCategories = await client.query<{ id: string; name: string }>(
+      `SELECT id, name FROM categories 
+       WHERE org_id = $1 
+         AND name NOT IN (
+           'Business & Finance',
+           'Psychology & Self-Help',
+           'Self-Help',
+           'Fiction & Literature',
+           'Christian Books',
+           'Education & Textbooks',
+           'Biographies & Memoir',
+           'General'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM products p 
+           JOIN product_formats pf ON pf.product_id = p.id 
+           WHERE p.category_id = categories.id
+         )`,
+      [flemelaOrgId]
     );
-    console.log(`✓ Storefront published [Slug: "${STORE_SLUG}"]`);
+
+    if (nonBookCategories.rows.length > 0) {
+      console.log(`\nIdentified ${nonBookCategories.rows.length} foreign category row(s) to remove:`);
+      for (const cat of nonBookCategories.rows) {
+        console.log(`  - "${cat.name}"`);
+        await client.query(`DELETE FROM categories WHERE id = $1`, [cat.id]);
+      }
+    }
+
+    // 6. Report remaining clean catalog count
+    const remainingRes = await client.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM products WHERE org_id = $1 AND deleted_at IS NULL`,
+      [flemelaOrgId]
+    );
 
     await client.query('COMMIT');
 
     console.log('\n====================================================');
-    console.log(`✅ Tenant check complete. Other organizations were untouched.`);
+    console.log(`✅ CLEANUP COMPLETE:`);
+    console.log(`   Clean bookstore titles in Flemela: ${remainingRes.rows[0].count}`);
+    console.log('   All foreign items removed. Tenant boundary restored.');
     console.log('====================================================\n');
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('\n❌ Operation failed:', err);
+    console.error('\n❌ Cleanup failed:', err);
     process.exit(1);
   } finally {
     client.release();
@@ -3788,7 +3237,7 @@ async function run(): Promise<void> {
   }
 }
 
-run();
+restoreBoundaries();
 </file>
 
 <file path="src/services/email.service.ts">
@@ -4776,150 +4225,6 @@ export async function getImportStatusHandler(
   } catch (err) {
     next(err);
   }
-}
-</file>
-
-<file path="src/verticals/books/import/import.routes.ts">
-// =============================================================================
-// src/verticals/books/import/import.routes.ts
-// Route wiring for bulk import operations with Multer upload handling.
-// =============================================================================
-
-import { Router } from 'express';
-import multer from 'multer';
-import os from 'os';
-import path from 'path';
-import { verifyToken } from '../../../middleware/auth';
-import {
-  uploadExcelImportHandler,
-  startGoogleSheetImportHandler,
-  getImportStatusHandler,
-} from './import.controller';
-
-const upload = multer({
-  dest: path.join(os.tmpdir(), 'flemela-imports'),
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB max spreadsheet size
-});
-
-const router = Router();
-
-router.use(verifyToken);
-
-// POST /api/v1/books/import/excel (Multipart file upload)
-router.post('/excel', upload.single('file'), uploadExcelImportHandler);
-
-// POST /api/v1/books/import/google-sheet (JSON { sheetUrl })
-router.post('/google-sheet', startGoogleSheetImportHandler);
-
-// GET /api/v1/books/import/:id (Poll progress & error rows)
-router.get('/:id', getImportStatusHandler);
-
-export default router;
-</file>
-
-<file path="src/verticals/books/import/import.service.ts">
-// =============================================================================
-// soko-api/src/verticals/books/import/import.service.ts
-// Service layer handling BullMQ queue dispatch with cloud TLS Redis support.
-// =============================================================================
-
-import { Queue } from 'bullmq';
-import Redis from 'ioredis';
-import { z } from 'zod';
-import { env } from '../../../config/env';
-import { AppError } from '../../../utils/error';
-import * as importQueries from './import.queries';
-import type { ImportJobRow } from './import.queries';
-
-const redisUrl = env.REDIS_URL || process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-
-export const redisConnection = new Redis(redisUrl, {
-  maxRetriesPerRequest: null,
-  lazyConnect: true,
-  enableReadyCheck: false,
-  retryStrategy(times) {
-    return Math.min(times * 200, 2000);
-  },
-});
-
-redisConnection.on('error', (err) => {
-  console.warn('Redis connection event (BullMQ):', err.message);
-});
-
-export const bookImportQueue = new Queue('book-import-queue', {
-  connection: redisConnection,
-});
-
-export const GoogleSheetImportSchema = z.object({
-  sheetUrl: z.string().url('Must be a valid Google Sheet URL'),
-});
-
-export async function enqueueExcelImport(
-  orgId: string,
-  filePath: string
-): Promise<{ jobId: string; status: string }> {
-  const jobRecord = await importQueries.createImportJob(orgId, 'excel');
-
-  await bookImportQueue.add(
-    'process-excel-import',
-    {
-      jobId: jobRecord.id,
-      orgId,
-      source: 'excel',
-      filePath,
-    },
-    {
-      removeOnComplete: 100,
-      removeOnFail: 100,
-    }
-  );
-
-  return {
-    jobId: jobRecord.id,
-    status: 'queued',
-  };
-}
-
-export async function enqueueGoogleSheetImport(
-  orgId: string,
-  rawBody: unknown
-): Promise<{ jobId: string; status: string }> {
-  const parsed = GoogleSheetImportSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    throw new AppError(parsed.error.issues[0]?.message || 'Invalid sheet URL', 400);
-  }
-
-  const jobRecord = await importQueries.createImportJob(orgId, 'google_sheet');
-
-  await bookImportQueue.add(
-    'process-google-sheet-import',
-    {
-      jobId: jobRecord.id,
-      orgId,
-      source: 'google_sheet',
-      sheetUrl: parsed.data.sheetUrl,
-    },
-    {
-      removeOnComplete: 100,
-      removeOnFail: 100,
-    }
-  );
-
-  return {
-    jobId: jobRecord.id,
-    status: 'queued',
-  };
-}
-
-export async function getJobStatus(
-  orgId: string,
-  jobId: string
-): Promise<ImportJobRow> {
-  const record = await importQueries.getImportJobById(orgId, jobId);
-  if (!record) {
-    throw new AppError('Import job not found', 404);
-  }
-  return record;
 }
 </file>
 
@@ -6895,6 +6200,547 @@ export async function logout(refreshToken: string): Promise<void> {
 }
 </file>
 
+<file path="src/modules/banners/banners.queries.ts">
+// =============================================================================
+// soko-api/src/modules/banners/banner.queries.ts
+// Database access layer for store promotional hero banners.
+// =============================================================================
+
+import { query, pool } from '../../config/db';
+
+export interface StoreBannerRow {
+  id: string;
+  org_id: string;
+  title: string | null;
+  subtitle: string | null;
+  badge: string | null;
+  image_url: string;
+  mobile_image_url: string | null;
+  cta_label: string | null;
+  cta_link: string | null;
+  bg_color: string;
+  sort_order: number;
+  is_active: boolean;
+  starts_at: Date | null;
+  ends_at: Date | null;
+  click_count: number;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface CreateBannerInput {
+  title?: string | null;
+  subtitle?: string | null;
+  badge?: string | null;
+  image_url: string;
+  mobile_image_url?: string | null;
+  cta_label?: string | null;
+  cta_link?: string | null;
+  bg_color?: string;
+  sort_order?: number;
+  is_active?: boolean;
+  starts_at?: Date | null;
+  ends_at?: Date | null;
+}
+
+export interface UpdateBannerInput {
+  title?: string | null;
+  subtitle?: string | null;
+  badge?: string | null;
+  image_url?: string;
+  mobile_image_url?: string | null;
+  cta_label?: string | null;
+  cta_link?: string | null;
+  bg_color?: string;
+  sort_order?: number;
+  is_active?: boolean;
+  starts_at?: Date | null;
+  ends_at?: Date | null;
+}
+
+const BANNER_SELECT_FIELDS = `
+  id, org_id, title, subtitle, badge, image_url, mobile_image_url,
+  cta_label, cta_link, bg_color, sort_order, is_active,
+  starts_at, ends_at, click_count, created_at, updated_at
+`;
+
+export async function listBannersAdmin(orgId: string): Promise<StoreBannerRow[]> {
+  const result = await query<StoreBannerRow>(
+    `SELECT ${BANNER_SELECT_FIELDS}
+     FROM   store_banners
+     WHERE  org_id = $1
+     ORDER  BY sort_order ASC, created_at DESC`,
+    [orgId]
+  );
+  return result.rows;
+}
+
+export async function listActiveBannersPublic(orgId: string): Promise<StoreBannerRow[]> {
+  const result = await query<StoreBannerRow>(
+    `SELECT ${BANNER_SELECT_FIELDS}
+     FROM   store_banners
+     WHERE  org_id = $1
+       AND  is_active = TRUE
+       AND  (starts_at IS NULL OR starts_at <= NOW())
+       AND  (ends_at IS NULL OR ends_at > NOW())
+     ORDER  BY sort_order ASC, created_at DESC`,
+    [orgId]
+  );
+  return result.rows;
+}
+
+export async function getBannerById(orgId: string, bannerId: string): Promise<StoreBannerRow | null> {
+  const result = await query<StoreBannerRow>(
+    `SELECT ${BANNER_SELECT_FIELDS}
+     FROM   store_banners
+     WHERE  org_id = $1 AND id = $2`,
+    [orgId, bannerId]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function createBanner(
+  orgId: string,
+  data: CreateBannerInput
+): Promise<StoreBannerRow> {
+  let nextSortOrder = data.sort_order;
+  if (nextSortOrder === undefined) {
+    const maxSortResult = await query<{ max_sort: number | null }>(
+      `SELECT MAX(sort_order) AS max_sort FROM store_banners WHERE org_id = $1`,
+      [orgId]
+    );
+    nextSortOrder = (maxSortResult.rows[0]?.max_sort ?? -1) + 1;
+  }
+
+  const result = await query<StoreBannerRow>(
+    `INSERT INTO store_banners (
+       org_id, title, subtitle, badge, image_url, mobile_image_url,
+       cta_label, cta_link, bg_color, sort_order, is_active, starts_at, ends_at
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+     RETURNING ${BANNER_SELECT_FIELDS}`,
+    [
+      orgId,
+      data.title?.trim() || '',
+      data.subtitle?.trim() || null,
+      data.badge?.trim().toUpperCase() || null,
+      data.image_url.trim(),
+      data.mobile_image_url?.trim() || null,
+      data.cta_label?.trim() || null,
+      data.cta_link?.trim() || null,
+      data.bg_color?.trim() || '#052219',
+      nextSortOrder,
+      data.is_active ?? true,
+      data.starts_at ?? null,
+      data.ends_at ?? null,
+    ]
+  );
+  return result.rows[0];
+}
+
+export async function updateBanner(
+  orgId: string,
+  bannerId: string,
+  data: UpdateBannerInput
+): Promise<StoreBannerRow | null> {
+  const setClauses: string[] = [];
+  const params: unknown[] = [orgId, bannerId];
+  let paramIdx = 3;
+
+  if (data.title !== undefined) {
+    setClauses.push(`title = $${paramIdx}`);
+    params.push(data.title?.trim() || '');
+    paramIdx++;
+  }
+  if (data.subtitle !== undefined) {
+    setClauses.push(`subtitle = $${paramIdx}`);
+    params.push(data.subtitle?.trim() || null);
+    paramIdx++;
+  }
+  if (data.badge !== undefined) {
+    setClauses.push(`badge = $${paramIdx}`);
+    params.push(data.badge?.trim().toUpperCase() || null);
+    paramIdx++;
+  }
+  if (data.image_url !== undefined) {
+    setClauses.push(`image_url = $${paramIdx}`);
+    params.push(data.image_url.trim());
+    paramIdx++;
+  }
+  if (data.mobile_image_url !== undefined) {
+    setClauses.push(`mobile_image_url = $${paramIdx}`);
+    params.push(data.mobile_image_url?.trim() || null);
+    paramIdx++;
+  }
+  if (data.cta_label !== undefined) {
+    setClauses.push(`cta_label = $${paramIdx}`);
+    params.push(data.cta_label?.trim() || null);
+    paramIdx++;
+  }
+  if (data.cta_link !== undefined) {
+    setClauses.push(`cta_link = $${paramIdx}`);
+    params.push(data.cta_link?.trim() || null);
+    paramIdx++;
+  }
+  if (data.bg_color !== undefined) {
+    setClauses.push(`bg_color = $${paramIdx}`);
+    params.push(data.bg_color.trim());
+    paramIdx++;
+  }
+  if (data.sort_order !== undefined) {
+    setClauses.push(`sort_order = $${paramIdx}`);
+    params.push(data.sort_order);
+    paramIdx++;
+  }
+  if (data.is_active !== undefined) {
+    setClauses.push(`is_active = $${paramIdx}`);
+    params.push(data.is_active);
+    paramIdx++;
+  }
+  if (data.starts_at !== undefined) {
+    setClauses.push(`starts_at = $${paramIdx}`);
+    params.push(data.starts_at);
+    paramIdx++;
+  }
+  if (data.ends_at !== undefined) {
+    setClauses.push(`ends_at = $${paramIdx}`);
+    params.push(data.ends_at);
+    paramIdx++;
+  }
+
+  if (setClauses.length === 0) {
+    return getBannerById(orgId, bannerId);
+  }
+
+  setClauses.push('updated_at = NOW()');
+
+  const result = await query<StoreBannerRow>(
+    `UPDATE store_banners
+     SET    ${setClauses.join(', ')}
+     WHERE  org_id = $1 AND id = $2
+     RETURNING ${BANNER_SELECT_FIELDS}`,
+    params
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function deleteBanner(orgId: string, bannerId: string): Promise<boolean> {
+  const result = await query(
+    `DELETE FROM store_banners WHERE org_id = $1 AND id = $2`,
+    [orgId, bannerId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export async function reorderBannersTransactional(
+  orgId: string,
+  bannerIdsInOrder: string[]
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (let i = 0; i < bannerIdsInOrder.length; i++) {
+      await client.query(
+        `UPDATE store_banners
+         SET    sort_order = $3, updated_at = NOW()
+         WHERE  org_id = $1 AND id = $2`,
+        [orgId, bannerIdsInOrder[i], i]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function trackBannerClick(bannerId: string): Promise<void> {
+  await query(
+    `UPDATE store_banners
+     SET    click_count = click_count + 1
+     WHERE  id = $1`,
+    [bannerId]
+  );
+}
+</file>
+
+<file path="src/modules/banners/banners.service.ts">
+// =============================================================================
+// soko-api/src/modules/banners/banners.service.ts
+// Business logic for customizable promotional hero banners.
+// =============================================================================
+
+import { z } from 'zod';
+import { AppError } from '../../utils/error';
+import * as bannersQueries from './banners.queries';
+import type { StoreBannerRow } from './banners.queries';
+
+export const CreateBannerSchema = z
+  .object({
+    title: z
+      .string()
+      .max(200)
+      .trim()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    subtitle: z
+      .string()
+      .max(500)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    badge: z
+      .string()
+      .max(50)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    image_url: z.string().url('A valid desktop image URL is required'),
+    mobile_image_url: z
+      .string()
+      .url('Invalid mobile image URL')
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    cta_label: z
+      .string()
+      .max(50)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    cta_link: z
+      .string()
+      .max(500)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    bg_color: z
+      .string()
+      .regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, 'Invalid hex color code')
+      .default('#052219'),
+    sort_order: z.number().int().optional(),
+    is_active: z.boolean().default(true),
+    starts_at: z.string().datetime().nullable().optional(),
+    ends_at: z.string().datetime().nullable().optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.starts_at && data.ends_at) {
+        return new Date(data.ends_at).getTime() > new Date(data.starts_at).getTime();
+      }
+      return true;
+    },
+    {
+      message: 'Expiration date must be strictly after the start date',
+      path: ['ends_at'],
+    }
+  );
+
+export const UpdateBannerSchema = z
+  .object({
+    title: z
+      .string()
+      .max(200)
+      .trim()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    subtitle: z
+      .string()
+      .max(500)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    badge: z
+      .string()
+      .max(50)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    image_url: z.string().url().optional(),
+    mobile_image_url: z
+      .string()
+      .url()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    cta_label: z
+      .string()
+      .max(50)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    cta_link: z
+      .string()
+      .max(500)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    bg_color: z.string().regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/).optional(),
+    sort_order: z.number().int().optional(),
+    is_active: z.boolean().optional(),
+    starts_at: z.string().datetime().nullable().optional(),
+    ends_at: z.string().datetime().nullable().optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.starts_at && data.ends_at) {
+        return new Date(data.ends_at).getTime() > new Date(data.starts_at).getTime();
+      }
+      return true;
+    },
+    {
+      message: 'Expiration date must be strictly after the start date',
+      path: ['ends_at'],
+    }
+  );
+
+export const ReorderBannersSchema = z.object({
+  bannerIds: z.array(z.string().uuid()).min(1, 'At least one banner ID is required to reorder'),
+});
+
+export interface StoreBannerDto {
+  id: string;
+  org_id: string;
+  title: string | null;
+  subtitle: string | null;
+  badge: string | null;
+  image_url: string;
+  mobile_image_url: string | null;
+  cta_label: string | null;
+  cta_link: string | null;
+  bg_color: string;
+  sort_order: number;
+  is_active: boolean;
+  starts_at: string | null;
+  ends_at: string | null;
+  click_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export function toBannerDto(row: StoreBannerRow): StoreBannerDto {
+  return {
+    id: row.id,
+    org_id: row.org_id,
+    title: row.title || null,
+    subtitle: row.subtitle,
+    badge: row.badge,
+    image_url: row.image_url,
+    mobile_image_url: row.mobile_image_url,
+    cta_label: row.cta_label || null,
+    cta_link: row.cta_link || null,
+    bg_color: row.bg_color,
+    sort_order: row.sort_order,
+    is_active: row.is_active,
+    starts_at: row.starts_at ? new Date(row.starts_at).toISOString() : null,
+    ends_at: row.ends_at ? new Date(row.ends_at).toISOString() : null,
+    click_count: row.click_count,
+    created_at: new Date(row.created_at).toISOString(),
+    updated_at: new Date(row.updated_at).toISOString(),
+  };
+}
+
+export async function getAdminBanners(orgId: string): Promise<StoreBannerDto[]> {
+  const rows = await bannersQueries.listBannersAdmin(orgId);
+  return rows.map(toBannerDto);
+}
+
+export async function getPublicActiveBanners(orgId: string): Promise<StoreBannerDto[]> {
+  const rows = await bannersQueries.listActiveBannersPublic(orgId);
+  return rows.map(toBannerDto);
+}
+
+export async function createBanner(orgId: string, rawBody: unknown): Promise<StoreBannerDto> {
+  const parsed = CreateBannerSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid banner payload', 400);
+  }
+
+  const row = await bannersQueries.createBanner(orgId, {
+    ...parsed.data,
+    title: parsed.data.title || null,
+    starts_at: parsed.data.starts_at ? new Date(parsed.data.starts_at) : null,
+    ends_at: parsed.data.ends_at ? new Date(parsed.data.ends_at) : null,
+  });
+
+  return toBannerDto(row);
+}
+
+export async function updateBanner(
+  orgId: string,
+  bannerId: string,
+  rawBody: unknown
+): Promise<StoreBannerDto> {
+  const existing = await bannersQueries.getBannerById(orgId, bannerId);
+  if (!existing) {
+    throw new AppError('Banner not found', 404);
+  }
+
+  const parsed = UpdateBannerSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid banner update payload', 400);
+  }
+
+  const row = await bannersQueries.updateBanner(orgId, bannerId, {
+    ...parsed.data,
+    starts_at:
+      parsed.data.starts_at !== undefined
+        ? parsed.data.starts_at
+          ? new Date(parsed.data.starts_at)
+          : null
+        : undefined,
+    ends_at:
+      parsed.data.ends_at !== undefined
+        ? parsed.data.ends_at
+          ? new Date(parsed.data.ends_at)
+          : null
+        : undefined,
+  });
+
+  if (!row) {
+    throw new AppError('Banner not found', 404);
+  }
+
+  return toBannerDto(row);
+}
+
+export async function deleteBanner(orgId: string, bannerId: string): Promise<void> {
+  const deleted = await bannersQueries.deleteBanner(orgId, bannerId);
+  if (!deleted) {
+    throw new AppError('Banner not found', 404);
+  }
+}
+
+export async function reorderBanners(orgId: string, rawBody: unknown): Promise<void> {
+  const parsed = ReorderBannersSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid reordering payload', 400);
+  }
+
+  await bannersQueries.reorderBannersTransactional(orgId, parsed.data.bannerIds);
+}
+
+export async function recordClick(bannerId: string): Promise<void> {
+  await bannersQueries.trackBannerClick(bannerId);
+}
+</file>
+
 <file path="src/modules/expenses/expenses.controller.ts">
 // =============================================================================
 // src/modules/expenses/expenses.controller.ts
@@ -8415,127 +8261,111 @@ async function backfill(): Promise<void> {
 backfill();
 </file>
 
-<file path="src/services/bookCover.service.ts">
+<file path="src/scripts/seed-admin.ts">
 // =============================================================================
-// soko-api/src/services/bookCover.service.ts
-// Multi-Source High-Resolution Book Cover Discovery Engine
+// soko-api/src/scripts/seed-admin.ts
+// Securely verifies Flemela organization, storefront, and admin credentials
+// WITHOUT touching or reassigning products from other tenant accounts.
 // =============================================================================
 
-import axios from 'axios';
+import bcrypt from 'bcryptjs';
+import { pool } from '../config/db';
+import dotenv from 'dotenv';
 
-export interface CoverSearchResult {
-  coverUrl: string | null;
-  title: string;
-  author?: string;
-  source: 'googlebooks' | 'openlibrary' | null;
-}
+dotenv.config();
 
-function cleanQueryString(input: string): string {
-  return (input || '')
-    .replace(/\s*[\(\[\{][^\)\]\}]*[\)\]\}]/g, ' ')
-    .replace(/:\s*.*$/, '')
-    .replace(/[^\w\s-]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+const ADMIN_EMAIL = (process.env.FLEMELA_ADMIN_EMAIL || 'admin@flemela.co.ke').trim().toLowerCase();
+const ADMIN_PASSWORD = process.env.FLEMELA_ADMIN_PASSWORD || 'AdminPassword123!';
+const STORE_SLUG = (process.env.NUXT_PUBLIC_STORE_SLUG || 'flemela').trim().toLowerCase();
 
-/**
- * Sanitizes Google Books public image URL (Does NOT use restricted publisher endpoint)
- */
-function cleanGoogleBooksUrl(rawUrl: string, volumeId?: string): string {
-  if (volumeId) {
-    // Unrestricted public content endpoint
-    return `https://books.google.com/books/content?id=${volumeId}&printsec=frontcover&img=1&zoom=1`;
-  }
-  return rawUrl.replace(/^http:\/\//i, 'https://').replace(/&edge=curl/g, '');
-}
+async function run(): Promise<void> {
+  console.log('====================================================');
+  console.log('    VERIFYING FLEMELA TENANT & ADMIN ACCESS         ');
+  console.log('====================================================\n');
 
-export async function findBestBookCover(
-  rawTitle: string,
-  rawAuthor?: string,
-  rawIsbn?: string
-): Promise<CoverSearchResult> {
-  const title = cleanQueryString(rawTitle);
-  const author = rawAuthor ? cleanQueryString(rawAuthor) : '';
-  const cleanIsbn = (rawIsbn || '').replace(/[^0-9X]/gi, '');
-  const hasValidIsbn = cleanIsbn.length === 10 || cleanIsbn.length === 13;
+  const client = await pool.connect();
 
-  if (!title && !hasValidIsbn) {
-    return { coverUrl: null, title: rawTitle, source: null };
-  }
-
-  // ---------------------------------------------------------------------------
-  // Tier 1: Google Books Standard Public API (Zero Auth / No Partner Gate)
-  // ---------------------------------------------------------------------------
   try {
-    const query = hasValidIsbn
-      ? `isbn:${cleanIsbn}`
-      : author
-        ? `${title} ${author}`
-        : title;
+    await client.query('BEGIN');
 
-    const gbooksUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=3&printType=books`;
-    const res = await axios.get(gbooksUrl, { 
-      timeout: 5000,
-      headers: { 'Accept-Encoding': 'gzip,deflate' }
-    });
-    
-    const items = res.data?.items || [];
-    for (const item of items) {
-      const volumeId = item.id;
-      const volumeInfo = item.volumeInfo || {};
-      const imageLinks = volumeInfo.imageLinks;
+    // 1. Ensure Flagship Organization
+    const orgRes = await client.query<{ id: string }>(
+      `INSERT INTO organizations (name, slug, business_type, plan, plan_expires_at)
+       VALUES ('Flemela Bookstore', $1, 'books', 'lifetime', NULL)
+       ON CONFLICT (slug) DO UPDATE SET
+         business_type = 'books',
+         plan = 'lifetime',
+         deleted_at = NULL,
+         updated_at = NOW()
+       RETURNING id`,
+      [STORE_SLUG]
+    );
+    const orgId = orgRes.rows[0].id;
+    console.log(`✓ Organization confirmed [ID: ${orgId}, Slug: "${STORE_SLUG}"]`);
 
-      if (imageLinks) {
-        const rawCover =
-          imageLinks.extraLarge ||
-          imageLinks.large ||
-          imageLinks.medium ||
-          imageLinks.thumbnail ||
-          imageLinks.smallThumbnail;
+    // 2. Hash password with bcryptjs (12 rounds)
+    const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, 12);
 
-        if (rawCover && typeof rawCover === 'string' && rawCover.length > 10) {
-          return {
-            coverUrl: cleanGoogleBooksUrl(rawCover, volumeId),
-            title: volumeInfo.title || rawTitle,
-            author: volumeInfo.authors?.[0] || rawAuthor,
-            source: 'googlebooks',
-          };
-        }
-      }
-    }
-  } catch {
-    // Non-blocking cascade to Tier 2
+    // 3. Upsert User
+    const userRes = await client.query<{ id: string; email: string }>(
+      `INSERT INTO users (email, password_hash, name)
+       VALUES ($1, $2, 'Flemela Store Administrator')
+       ON CONFLICT (email) DO UPDATE SET
+         password_hash = EXCLUDED.password_hash,
+         deleted_at = NULL,
+         updated_at = NOW()
+       RETURNING id, email`,
+      [ADMIN_EMAIL, passwordHash]
+    );
+    const userId = userRes.rows[0].id;
+    console.log(`✓ Admin User [ID: ${userId}, Email: "${ADMIN_EMAIL}"]`);
+
+    // 4. Ensure Owner Membership
+    await client.query(
+      `INSERT INTO org_members (org_id, user_id, role)
+       VALUES ($1, $2, 'owner')
+       ON CONFLICT (org_id, user_id) DO UPDATE SET
+         role = 'owner'`,
+      [orgId, userId]
+    );
+    console.log(`✓ Organization Membership bound [Role: owner]`);
+
+    // 5. Ensure Published Storefront Record
+    await client.query(
+      `INSERT INTO stores (
+         org_id, slug, name, description, location, delivery_info, status, hero_layout
+       )
+       VALUES (
+         $1, $2, 'Flemela Bookstore',
+         'Books that inspire. Knowledge that transforms.',
+         'Sarit Centre, Westlands, Nairobi',
+         'Free delivery across Nairobi on orders above KSh 2,500',
+         'published', 'editorial'
+       )
+       ON CONFLICT (org_id) DO UPDATE SET
+         slug = EXCLUDED.slug,
+         status = 'published',
+         updated_at = NOW()`,
+      [orgId, STORE_SLUG]
+    );
+    console.log(`✓ Storefront published [Slug: "${STORE_SLUG}"]`);
+
+    await client.query('COMMIT');
+
+    console.log('\n====================================================');
+    console.log(`✅ Tenant check complete. Other organizations were untouched.`);
+    console.log('====================================================\n');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('\n❌ Operation failed:', err);
+    process.exit(1);
+  } finally {
+    client.release();
+    await pool.end();
   }
-
-  // ---------------------------------------------------------------------------
-  // Tier 2: Open Library Search by Work (Uses Cover ID - NOT Rate Limited ISBN)
-  // ---------------------------------------------------------------------------
-  try {
-    const olQueryUrl = `https://openlibrary.org/search.json?title=${encodeURIComponent(title)}&limit=3`;
-    const olRes = await axios.get(olQueryUrl, {
-      timeout: 4500,
-      headers: { 'User-Agent': 'FlemelaBookstoreApp/1.0 (support@flemela.co.ke)' },
-    });
-
-    const docs = olRes.data?.docs || [];
-    for (const doc of docs) {
-      // Cover ID endpoints (/b/id/) have NO 100 req/5min rate limit
-      if (doc.cover_i) {
-        return {
-          coverUrl: `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`,
-          title: doc.title || rawTitle,
-          author: doc.author_name?.[0] || rawAuthor,
-          source: 'openlibrary',
-        };
-      }
-    }
-  } catch {
-    // Fallback
-  }
-
-  return { coverUrl: null, title: rawTitle, source: null };
 }
+
+run();
 </file>
 
 <file path="src/tests/e2e-delivery-flow.test.ts">
@@ -9080,151 +8910,184 @@ export function calculateDeliveryFee(
 }
 </file>
 
-<file path="src/verticals/books/import/import.queries.ts">
+<file path="src/verticals/books/import/import.routes.ts">
+// src/verticals/books/import/import.routes.ts
 // =============================================================================
-// soko-api/src/verticals/books/import/import.queries.ts
-// Database queries for import_jobs with granular telemetry metrics.
+// Route wiring for bulk import operations with Multer extension retention.
 // =============================================================================
 
-import { query } from '../../../config/db';
+import { Router } from 'express';
+import multer from 'multer';
+import os from 'os';
+import path from 'path';
+import fs from 'fs';
+import { verifyToken } from '../../../middleware/auth';
+import { AppError } from '../../../utils/error';
+import {
+  uploadExcelImportHandler,
+  startGoogleSheetImportHandler,
+  getImportStatusHandler,
+} from './import.controller';
 
-export type ImportJobSource = 'excel' | 'google_sheet';
-export type ImportJobStatus = 'queued' | 'processing' | 'done' | 'failed';
-
-export interface RowErrorDetail {
-  row: number;
-  title?: string;
-  error: string;
+const uploadDir = path.join(os.tmpdir(), 'flemela-imports');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-export interface ImportJobRow {
-  id: string;
-  org_id: string;
-  source: ImportJobSource;
-  status: ImportJobStatus;
-  total_rows: number | null;
-  processed_rows: number;
-  inserted_rows: number;
-  updated_rows: number;
-  skipped_rows: number;
-  error_rows: RowErrorDetail[];
-  created_at: Date;
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (_req, file, cb) => {
+    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    const ext = path.extname(file.originalname).toLowerCase() || '.xlsx';
+    cb(null, `import-${uniqueSuffix}${ext}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB max
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (['.xlsx', '.csv', '.xls'].includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new AppError('Only Excel (.xlsx, .xls) and CSV (.csv) files are supported', 400));
+    }
+  },
+});
+
+const router = Router();
+
+router.use(verifyToken);
+
+// POST /api/v1/books/import/excel (Multipart file upload)
+router.post('/excel', upload.single('file'), uploadExcelImportHandler);
+
+// POST /api/v1/books/import/google-sheet (JSON { sheetUrl })
+router.post('/google-sheet', startGoogleSheetImportHandler);
+
+// GET /api/v1/books/import/:id (Poll progress & error rows)
+router.get('/:id', getImportStatusHandler);
+
+export default router;
+</file>
+
+<file path="src/verticals/books/import/import.service.ts">
+// src/verticals/books/import/import.service.ts
+// =============================================================================
+// Service layer handling BullMQ queue dispatch with Render Redis isolation.
+// =============================================================================
+
+import { Queue } from 'bullmq';
+import Redis from 'ioredis';
+import { z } from 'zod';
+import { env } from '../../../config/env';
+import { AppError } from '../../../utils/error';
+import * as importQueries from './import.queries';
+import type { ImportJobRow } from './import.queries';
+
+const redisUrl = env.REDIS_URL || process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+
+/**
+ * Creates isolated Redis connection instances with TLS support for Render cloud instances.
+ */
+export function createRedisConnection(): Redis {
+  const isTls = redisUrl.startsWith('rediss://');
+
+  return new Redis(redisUrl, {
+    maxRetriesPerRequest: null,
+    lazyConnect: false,
+    enableReadyCheck: false,
+    tls: isTls ? { rejectUnauthorized: false } : undefined,
+    retryStrategy(times) {
+      return Math.min(times * 200, 2000);
+    },
+  });
 }
 
-const IMPORT_JOB_FIELDS = `
-  id, org_id, source, status, total_rows, processed_rows,
-  inserted_rows, updated_rows, skipped_rows, error_rows, created_at
-`;
+// Dedicated connection for the Queue producer
+export const redisConnection = createRedisConnection();
 
-export async function createImportJob(
+redisConnection.on('error', (err) => {
+  console.warn('Redis queue connection event:', err.message);
+});
+
+export const bookImportQueue = new Queue('book-import-queue', {
+  connection: redisConnection,
+});
+
+export const GoogleSheetImportSchema = z.object({
+  sheetUrl: z.string().url('Must be a valid Google Sheet URL'),
+});
+
+export async function enqueueExcelImport(
   orgId: string,
-  source: ImportJobSource
-): Promise<ImportJobRow> {
-  const result = await query<ImportJobRow>(
-    `INSERT INTO import_jobs (
-       org_id, source, status, total_rows, processed_rows,
-       inserted_rows, updated_rows, skipped_rows, error_rows
-     )
-     VALUES ($1, $2, 'queued', NULL, 0, 0, 0, 0, '[]'::jsonb)
-     RETURNING ${IMPORT_JOB_FIELDS}`,
-    [orgId, source]
+  filePath: string
+): Promise<{ jobId: string; status: string }> {
+  const jobRecord = await importQueries.createImportJob(orgId, 'excel');
+
+  await bookImportQueue.add(
+    'process-excel-import',
+    {
+      jobId: jobRecord.id,
+      orgId,
+      source: 'excel',
+      filePath,
+    },
+    {
+      removeOnComplete: true, // Prevents exceeding Render's 25 MB Redis RAM cap
+      removeOnFail: 10,
+    }
   );
-  return result.rows[0];
+
+  return {
+    jobId: jobRecord.id,
+    status: 'queued',
+  };
 }
 
-export async function getImportJobById(
+export async function enqueueGoogleSheetImport(
+  orgId: string,
+  rawBody: unknown
+): Promise<{ jobId: string; status: string }> {
+  const parsed = GoogleSheetImportSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    throw new AppError(parsed.error.issues[0]?.message || 'Invalid sheet URL', 400);
+  }
+
+  const jobRecord = await importQueries.createImportJob(orgId, 'google_sheet');
+
+  await bookImportQueue.add(
+    'process-google-sheet-import',
+    {
+      jobId: jobRecord.id,
+      orgId,
+      source: 'google_sheet',
+      sheetUrl: parsed.data.sheetUrl,
+    },
+    {
+      removeOnComplete: true,
+      removeOnFail: 10,
+    }
+  );
+
+  return {
+    jobId: jobRecord.id,
+    status: 'queued',
+  };
+}
+
+export async function getJobStatus(
   orgId: string,
   jobId: string
-): Promise<ImportJobRow | null> {
-  const result = await query<ImportJobRow>(
-    `SELECT ${IMPORT_JOB_FIELDS}
-     FROM   import_jobs
-     WHERE  org_id = $1 AND id = $2`,
-    [orgId, jobId]
-  );
-  return result.rows[0] ?? null;
-}
-
-export async function updateJobProgress(
-  jobId: string,
-  counts: {
-    processedRows: number;
-    insertedRows?: number;
-    updatedRows?: number;
-    skippedRows?: number;
-    totalRows?: number;
-  },
-  status: ImportJobStatus = 'processing'
-): Promise<void> {
-  await query(
-    `UPDATE import_jobs
-     SET processed_rows = $2,
-         inserted_rows  = COALESCE($3, inserted_rows),
-         updated_rows   = COALESCE($4, updated_rows),
-         skipped_rows   = COALESCE($5, skipped_rows),
-         total_rows     = COALESCE($6, total_rows),
-         status         = $7
-     WHERE id = $1`,
-    [
-      jobId,
-      counts.processedRows,
-      counts.insertedRows ?? null,
-      counts.updatedRows ?? null,
-      counts.skippedRows ?? null,
-      counts.totalRows ?? null,
-      status,
-    ]
-  );
-}
-
-export async function appendJobError(
-  jobId: string,
-  errorDetail: RowErrorDetail
-): Promise<void> {
-  await query(
-    `UPDATE import_jobs
-     SET error_rows = error_rows || $2::jsonb
-     WHERE id = $1`,
-    [jobId, JSON.stringify([errorDetail])]
-  );
-}
-
-export async function finalizeImportJob(
-  jobId: string,
-  status: 'done' | 'failed',
-  finalCounts?: {
-    processedRows: number;
-    insertedRows: number;
-    updatedRows: number;
-    skippedRows: number;
+): Promise<ImportJobRow> {
+  const record = await importQueries.getImportJobById(orgId, jobId);
+  if (!record) {
+    throw new AppError('Import job not found', 404);
   }
-): Promise<void> {
-  if (finalCounts) {
-    await query(
-      `UPDATE import_jobs
-       SET status         = $2,
-           processed_rows = $3,
-           inserted_rows  = $4,
-           updated_rows   = $5,
-           skipped_rows   = $6
-       WHERE id = $1`,
-      [
-        jobId,
-        status,
-        finalCounts.processedRows,
-        finalCounts.insertedRows,
-        finalCounts.updatedRows,
-        finalCounts.skippedRows,
-      ]
-    );
-  } else {
-    await query(
-      `UPDATE import_jobs
-       SET status = $2
-       WHERE id = $1`,
-      [jobId, status]
-    );
-  }
+  return record;
 }
 </file>
 
@@ -12662,553 +12525,157 @@ if (require.main === module) {
 }
 </file>
 
-<file path="src/verticals/books/import/import.worker.ts">
+<file path="src/verticals/books/import/import.queries.ts">
+// src/verticals/books/import/import.queries.ts
 // =============================================================================
-// soko-api/src/verticals/books/import/import.worker.ts
-// Ingestion Worker with Pre-Flight Duplicate Merging and R2 Asset Deduplication.
+// Database queries for import_jobs with granular telemetry metrics and diagnostics.
 // =============================================================================
 
-import { Worker, Job } from 'bullmq';
-import ExcelJS from 'exceljs';
-//import axios from 'axios';
-import fs from 'fs';
-import { v2 as cloudinary } from 'cloudinary';
-import { pool } from '../../../config/db';
-import { env } from '../../../config/env';
-import { redisConnection } from './import.service';
-import * as importQueries from './import.queries';
-import { streamRemoteUrlToR2 } from '../../../services/r2.service';
-import { findBestBookCover } from '../../../services/bookCover.service';
-import {
-  findOrCreateCategoryByName,
-  insertProductTransactional,
-  insertInventoryTransactional,
-  insertProductImageTransactional,
-} from '../../../modules/products/products.queries';
-import { createProductFormat } from '../../../modules/product-formats/product-formats.queries';
+import { query } from '../../../config/db';
 
-cloudinary.config({
-  cloud_name: env.CLOUDINARY_CLOUD_NAME,
-  api_key: env.CLOUDINARY_API_KEY,
-  api_secret: env.CLOUDINARY_API_SECRET,
-});
+export type ImportJobSource = 'excel' | 'google_sheet';
+export type ImportJobStatus = 'queued' | 'processing' | 'done' | 'failed';
 
-interface ImportJobPayload {
-  jobId: string;
-  orgId: string;
-  source: 'excel' | 'google_sheet';
-  filePath?: string;
-  sheetUrl?: string;
+export interface RowErrorDetail {
+  row: number;
+  title?: string;
+  error: string;
 }
 
-interface ParsedBookRow {
-  rowNumber: number;
-  title: string;
-  author?: string;
-  sku?: string;
-  isbn?: string;
-  category?: string;
-  description?: string;
-  regularPrice?: number;
-  salePrice?: number;
-  hardcopyStock?: number;
-  pdfPrice?: number;
-  pdfCompareAtPrice?: number;
-  pdfFileUrl?: string;
-  epubPrice?: number;
-  epubCompareAtPrice?: number;
-  epubFileUrl?: string;
-  coverImageUrl?: string;
-  coverBuffer?: Buffer;
+export interface ImportJobRow {
+  id: string;
+  org_id: string;
+  source: ImportJobSource;
+  status: ImportJobStatus;
+  total_rows: number | null;
+  processed_rows: number;
+  inserted_rows: number;
+  updated_rows: number;
+  skipped_rows: number;
+  error_rows: RowErrorDetail[];
+  created_at: Date;
 }
 
-function extractCellString(cellValue: any): string {
-  if (cellValue === null || cellValue === undefined) return '';
-  if (typeof cellValue === 'string') return cellValue.trim();
-  if (typeof cellValue === 'number' || typeof cellValue === 'boolean') return String(cellValue).trim();
+const IMPORT_JOB_FIELDS = `
+  id, org_id, source, status, total_rows, processed_rows,
+  inserted_rows, updated_rows, skipped_rows, error_rows, created_at
+`;
 
-  if (typeof cellValue === 'object') {
-    if (cellValue.hyperlink) return String(cellValue.hyperlink).trim();
-    if (cellValue.text) return String(cellValue.text).trim();
-    if (cellValue.result) return String(cellValue.result).trim();
-    if (Array.isArray(cellValue.richText)) {
-      return cellValue.richText.map((t: any) => t.text || '').join('').trim();
-    }
-  }
-
-  return String(cellValue).trim();
-}
-
-function sanitizeGoogleDriveUrl(rawVal: any): string | undefined {
-  const urlStr = extractCellString(rawVal);
-  if (!urlStr || urlStr.length < 5) return undefined;
-
-  const match = urlStr.match(/\/d\/([a-zA-Z0-9_-]+)/) || urlStr.match(/id=([a-zA-Z0-9_-]+)/);
-  if (match && match[1]) {
-    return `https://drive.google.com/uc?export=download&id=${match[1]}&confirm=t`;
-  }
-  return urlStr;
-}
-
-async function uploadCoverToCloudinary(
+export async function createImportJob(
   orgId: string,
-  imageSource: { buffer?: Buffer; url?: string }
-): Promise<{ url: string; publicId: string } | null> {
-  const folder = `flemela/${orgId}/products`;
-
-  if (imageSource.buffer) {
-    return new Promise((resolve) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
-        { folder, resource_type: 'image' },
-        (error, result) => {
-          if (error || !result) resolve(null);
-          else resolve({ url: result.secure_url, publicId: result.public_id });
-        }
-      );
-      uploadStream.end(imageSource.buffer);
-    });
-  }
-
-  if (imageSource.url) {
-    try {
-      const result = await cloudinary.uploader.upload(imageSource.url, {
-        folder,
-        resource_type: 'image',
-      });
-      return { url: result.secure_url, publicId: result.public_id };
-    } catch {
-      return null;
-    }
-  }
-
-  return null;
+  source: ImportJobSource
+): Promise<ImportJobRow> {
+  const result = await query<ImportJobRow>(
+    `INSERT INTO import_jobs (
+       org_id, source, status, total_rows, processed_rows,
+       inserted_rows, updated_rows, skipped_rows, error_rows
+     )
+     VALUES ($1, $2, 'queued', NULL, 0, 0, 0, 0, '[]'::jsonb)
+     RETURNING ${IMPORT_JOB_FIELDS}`,
+    [orgId, source]
+  );
+  return result.rows[0];
 }
 
-function normalizeHeader(val: any): string {
-  return String(val || '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]/g, '');
+export async function getImportJobById(
+  orgId: string,
+  jobId: string
+): Promise<ImportJobRow | null> {
+  const result = await query<ImportJobRow>(
+    `SELECT ${IMPORT_JOB_FIELDS}
+     FROM   import_jobs
+     WHERE  org_id = $1 AND id = $2`,
+    [orgId, jobId]
+  );
+  return result.rows[0] ?? null;
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function processExcelFile(
+export async function updateJobProgress(
   jobId: string,
-  orgId: string,
-  filePath: string
-): Promise<void> {
-  const workbook = new ExcelJS.Workbook();
-
-  try {
-    await workbook.xlsx.readFile(filePath);
-  } catch {
-    await workbook.csv.readFile(filePath);
-  }
-
-  const worksheet = workbook.worksheets[0];
-  if (!worksheet) {
-    throw new Error('Spreadsheet contains no valid worksheet');
-  }
-
-  const headerMap: Record<string, number> = {};
-  const firstRow = worksheet.getRow(1);
-
-  firstRow.eachCell((cell, colNumber) => {
-    const norm = normalizeHeader(cell.value);
-    headerMap[norm] = colNumber;
-  });
-
-  const titleCol = headerMap['name'] || headerMap['title'] || headerMap['booktitle'];
-  if (!titleCol) {
-    throw new Error('Spreadsheet must have a "Name" or "Title" column header');
-  }
-
-  const imageMapByRow: Record<number, Buffer> = {};
-  try {
-    const images = worksheet.getImages();
-    for (const img of images) {
-      const media = workbook.model.media?.find((m: any) => m.index === (img as any).imageId);
-      if (media && media.buffer) {
-        const row = Math.floor((img as any).range.tl.row) + 1;
-        imageMapByRow[row] = Buffer.from(media.buffer);
-      }
-    }
-  } catch {
-    // Non-blocking preview extract
-  }
-
-  const totalRows = Math.max(0, worksheet.rowCount - 1);
-  await importQueries.updateJobProgress(jobId, { processedRows: 0, totalRows }, 'processing');
-
-  let processedCount = 0;
-  let insertedCount = 0;
-  let updatedCount = 0;
-  let skippedCount = 0;
-
-  for (let r = 2; r <= worksheet.rowCount; r++) {
-    const row = worksheet.getRow(r);
-    const titleVal = extractCellString(row.getCell(titleCol).value);
-
-    if (!titleVal) continue;
-
-    try {
-      const getVal = (keys: string[]): any => {
-        for (const k of keys) {
-          const col = headerMap[k];
-          if (col) {
-            const v = row.getCell(col).value;
-            if (v !== null && v !== undefined) return v;
-          }
-        }
-        return null;
-      };
-
-      const description = extractCellString(getVal(['description', 'synopsis']));
-      const sku = extractCellString(getVal(['sellersku', 'sku', 'isbn', 'barcode']));
-      const category = extractCellString(getVal(['primarycategory', 'category', 'genre']));
-      const author = extractCellString(getVal(['author', 'authorname']));
-
-      const regularPrice = parseFloat(extractCellString(getVal(['pricekes', 'price', 'regularprice'])) || '0');
-      const salePrice = parseFloat(extractCellString(getVal(['salepricekes', 'saleprice', 'discountedprice'])) || '0');
-      const hardcopyStock = parseInt(extractCellString(getVal(['stock', 'quantity', 'hardcopystock'])) || '10', 10);
-
-      const pdfFileUrl = sanitizeGoogleDriveUrl(getVal(['pdffile', 'pdffileurl', 'pdfurl', 'pdflink']));
-      const pdfPrice = parseFloat(extractCellString(getVal(['pdfsprice', 'pdfprice', 'ebookprice'])) || '0');
-      const epubFileUrl = sanitizeGoogleDriveUrl(getVal(['epubfile', 'epubfileurl', 'epuburl', 'epublink']));
-      const epubPrice = parseFloat(extractCellString(getVal(['epubsprice', 'epubprice'])) || '0');
-
-      const coverImageUrl = extractCellString(getVal(['image1', 'image2', 'coverimageurl', 'coverurl']));
-      const coverBuffer = imageMapByRow[r];
-
-      const outcome = await upsertBookFromImport(orgId, {
-        rowNumber: r,
-        title: titleVal,
-        author: author || undefined,
-        sku: sku || undefined,
-        isbn: sku || undefined,
-        category: category || 'General',
-        description: description || undefined,
-        regularPrice: regularPrice > 0 ? regularPrice : undefined,
-        salePrice: salePrice > 0 ? salePrice : (regularPrice > 0 ? regularPrice : undefined),
-        hardcopyStock: hardcopyStock >= 0 ? hardcopyStock : 10,
-        pdfPrice: pdfPrice > 0 ? pdfPrice : undefined,
-        pdfFileUrl,
-        epubPrice: epubPrice > 0 ? epubPrice : undefined,
-        epubFileUrl,
-        coverImageUrl: coverImageUrl || undefined,
-        coverBuffer,
-      });
-
-      if (outcome === 'inserted') insertedCount++;
-      else if (outcome === 'updated') updatedCount++;
-      else skippedCount++;
-
-      processedCount++;
-    } catch (rowErr: any) {
-      await importQueries.appendJobError(jobId, {
-        row: r,
-        title: titleVal,
-        error: rowErr.message || 'Row processing failed',
-      });
-    } finally {
-      if (r % 5 === 0) {
-        await importQueries.updateJobProgress(
-          jobId,
-          {
-            processedRows: processedCount,
-            insertedRows: insertedCount,
-            updatedRows: updatedCount,
-            skippedRows: skippedCount,
-          },
-          'processing'
-        );
-      }
-      await sleep(100);
-    }
-  }
-
-  await importQueries.finalizeImportJob(jobId, 'done', {
-    processedRows: processedCount,
-    insertedRows: insertedCount,
-    updatedRows: updatedCount,
-    skippedRows: skippedCount,
-  });
-
-  fs.unlink(filePath, () => {});
-}
-
-/**
- * Smart Pre-Flight Check: Upserts existing books by SKU or Title/Author without duplication.
- */
-async function upsertBookFromImport(
-  orgId: string,
-  row: ParsedBookRow
-): Promise<'inserted' | 'updated' | 'skipped'> {
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN');
-
-    // 1. Resolve Category
-    const categoryName = row.category || 'General';
-    const categoryId = await findOrCreateCategoryByName(client, orgId, categoryName);
-
-    // 2. Pre-Flight Duplicate Lookup: Match on SKU first, or fallback to exact Title & Author
-    let existingProductId: string | null = null;
-
-    if (row.sku && row.sku.trim()) {
-      const skuCheck = await client.query<{ id: string }>(
-        `SELECT id FROM products WHERE org_id = $1 AND LOWER(TRIM(sku)) = LOWER(TRIM($2)) AND deleted_at IS NULL LIMIT 1`,
-        [orgId, row.sku.trim()]
-      );
-      if (skuCheck.rows.length > 0) {
-        existingProductId = skuCheck.rows[0].id;
-      }
-    }
-
-    if (!existingProductId) {
-      const titleCheck = await client.query<{ id: string }>(
-        `SELECT id FROM products WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) AND deleted_at IS NULL LIMIT 1`,
-        [orgId, row.title.trim()]
-      );
-      if (titleCheck.rows.length > 0) {
-        existingProductId = titleCheck.rows[0].id;
-      }
-    }
-
-    // 3. Price and Discount Normalization
-    let sellingPrice = row.salePrice || row.regularPrice || row.pdfPrice || row.epubPrice || 999;
-    let compareAtPrice: number | null = null;
-
-    if (row.regularPrice && row.salePrice && row.regularPrice > row.salePrice) {
-      sellingPrice = row.salePrice;
-      compareAtPrice = row.regularPrice;
-    }
-
-    let targetImageUrl: string | null = null;
-    let targetImageBuffer: Buffer | undefined = undefined;
-
-    // Only discover/upload cover if it's a new book or existing product has no images
-    if (!existingProductId) {
-      try {
-        const discovered = await findBestBookCover(row.title, row.author, row.isbn || row.sku);
-        if (discovered.coverUrl) {
-          targetImageUrl = discovered.coverUrl;
-        }
-      } catch {
-        // Non-blocking fallback
-      }
-
-      if (!targetImageUrl) {
-        targetImageUrl = row.coverImageUrl || null;
-        targetImageBuffer = row.coverBuffer;
-      }
-    }
-
-    let finalImageUrl: string | null = targetImageUrl;
-    let finalImagePublicId = 'cover_img';
-
-    if (targetImageBuffer || targetImageUrl) {
-      const uploadedImage = await uploadCoverToCloudinary(orgId, {
-        buffer: targetImageBuffer,
-        url: targetImageUrl || undefined,
-      });
-
-      if (uploadedImage) {
-        finalImageUrl = uploadedImage.url;
-        finalImagePublicId = uploadedImage.publicId;
-      }
-    }
-
-    let productId = existingProductId;
-    let outcome: 'inserted' | 'updated' = 'inserted';
-
-    if (existingProductId) {
-      // -----------------------------------------------------------------------
-      // EXISTING BOOK: Update without creating duplicates
-      // -----------------------------------------------------------------------
-      outcome = 'updated';
-      await client.query(
-        `UPDATE products
-         SET category_id      = $2,
-             price            = $3,
-             compare_at_price = $4,
-             sku              = COALESCE(products.sku, $5),
-             description      = COALESCE($6, products.description),
-             badge            = (CASE WHEN $4 IS NOT NULL THEN 'FLASH_SALE' ELSE products.badge END),
-             updated_at       = NOW()
-         WHERE id = $1 AND org_id = $7`,
-        [
-          existingProductId,
-          categoryId,
-          sellingPrice,
-          compareAtPrice,
-          row.sku || null,
-          row.description || (row.author ? `By ${row.author}` : null),
-          orgId,
-        ]
-      );
-
-      // Increment / update physical inventory stock
-      if (row.hardcopyStock !== undefined) {
-        await client.query(
-          `UPDATE inventory SET stock = stock + $2, updated_at = NOW() WHERE product_id = $1`,
-          [existingProductId, row.hardcopyStock]
-        );
-      }
-    } else {
-      // -----------------------------------------------------------------------
-      // NEW BOOK: Insert fresh product
-      // -----------------------------------------------------------------------
-      outcome = 'inserted';
-      const cleanSlugTitle = row.title
-        .toLowerCase()
-        .trim()
-        .replace(/[^a-z0-9]/g, '-')
-        .replace(/-+/g, '-')
-        .slice(0, 50);
-      const slug = `${cleanSlugTitle}-${Date.now().toString().slice(-4)}`;
-
-      productId = await insertProductTransactional(client, orgId, {
-        category_id: categoryId,
-        name: row.title,
-        slug,
-        sku: row.sku || null,
-        description: row.description || (row.author ? `By ${row.author}` : null),
-        cost_price: null,
-        price: sellingPrice,
-        compare_at_price: compareAtPrice,
-        badge: compareAtPrice ? 'FLASH_SALE' : null,
-        status: 'published',
-      });
-
-      await insertInventoryTransactional(client, productId, row.hardcopyStock || 10);
-
-      if (finalImageUrl) {
-        await insertProductImageTransactional(
-          client,
-          productId,
-          finalImageUrl,
-          finalImagePublicId,
-          0
-        );
-      }
-    }
-
-    await client.query('COMMIT');
-
-    // 4. Formats Upsert (Hardcopy)
-    if (productId && sellingPrice) {
-      await createProductFormat(orgId, productId, {
-        format: 'hardcopy',
-        price: sellingPrice,
-        compareAtPrice,
-        stock: row.hardcopyStock ?? 10,
-      });
-    }
-
-    // 5. Digital PDF File (Only stream to R2 if format file does not already exist)
-    if (productId && row.pdfPrice && row.pdfFileUrl) {
-      const existingPdf = await pool.query<{ file_url: string | null }>(
-        `SELECT file_url FROM product_formats WHERE product_id = $1 AND format = 'pdf'`,
-        [productId]
-      );
-
-      let r2Key = existingPdf.rows[0]?.file_url || null;
-      let r2SizeBytes: number | null = null;
-
-      // Stream to R2 only if absent
-      if (!r2Key && env.R2_ACCOUNT_ID && env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY) {
-        try {
-          const cleanName = row.title.toLowerCase().trim().replace(/[^a-z0-9]/g, '-').slice(0, 30);
-          const streamResult = await streamRemoteUrlToR2(
-            row.pdfFileUrl,
-            orgId,
-            `${cleanName}.pdf`,
-            'application/pdf'
-          );
-          r2Key = streamResult.key;
-          r2SizeBytes = streamResult.fileSizeBytes;
-        } catch {
-          r2Key = row.pdfFileUrl;
-        }
-      }
-
-      await createProductFormat(orgId, productId, {
-        format: 'pdf',
-        price: row.pdfPrice,
-        compareAtPrice: null,
-        fileUrl: r2Key || row.pdfFileUrl,
-        filePublicId: r2Key,
-        fileSizeBytes: r2SizeBytes,
-      });
-    }
-
-    // 6. Digital EPUB File
-    if (productId && row.epubPrice && row.epubFileUrl) {
-      const existingEpub = await pool.query<{ file_url: string | null }>(
-        `SELECT file_url FROM product_formats WHERE product_id = $1 AND format = 'epub'`,
-        [productId]
-      );
-
-      let r2Key = existingEpub.rows[0]?.file_url || null;
-      let r2SizeBytes: number | null = null;
-
-      if (!r2Key && env.R2_ACCOUNT_ID && env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY) {
-        try {
-          const cleanName = row.title.toLowerCase().trim().replace(/[^a-z0-9]/g, '-').slice(0, 30);
-          const streamResult = await streamRemoteUrlToR2(
-            row.epubFileUrl,
-            orgId,
-            `${cleanName}.epub`,
-            'application/epub+zip'
-          );
-          r2Key = streamResult.key;
-          r2SizeBytes = streamResult.fileSizeBytes;
-        } catch {
-          r2Key = row.epubFileUrl;
-        }
-      }
-
-      await createProductFormat(orgId, productId, {
-        format: 'epub',
-        price: row.epubPrice,
-        compareAtPrice: null,
-        fileUrl: r2Key || row.epubFileUrl,
-        filePublicId: r2Key,
-        fileSizeBytes: r2SizeBytes,
-      });
-    }
-
-    return outcome;
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-export const bookImportWorker = new Worker<ImportJobPayload>(
-  'book-import-queue',
-  async (job: Job<ImportJobPayload>) => {
-    const { jobId, orgId, source, filePath } = job.data;
-
-    try {
-      if (source === 'excel' && filePath) {
-        await processExcelFile(jobId, orgId, filePath);
-      }
-    } catch (err: any) {
-      await importQueries.finalizeImportJob(jobId, 'failed');
-      throw err;
-    }
+  counts: {
+    processedRows: number;
+    insertedRows?: number;
+    updatedRows?: number;
+    skippedRows?: number;
+    totalRows?: number;
   },
-  {
-    connection: redisConnection,
-    concurrency: 2,
+  status: ImportJobStatus = 'processing'
+): Promise<void> {
+  await query(
+    `UPDATE import_jobs
+     SET processed_rows = $2,
+         inserted_rows  = COALESCE($3, inserted_rows),
+         updated_rows   = COALESCE($4, updated_rows),
+         skipped_rows   = COALESCE($5, skipped_rows),
+         total_rows     = COALESCE($6, total_rows),
+         status         = $7
+     WHERE id = $1`,
+    [
+      jobId,
+      counts.processedRows,
+      counts.insertedRows ?? null,
+      counts.updatedRows ?? null,
+      counts.skippedRows ?? null,
+      counts.totalRows ?? null,
+      status,
+    ]
+  );
+}
+
+export async function appendJobError(
+  jobId: string,
+  errorDetail: RowErrorDetail
+): Promise<void> {
+  await query(
+    `UPDATE import_jobs
+     SET error_rows = error_rows || $2::jsonb
+     WHERE id = $1`,
+    [jobId, JSON.stringify([errorDetail])]
+  );
+}
+
+export async function finalizeImportJob(
+  jobId: string,
+  status: 'done' | 'failed',
+  finalCounts?: {
+    processedRows: number;
+    insertedRows: number;
+    updatedRows: number;
+    skippedRows: number;
+  },
+  topLevelError?: string
+): Promise<void> {
+  if (topLevelError) {
+    await appendJobError(jobId, { row: 0, error: topLevelError });
   }
-);
+
+  if (finalCounts) {
+    await query(
+      `UPDATE import_jobs
+       SET status         = $2,
+           processed_rows = $3,
+           inserted_rows  = $4,
+           updated_rows   = $5,
+           skipped_rows   = $6
+       WHERE id = $1`,
+      [
+        jobId,
+        status,
+        finalCounts.processedRows,
+        finalCounts.insertedRows,
+        finalCounts.updatedRows,
+        finalCounts.skippedRows,
+      ]
+    );
+  } else {
+    await query(
+      `UPDATE import_jobs
+       SET status = $2
+       WHERE id = $1`,
+      [jobId, status]
+    );
+  }
+}
 </file>
 
 <file path="src/modules/products/products.controller.ts">
@@ -13911,6 +13378,800 @@ export async function ledger(
 export async function dashboardSummary(orgId: string): Promise<DashboardSummary> {
   return getDashboardSummary(orgId);
 }
+</file>
+
+<file path="src/services/bookCover.service.ts">
+// =============================================================================
+// soko-api/src/services/bookCover.service.ts
+// Multi-Source High-Resolution Book Cover Discovery Engine
+// =============================================================================
+
+import axios from 'axios';
+
+export interface CoverSearchResult {
+  coverUrl: string | null;
+  title: string;
+  author?: string;
+  source: 'googlebooks' | 'openlibrary' | null;
+}
+
+function cleanQueryString(input: string): string {
+  return (input || '')
+    .replace(/\s*[\(\[\{][^\)\]\}]*[\)\]\}]/g, ' ')
+    .replace(/:\s*.*$/, '')
+    .replace(/[^\w\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Sanitizes Google Books public image URL (uses unrestricted public content stream)
+ */
+function cleanGoogleBooksUrl(rawUrl: string, volumeId?: string): string {
+  if (volumeId) {
+    return `https://books.google.com/books/content?id=${volumeId}&printsec=frontcover&img=1&zoom=1`;
+  }
+  return rawUrl.replace(/^http:\/\//i, 'https://').replace(/&edge=curl/g, '');
+}
+
+export async function findBestBookCover(
+  rawTitle: string,
+  rawAuthor?: string,
+  rawIsbn?: string
+): Promise<CoverSearchResult> {
+  const title = cleanQueryString(rawTitle);
+  const author = rawAuthor ? cleanQueryString(rawAuthor) : '';
+  const cleanIsbn = (rawIsbn || '').replace(/[^0-9X]/gi, '');
+  const hasValidIsbn = cleanIsbn.length === 10 || cleanIsbn.length === 13;
+
+  if (!title && !hasValidIsbn) {
+    return { coverUrl: null, title: rawTitle, source: null };
+  }
+
+  // 1. Strict Google Books query: matches exact title and author metadata
+  try {
+    const query = hasValidIsbn
+      ? `isbn:${cleanIsbn}`
+      : author
+        ? `intitle:"${title}"+inauthor:"${author}"`
+        : `intitle:"${title}"`;
+
+    const gbooksUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(
+      query
+    )}&maxResults=1&printType=books`;
+    const res = await axios.get(gbooksUrl, { timeout: 4500 });
+
+    const items = res.data?.items || [];
+    if (items.length > 0) {
+      const item = items[0];
+      const volumeId = item.id;
+      const volumeInfo = item.volumeInfo || {};
+      const imageLinks = volumeInfo.imageLinks;
+
+      if (imageLinks) {
+        const rawCover =
+          imageLinks.extraLarge ||
+          imageLinks.large ||
+          imageLinks.medium ||
+          imageLinks.thumbnail ||
+          imageLinks.smallThumbnail;
+
+        if (rawCover && typeof rawCover === 'string' && rawCover.length > 10) {
+          return {
+            coverUrl: cleanGoogleBooksUrl(rawCover, volumeId),
+            title: volumeInfo.title || rawTitle,
+            author: volumeInfo.authors?.[0] || rawAuthor,
+            source: 'googlebooks',
+          };
+        }
+      }
+    }
+  } catch {
+    // Non-blocking fallback to Open Library
+  }
+
+  // 2. Direct Open Library Work Search (Zero Rate Limits, Returns Stable Cover ID)
+  try {
+    const olUrl = `https://openlibrary.org/search.json?title=${encodeURIComponent(title)}${
+      author ? `&author=${encodeURIComponent(author)}` : ''
+    }&limit=3`;
+    const olRes = await axios.get(olUrl, {
+      timeout: 4000,
+      headers: { 'User-Agent': 'FlemelaBookstore/2.0 (contact@flemela.co.ke)' },
+    });
+
+    const docs = olRes.data?.docs || [];
+    for (const doc of docs) {
+      if (doc.cover_i) {
+        return {
+          coverUrl: `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`,
+          title: doc.title || rawTitle,
+          author: doc.author_name?.[0] || rawAuthor,
+          source: 'openlibrary',
+        };
+      }
+    }
+  } catch {
+    // Non-blocking fallback
+  }
+
+  return { coverUrl: null, title: rawTitle, source: null };
+}
+</file>
+
+<file path="src/verticals/books/import/import.worker.ts">
+// =============================================================================
+// soko-api/src/verticals/books/import/import.worker.ts
+// Ingestion Worker: Resilient Dual Parser, Currency Sanitizer & Atomic Transactions.
+// =============================================================================
+
+import { Worker, Job } from 'bullmq';
+import ExcelJS from 'exceljs';
+import axios from 'axios';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import crypto from 'crypto';
+import { v2 as cloudinary } from 'cloudinary';
+import { pool } from '../../../config/db';
+import { env } from '../../../config/env';
+import { createRedisConnection } from './import.service';
+import * as importQueries from './import.queries';
+import { findBestBookCover } from '../../../services/bookCover.service';
+import {
+  findOrCreateCategoryByName,
+  insertProductTransactional,
+  insertInventoryTransactional,
+  insertProductImageTransactional,
+} from '../../../modules/products/products.queries';
+
+cloudinary.config({
+  cloud_name: env.CLOUDINARY_CLOUD_NAME,
+  api_key: env.CLOUDINARY_API_KEY,
+  api_secret: env.CLOUDINARY_API_SECRET,
+});
+
+interface ImportJobPayload {
+  jobId: string;
+  orgId: string;
+  source: 'excel' | 'google_sheet';
+  filePath?: string;
+  sheetUrl?: string;
+}
+
+interface ParsedBookRow {
+  rowNumber: number;
+  title: string;
+  author?: string;
+  sku?: string;
+  isbn?: string;
+  category?: string;
+  description?: string;
+  regularPrice?: number;
+  salePrice?: number;
+  hardcopyStock?: number;
+  pdfPrice?: number;
+  pdfCompareAtPrice?: number;
+  pdfFileUrl?: string;
+  epubPrice?: number;
+  epubCompareAtPrice?: number;
+  epubFileUrl?: string;
+  coverImageUrl?: string;
+  coverBuffer?: Buffer;
+}
+
+function extractCellString(cellValue: any): string {
+  if (cellValue === null || cellValue === undefined) return '';
+  if (typeof cellValue === 'string') return cellValue.trim();
+  if (typeof cellValue === 'number' || typeof cellValue === 'boolean') return String(cellValue).trim();
+
+  if (typeof cellValue === 'object') {
+    if (cellValue.hyperlink) return String(cellValue.hyperlink).trim();
+    if (cellValue.text) return String(cellValue.text).trim();
+    if (cellValue.result) return String(cellValue.result).trim();
+    if (Array.isArray(cellValue.richText)) {
+      return cellValue.richText.map((t: any) => t.text || '').join('').trim();
+    }
+  }
+
+  return String(cellValue).trim();
+}
+
+/**
+ * Strips currency symbols (KSh, $, etc.), commas, spaces, and parses numbers safely.
+ */
+function parseCleanNumber(val: any, fallback = 0): number {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === 'number') return isNaN(val) ? fallback : Math.max(0, val);
+
+  const rawStr = extractCellString(val);
+  if (!rawStr) return fallback;
+
+  const cleaned = rawStr.replace(/[^0-9.]/g, '');
+  const parsed = parseFloat(cleaned);
+  return isNaN(parsed) ? fallback : Math.max(0, parsed);
+}
+
+function parseCleanInt(val: any, fallback = 10): number {
+  if (val === null || val === undefined) return fallback;
+  const rawStr = extractCellString(val);
+  if (rawStr === '') return fallback;
+
+  const cleaned = rawStr.replace(/[^0-9-]/g, '');
+  const parsed = parseInt(cleaned, 10);
+  return isNaN(parsed) ? fallback : Math.max(0, parsed);
+}
+
+function sanitizeGoogleDriveUrl(rawVal: any): string | undefined {
+  const urlStr = extractCellString(rawVal);
+  if (!urlStr || urlStr.length < 5) return undefined;
+
+  const match = urlStr.match(/\/d\/([a-zA-Z0-9_-]+)/) || urlStr.match(/id=([a-zA-Z0-9_-]+)/);
+  if (match && match[1]) {
+    return `https://drive.google.com/uc?export=download&id=${match[1]}&confirm=t`;
+  }
+  return urlStr;
+}
+
+function normalizeHeader(val: any): string {
+  return String(val || '')
+    .toLowerCase()
+    .replace(/^\uFEFF/, '') // Strip UTF-8 BOM
+    .trim()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Sniffs delimiters (comma, semicolon, tab) by checking the first line of a CSV.
+ */
+function sniffCsvDelimiter(filePath: string): string {
+  try {
+    const buffer = Buffer.alloc(2048);
+    const fd = fs.openSync(filePath, 'r');
+    const bytesRead = fs.readSync(fd, buffer, 0, 2048, 0);
+    fs.closeSync(fd);
+
+    const text = buffer.toString('utf8', 0, bytesRead).split(/\r?\n/)[0] || '';
+    const commas = (text.match(/,/g) || []).length;
+    const semicolons = (text.match(/;/g) || []).length;
+    const tabs = (text.match(/\t/g) || []).length;
+
+    if (semicolons > commas && semicolons > tabs) return ';';
+    if (tabs > commas && tabs > semicolons) return '\t';
+    return ',';
+  } catch {
+    return ',';
+  }
+}
+
+async function loadWorkbookSafely(filePath: string): Promise<ExcelJS.Workbook> {
+  const ext = path.extname(filePath).toLowerCase();
+
+  // 1. Direct CSV branch
+  if (ext === '.csv') {
+    const csvWorkbook = new ExcelJS.Workbook();
+    const delimiter = sniffCsvDelimiter(filePath);
+    await csvWorkbook.csv.readFile(filePath, {
+      parserOptions: { delimiter },
+    });
+    return csvWorkbook;
+  }
+
+  // 2. XLSX branch with fallback for misnamed CSV files
+  const xlsxWorkbook = new ExcelJS.Workbook();
+  try {
+    await xlsxWorkbook.xlsx.readFile(filePath);
+    return xlsxWorkbook;
+  } catch (xlsxErr: any) {
+    try {
+      const fallbackCsvWorkbook = new ExcelJS.Workbook();
+      const delimiter = sniffCsvDelimiter(filePath);
+      await fallbackCsvWorkbook.csv.readFile(filePath, {
+        parserOptions: { delimiter },
+      });
+      return fallbackCsvWorkbook;
+    } catch {
+      throw new Error(
+        `Failed to parse spreadsheet. Ensure it is a valid .xlsx or .csv file. (${xlsxErr.message})`
+      );
+    }
+  }
+}
+
+async function uploadCoverToCloudinary(
+  orgId: string,
+  imageSource: { buffer?: Buffer; url?: string }
+): Promise<{ url: string; publicId: string } | null> {
+  const folder = `flemela/${orgId}/products`;
+
+  if (imageSource.buffer) {
+    return new Promise((resolve) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        { folder, resource_type: 'image' },
+        (error, result) => {
+          if (error || !result) resolve(null);
+          else resolve({ url: result.secure_url, publicId: result.public_id });
+        }
+      );
+      uploadStream.end(imageSource.buffer);
+    });
+  }
+
+  if (imageSource.url) {
+    try {
+      const result = await cloudinary.uploader.upload(imageSource.url, {
+        folder,
+        resource_type: 'image',
+      });
+      return { url: result.secure_url, publicId: result.public_id };
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function processExcelFile(
+  jobId: string,
+  orgId: string,
+  filePath: string
+): Promise<void> {
+  const workbook = await loadWorkbookSafely(filePath);
+  const worksheet = workbook.worksheets[0];
+
+  if (!worksheet || worksheet.rowCount === 0) {
+    throw new Error('Spreadsheet contains no readable rows or valid worksheet.');
+  }
+
+  const headerMap: Record<string, number> = {};
+  const firstRow = worksheet.getRow(1);
+
+  firstRow.eachCell((cell, colNumber) => {
+    const norm = normalizeHeader(cell.value);
+    if (norm) {
+      headerMap[norm] = colNumber;
+    }
+  });
+
+  const titleCol =
+    headerMap['name'] ||
+    headerMap['title'] ||
+    headerMap['booktitle'] ||
+    headerMap['productname'] ||
+    headerMap['itemname'];
+
+  if (!titleCol) {
+    throw new Error(
+      'Spreadsheet must have a "Name" or "Title" column header. Found headers: ' +
+        Object.keys(headerMap).slice(0, 8).join(', ')
+    );
+  }
+
+  const imageMapByRow: Record<number, Buffer> = {};
+  try {
+    const images = worksheet.getImages();
+    for (const img of images) {
+      const media = workbook.model.media?.find((m: any) => m.index === (img as any).imageId);
+      if (media && media.buffer) {
+        const row = Math.floor((img as any).range.tl.row) + 1;
+        imageMapByRow[row] = Buffer.from(media.buffer);
+      }
+    }
+  } catch {
+    // Non-blocking image preview extraction
+  }
+
+  // Pre-scan non-empty rows for accurate progress calculations
+  let actualDataRows = 0;
+  for (let r = 2; r <= worksheet.rowCount; r++) {
+    const val = extractCellString(worksheet.getRow(r).getCell(titleCol).value);
+    if (val) actualDataRows++;
+  }
+
+  const totalRows = Math.max(1, actualDataRows);
+  await importQueries.updateJobProgress(jobId, { processedRows: 0, totalRows }, 'processing');
+
+  let processedCount = 0;
+  let insertedCount = 0;
+  let updatedCount = 0;
+  let skippedCount = 0;
+
+  const getVal = (row: ExcelJS.Row, keys: string[]): any => {
+    for (const k of keys) {
+      const col = headerMap[k];
+      if (col) {
+        const v = row.getCell(col).value;
+        if (v !== null && v !== undefined) return v;
+      }
+    }
+    return null;
+  };
+
+  for (let r = 2; r <= worksheet.rowCount; r++) {
+    const row = worksheet.getRow(r);
+    const titleVal = extractCellString(row.getCell(titleCol).value);
+
+    if (!titleVal) continue;
+
+    try {
+      const description = extractCellString(getVal(row, ['description', 'synopsis', 'summary', 'about', 'details']));
+      const sku = extractCellString(getVal(row, ['sellersku', 'sku', 'isbn', 'isbn13', 'isbn10', 'barcode']));
+      const category = extractCellString(getVal(row, ['primarycategory', 'category', 'genre', 'categories', 'collection']));
+      const author = extractCellString(getVal(row, ['author', 'authorname', 'writer', 'authors']));
+
+      const regularPrice = parseCleanNumber(getVal(row, ['pricekes', 'price', 'regularprice', 'listprice', 'msrp', 'amount']), 0);
+      const salePrice = parseCleanNumber(getVal(row, ['salepricekes', 'saleprice', 'discountedprice', 'offerprice', 'specialprice']), 0);
+      const hardcopyStock = parseCleanInt(getVal(row, ['stock', 'quantity', 'hardcopystock', 'qty', 'inventory']), 10);
+
+      const pdfFileUrl = sanitizeGoogleDriveUrl(getVal(row, ['pdffile', 'pdffileurl', 'pdfurl', 'pdflink', 'pdf', 'ebookurl']));
+      const pdfPrice = parseCleanNumber(getVal(row, ['pdfsprice', 'pdfprice', 'ebookprice']), 0);
+      const epubFileUrl = sanitizeGoogleDriveUrl(getVal(row, ['epubfile', 'epubfileurl', 'epuburl', 'epublink', 'epub']));
+      const epubPrice = parseCleanNumber(getVal(row, ['epubsprice', 'epubprice']), 0);
+
+      const coverImageUrl = extractCellString(getVal(row, ['image1', 'image2', 'coverimageurl', 'coverurl', 'cover', 'photo', 'image']));
+      const coverBuffer = imageMapByRow[r];
+
+      const outcome = await upsertBookFromImport(orgId, {
+        rowNumber: r,
+        title: titleVal,
+        author: author || undefined,
+        sku: sku || undefined,
+        isbn: sku || undefined,
+        category: category || 'General',
+        description: description || undefined,
+        regularPrice: regularPrice > 0 ? regularPrice : undefined,
+        salePrice: salePrice > 0 ? salePrice : regularPrice > 0 ? regularPrice : undefined,
+        hardcopyStock,
+        pdfPrice: pdfPrice > 0 ? pdfPrice : regularPrice > 0 ? regularPrice : undefined,
+        pdfFileUrl,
+        epubPrice: epubPrice > 0 ? epubPrice : regularPrice > 0 ? regularPrice : undefined,
+        epubFileUrl,
+        coverImageUrl: coverImageUrl || undefined,
+        coverBuffer,
+      });
+
+      if (outcome === 'inserted') insertedCount++;
+      else if (outcome === 'updated') updatedCount++;
+      else skippedCount++;
+
+      processedCount++;
+    } catch (rowErr: any) {
+      await importQueries.appendJobError(jobId, {
+        row: r,
+        title: titleVal,
+        error: rowErr.message || 'Row processing failed',
+      });
+      skippedCount++;
+    } finally {
+      if (r % 5 === 0 || r === worksheet.rowCount) {
+        await importQueries.updateJobProgress(
+          jobId,
+          {
+            processedRows: processedCount,
+            insertedRows: insertedCount,
+            updatedRows: updatedCount,
+            skippedRows: skippedCount,
+          },
+          'processing'
+        );
+      }
+      await sleep(30);
+    }
+  }
+
+  await importQueries.finalizeImportJob(jobId, 'done', {
+    processedRows: processedCount,
+    insertedRows: insertedCount,
+    updatedRows: updatedCount,
+    skippedRows: skippedCount,
+  });
+}
+
+/**
+ * Processes public Google Sheet URLs by exporting directly to CSV.
+ */
+async function processGoogleSheet(
+  jobId: string,
+  orgId: string,
+  sheetUrl: string
+): Promise<void> {
+  const match = sheetUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (!match || !match[1]) {
+    throw new Error('Invalid Google Sheet URL format. Unable to extract Sheet ID.');
+  }
+
+  const sheetId = match[1];
+  const exportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+  const tempFilePath = path.join(os.tmpdir(), `gsheet-${jobId}-${Date.now()}.csv`);
+
+  try {
+    const response = await axios.get(exportUrl, {
+      responseType: 'stream',
+      timeout: 20000,
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const writer = fs.createWriteStream(tempFilePath);
+      response.data.pipe(writer);
+      writer.on('finish', () => resolve());
+      writer.on('error', (err) => reject(err));
+    });
+
+    await processExcelFile(jobId, orgId, tempFilePath);
+  } finally {
+    if (fs.existsSync(tempFilePath)) {
+      fs.unlink(tempFilePath, () => {});
+    }
+  }
+}
+
+/**
+ * Atomic per-book transaction: inserts/updates products, inventory, images, and formats
+ * in a single committed unit.
+ */
+async function upsertBookFromImport(
+  orgId: string,
+  row: ParsedBookRow
+): Promise<'inserted' | 'updated' | 'skipped'> {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // 1. Resolve Category safely
+    const categoryName = row.category || 'General';
+    const categoryId = await findOrCreateCategoryByName(client, orgId, categoryName);
+
+    // 2. Pre-Flight Duplicate Check (SKU first, fallback to exact Title)
+    let existingProductId: string | null = null;
+
+    if (row.sku && row.sku.trim()) {
+      const skuCheck = await client.query<{ id: string }>(
+        `SELECT id FROM products 
+         WHERE org_id = $1 AND LOWER(TRIM(sku)) = LOWER(TRIM($2)) AND deleted_at IS NULL 
+         LIMIT 1`,
+        [orgId, row.sku.trim()]
+      );
+      if (skuCheck.rows.length > 0) {
+        existingProductId = skuCheck.rows[0].id;
+      }
+    }
+
+    if (!existingProductId) {
+      const titleCheck = await client.query<{ id: string }>(
+        `SELECT id FROM products 
+         WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) AND deleted_at IS NULL 
+         LIMIT 1`,
+        [orgId, row.title.trim()]
+      );
+      if (titleCheck.rows.length > 0) {
+        existingProductId = titleCheck.rows[0].id;
+      }
+    }
+
+    // 3. Normalize Price and Discounts (Respecting chk_products_compare_at_price)
+    let sellingPrice = row.salePrice || row.regularPrice || row.pdfPrice || row.epubPrice || 999;
+    let compareAtPrice: number | null = null;
+
+    if (row.regularPrice && row.salePrice && row.regularPrice > row.salePrice) {
+      sellingPrice = row.salePrice;
+      compareAtPrice = row.regularPrice;
+    }
+
+    // 4. Resolve Cover Art
+    let targetImageUrl: string | null = null;
+    let targetImageBuffer: Buffer | undefined = undefined;
+
+    if (!existingProductId) {
+      try {
+        const discovered = await findBestBookCover(row.title, row.author, row.isbn || row.sku);
+        if (discovered.coverUrl) {
+          targetImageUrl = discovered.coverUrl;
+        }
+      } catch {
+        // Non-blocking cover discovery fallback
+      }
+
+      if (!targetImageUrl) {
+        targetImageUrl = row.coverImageUrl || null;
+        targetImageBuffer = row.coverBuffer;
+      }
+    }
+
+    let finalImageUrl: string | null = targetImageUrl;
+    let finalImagePublicId = 'cover_img';
+
+    if (targetImageBuffer || targetImageUrl) {
+      const uploadedImage = await uploadCoverToCloudinary(orgId, {
+        buffer: targetImageBuffer,
+        url: targetImageUrl || undefined,
+      });
+
+      if (uploadedImage) {
+        finalImageUrl = uploadedImage.url;
+        finalImagePublicId = uploadedImage.publicId;
+      }
+    }
+
+    let productId = existingProductId;
+    let outcome: 'inserted' | 'updated' = 'inserted';
+
+    if (existingProductId) {
+      // -----------------------------------------------------------------------
+      // EXISTING BOOK: Sync details & stock
+      // -----------------------------------------------------------------------
+      outcome = 'updated';
+      await client.query(
+        `UPDATE products
+         SET category_id      = $2,
+             price            = $3,
+             compare_at_price = COALESCE($4, compare_at_price),
+             sku              = COALESCE(products.sku, $5),
+             description      = COALESCE($6, products.description),
+             badge            = (CASE WHEN $4 IS NOT NULL THEN 'FLASH_SALE' ELSE products.badge END),
+             updated_at       = NOW()
+         WHERE id = $1 AND org_id = $7`,
+        [
+          existingProductId,
+          categoryId,
+          sellingPrice,
+          compareAtPrice,
+          row.sku || null,
+          row.description || (row.author ? `By ${row.author}` : null),
+          orgId,
+        ]
+      );
+
+      if (row.hardcopyStock !== undefined) {
+        await client.query(
+          `UPDATE inventory 
+           SET stock = $2, updated_at = NOW() 
+           WHERE product_id = $1`,
+          [existingProductId, row.hardcopyStock]
+        );
+      }
+    } else {
+      // -----------------------------------------------------------------------
+      // NEW BOOK: Collision-proof cryptographic slug
+      // -----------------------------------------------------------------------
+      outcome = 'inserted';
+      const cleanSlugTitle = row.title
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]/g, '-')
+        .replace(/-+/g, '-')
+        .slice(0, 45);
+      const slugSuffix = crypto.randomBytes(3).toString('hex');
+      const slug = `${cleanSlugTitle}-${slugSuffix}`;
+
+      productId = await insertProductTransactional(client, orgId, {
+        category_id: categoryId,
+        name: row.title,
+        slug,
+        sku: row.sku || null,
+        description: row.description || (row.author ? `By ${row.author}` : null),
+        cost_price: null,
+        price: sellingPrice,
+        compare_at_price: compareAtPrice,
+        badge: compareAtPrice ? 'FLASH_SALE' : null,
+        status: 'published',
+      });
+
+      await insertInventoryTransactional(client, productId, row.hardcopyStock || 10);
+
+      if (finalImageUrl) {
+        await insertProductImageTransactional(
+          client,
+          productId,
+          finalImageUrl,
+          finalImagePublicId,
+          0
+        );
+      }
+    }
+
+    // 5. Hardcopy Format
+    if (productId && sellingPrice) {
+      await client.query(
+        `INSERT INTO product_formats (
+           product_id, format, price, compare_at_price, stock
+         )
+         VALUES ($1, 'hardcopy', $2, $3, $4)
+         ON CONFLICT (product_id, format) DO UPDATE SET
+           price            = EXCLUDED.price,
+           compare_at_price = EXCLUDED.compare_at_price,
+           stock            = EXCLUDED.stock,
+           updated_at       = NOW()`,
+        [productId, sellingPrice, compareAtPrice, row.hardcopyStock ?? 10]
+      );
+    }
+
+    // 6. Digital PDF Format (Inherits price if omitted)
+    if (productId && (row.pdfFileUrl || row.pdfPrice)) {
+      const formatPrice = row.pdfPrice && row.pdfPrice > 0 ? row.pdfPrice : sellingPrice;
+
+      await client.query(
+        `INSERT INTO product_formats (
+           product_id, format, price, compare_at_price, file_url, file_public_id
+         )
+         VALUES ($1, 'pdf', $2, NULL, $3, $3)
+         ON CONFLICT (product_id, format) DO UPDATE SET
+           price            = EXCLUDED.price,
+           file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
+           file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
+           updated_at       = NOW()`,
+        [productId, formatPrice, row.pdfFileUrl || null]
+      );
+    }
+
+    // 7. Digital EPUB Format
+    if (productId && (row.epubFileUrl || row.epubPrice)) {
+      const formatPrice = row.epubPrice && row.epubPrice > 0 ? row.epubPrice : sellingPrice;
+
+      await client.query(
+        `INSERT INTO product_formats (
+           product_id, format, price, compare_at_price, file_url, file_public_id
+         )
+         VALUES ($1, 'epub', $2, NULL, $3, $3)
+         ON CONFLICT (product_id, format) DO UPDATE SET
+           price            = EXCLUDED.price,
+           file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
+           file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
+           updated_at       = NOW()`,
+        [productId, formatPrice, row.epubFileUrl || null]
+      );
+    }
+
+    await client.query('COMMIT');
+    return outcome;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Dedicated BullMQ Worker with isolated Redis connection
+export const bookImportWorker = new Worker<ImportJobPayload>(
+  'book-import-queue',
+  async (job: Job<ImportJobPayload>) => {
+    const { jobId, orgId, source, filePath, sheetUrl } = job.data;
+
+    try {
+      if (source === 'excel' && filePath) {
+        await processExcelFile(jobId, orgId, filePath);
+      } else if (source === 'google_sheet' && sheetUrl) {
+        await processGoogleSheet(jobId, orgId, sheetUrl);
+      } else {
+        throw new Error('Invalid import source or missing payload parameters.');
+      }
+    } catch (err: any) {
+      await importQueries.finalizeImportJob(jobId, 'failed', undefined, err.message);
+      throw err;
+    } finally {
+      if (filePath && fs.existsSync(filePath)) {
+        fs.unlink(filePath, () => {});
+      }
+    }
+  },
+  {
+    connection: createRedisConnection(),
+    concurrency: 1, // Safe sequential processing to eliminate database contention on Render Free
+    lockDuration: 60000, // 60s lock duration prevents false stalling during network downloads
+  }
+);
+
+bookImportWorker.on('completed', (job) => {
+  console.log(`[BullMQ] Book import job ${job.id} completed successfully.`);
+});
+
+bookImportWorker.on('failed', (job, err) => {
+  console.error(`[BullMQ] Book import job ${job?.id} failed with error:`, err.message);
+})
 </file>
 
 <file path="render.yaml">
