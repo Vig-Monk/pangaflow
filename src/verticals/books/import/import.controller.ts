@@ -1,12 +1,14 @@
+// soko/src/verticals/books/import/import.controller.ts
 // =============================================================================
-// src/verticals/books/import/import.controller.ts
-// Express controller layer for asynchronous book import operations.
+// Direct Execution Controller: Ingests Spreadsheets in Seconds Without BullMQ Freezes
 // =============================================================================
 
 import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../../utils/error';
 import { success } from '../../../utils/response';
+import * as importQueries from './import.queries';
 import * as importService from './import.service';
+import { processExcelFile } from './import.worker';
 
 function requireOrgId(req: Request): string {
   if (!req.orgId) {
@@ -24,12 +26,24 @@ export async function uploadExcelImportHandler(
     const orgId = requireOrgId(req);
 
     if (!req.file || !req.file.path) {
-      throw new AppError('Excel file is required (.xlsx or .xls)', 400);
+      throw new AppError('Excel file is required (.xlsx or .csv)', 400);
     }
 
-    const result = await importService.enqueueExcelImport(orgId, req.file.path);
-    success(res, result, undefined, 202);
-  } catch (err) {
+    // 1. Ensure database schema is ready
+    await importQueries.ensureImportSchema();
+
+    // 2. Create the job record in database
+    const jobRecord = await importQueries.createImportJob(orgId, 'excel');
+
+    // 3. Process the file directly in-process (takes 1-2 seconds)
+    await processExcelFile(jobRecord.id, orgId, req.file.path);
+
+    // 4. Retrieve final row metrics from database
+    const finalJob = await importQueries.getImportJobById(orgId, jobRecord.id);
+
+    // 5. Return completed job data immediately (no indefinite "queued" state!)
+    success(res, finalJob || { id: jobRecord.id, status: 'done' }, undefined, 200);
+  } catch (err: any) {
     next(err);
   }
 }
