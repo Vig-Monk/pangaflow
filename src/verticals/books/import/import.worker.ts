@@ -9,14 +9,14 @@ import path from 'path';
 import os from 'os';
 import axios from 'axios';
 import ExcelJS from 'exceljs';
-import { pool } from '../../../../config/db';
+import { pool } from '../../../config/db';
 import {
   findOrCreateCategoryByName,
   insertProductTransactional,
   insertInventoryTransactional,
   insertProductImageTransactional,
-} from '../../../../modules/products/products.queries';
-import { findBestBookCover } from '../../../../services/bookCover.service';
+} from '../../../modules/products/products.queries';
+import { findBestBookCover } from '../../../services/bookCover.service';
 import * as importQueries from './import.queries';
 
 // -----------------------------------------------------------------------------
