@@ -1,7 +1,7 @@
 // =============================================================================
 // soko-api/src/scripts/seed-admin.ts
-// Unifies the entire catalog, organization, store, and admin user credentials.
-// Run via: npx tsx src/scripts/seed-admin.ts
+// Securely verifies Flemela organization, storefront, and admin credentials
+// WITHOUT touching or reassigning products from other tenant accounts.
 // =============================================================================
 
 import bcrypt from 'bcryptjs';
@@ -16,7 +16,7 @@ const STORE_SLUG = (process.env.NUXT_PUBLIC_STORE_SLUG || 'flemela').trim().toLo
 
 async function run(): Promise<void> {
   console.log('====================================================');
-  console.log('    UNIFYING CATALOG & ADMIN TENANT BINDING         ');
+  console.log('    VERIFYING FLEMELA TENANT & ADMIN ACCESS         ');
   console.log('====================================================\n');
 
   const client = await pool.connect();
@@ -24,7 +24,7 @@ async function run(): Promise<void> {
   try {
     await client.query('BEGIN');
 
-    // 1. Ensure Organization
+    // 1. Ensure Flagship Organization
     const orgRes = await client.query<{ id: string }>(
       `INSERT INTO organizations (name, slug, business_type, plan, plan_expires_at)
        VALUES ('Flemela Bookstore', $1, 'books', 'lifetime', NULL)
@@ -37,7 +37,7 @@ async function run(): Promise<void> {
       [STORE_SLUG]
     );
     const orgId = orgRes.rows[0].id;
-    console.log(`✓ Flagship Organization [ID: ${orgId}, Slug: "${STORE_SLUG}"]`);
+    console.log(`✓ Organization confirmed [ID: ${orgId}, Slug: "${STORE_SLUG}"]`);
 
     // 2. Hash password with bcryptjs (12 rounds)
     const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, 12);
@@ -86,36 +86,14 @@ async function run(): Promise<void> {
     );
     console.log(`✓ Storefront published [Slug: "${STORE_SLUG}"]`);
 
-    // 6. Reassign All Orphaned/Discrepant Catalog Books to this Org
-    const reassignProducts = await client.query(
-      `UPDATE products SET org_id = $1 WHERE org_id != $1`,
-      [orgId]
-    );
-    console.log(`✓ Reassigned ${reassignProducts.rowCount || 0} product(s) to this flagship org`);
-
-    const reassignCategories = await client.query(
-      `UPDATE categories SET org_id = $1 WHERE org_id != $1`,
-      [orgId]
-    );
-    console.log(`✓ Reassigned ${reassignCategories.rowCount || 0} category row(s)`);
-
-    // 7. Verify Product Count
-    const countCheck = await client.query<{ count: string }>(
-      `SELECT COUNT(*) AS count FROM products WHERE org_id = $1 AND deleted_at IS NULL`,
-      [orgId]
-    );
-    console.log(`✓ Total books now visible to admin: ${countCheck.rows[0]?.count}`);
-
     await client.query('COMMIT');
 
     console.log('\n====================================================');
-    console.log(`✅ SUCCESS: Catalog and Admin session unified.`);
-    console.log(`   Admin Email:    ${ADMIN_EMAIL}`);
-    console.log(`   Admin Password: ${ADMIN_PASSWORD}`);
+    console.log(`✅ Tenant check complete. Other organizations were untouched.`);
     console.log('====================================================\n');
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('\n❌ Unification failed:', err);
+    console.error('\n❌ Operation failed:', err);
     process.exit(1);
   } finally {
     client.release();

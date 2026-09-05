@@ -8,51 +8,138 @@ import { AppError } from '../../utils/error';
 import * as bannersQueries from './banners.queries';
 import type { StoreBannerRow } from './banners.queries';
 
-export const CreateBannerSchema = z.object({
-  title: z.string().min(1, 'Headline is required').max(200).trim(),
-  subtitle: z.string().max(500).nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  badge: z.string().max(50).nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  image_url: z.string().url('A valid desktop image URL is required'),
-  mobile_image_url: z.string().url('Invalid mobile image URL').nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  cta_label: z.string().min(1).max(50).default('Explore'),
-  cta_link: z.string().min(1).max(500).default('/#catalog-results'),
-  bg_color: z.string().regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, 'Invalid hex color code').default('#052219'),
-  sort_order: z.number().int().optional(),
-  is_active: z.boolean().default(true),
-  starts_at: z.string().datetime().nullable().optional(),
-  ends_at: z.string().datetime().nullable().optional(),
-}).refine(data => {
-  if (data.starts_at && data.ends_at) {
-    return new Date(data.ends_at).getTime() > new Date(data.starts_at).getTime();
-  }
-  return true;
-}, {
-  message: 'Expiration date must be strictly after the start date',
-  path: ['ends_at'],
-});
+export const CreateBannerSchema = z
+  .object({
+    title: z
+      .string()
+      .max(200)
+      .trim()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    subtitle: z
+      .string()
+      .max(500)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    badge: z
+      .string()
+      .max(50)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    image_url: z.string().url('A valid desktop image URL is required'),
+    mobile_image_url: z
+      .string()
+      .url('Invalid mobile image URL')
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    cta_label: z
+      .string()
+      .max(50)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    cta_link: z
+      .string()
+      .max(500)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    bg_color: z
+      .string()
+      .regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, 'Invalid hex color code')
+      .default('#052219'),
+    sort_order: z.number().int().optional(),
+    is_active: z.boolean().default(true),
+    starts_at: z.string().datetime().nullable().optional(),
+    ends_at: z.string().datetime().nullable().optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.starts_at && data.ends_at) {
+        return new Date(data.ends_at).getTime() > new Date(data.starts_at).getTime();
+      }
+      return true;
+    },
+    {
+      message: 'Expiration date must be strictly after the start date',
+      path: ['ends_at'],
+    }
+  );
 
-export const UpdateBannerSchema = z.object({
-  title: z.string().min(1).max(200).trim().optional(),
-  subtitle: z.string().max(500).nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  badge: z.string().max(50).nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  image_url: z.string().url().optional(),
-  mobile_image_url: z.string().url().nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-  cta_label: z.string().min(1).max(50).optional(),
-  cta_link: z.string().min(1).max(500).optional(),
-  bg_color: z.string().regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/).optional(),
-  sort_order: z.number().int().optional(),
-  is_active: z.boolean().optional(),
-  starts_at: z.string().datetime().nullable().optional(),
-  ends_at: z.string().datetime().nullable().optional(),
-}).refine(data => {
-  if (data.starts_at && data.ends_at) {
-    return new Date(data.ends_at).getTime() > new Date(data.starts_at).getTime();
-  }
-  return true;
-}, {
-  message: 'Expiration date must be strictly after the start date',
-  path: ['ends_at'],
-});
+export const UpdateBannerSchema = z
+  .object({
+    title: z
+      .string()
+      .max(200)
+      .trim()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    subtitle: z
+      .string()
+      .max(500)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    badge: z
+      .string()
+      .max(50)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    image_url: z.string().url().optional(),
+    mobile_image_url: z
+      .string()
+      .url()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    cta_label: z
+      .string()
+      .max(50)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    cta_link: z
+      .string()
+      .max(500)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    bg_color: z.string().regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/).optional(),
+    sort_order: z.number().int().optional(),
+    is_active: z.boolean().optional(),
+    starts_at: z.string().datetime().nullable().optional(),
+    ends_at: z.string().datetime().nullable().optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.starts_at && data.ends_at) {
+        return new Date(data.ends_at).getTime() > new Date(data.starts_at).getTime();
+      }
+      return true;
+    },
+    {
+      message: 'Expiration date must be strictly after the start date',
+      path: ['ends_at'],
+    }
+  );
 
 export const ReorderBannersSchema = z.object({
   bannerIds: z.array(z.string().uuid()).min(1, 'At least one banner ID is required to reorder'),
@@ -61,13 +148,13 @@ export const ReorderBannersSchema = z.object({
 export interface StoreBannerDto {
   id: string;
   org_id: string;
-  title: string;
+  title: string | null;
   subtitle: string | null;
   badge: string | null;
   image_url: string;
   mobile_image_url: string | null;
-  cta_label: string;
-  cta_link: string;
+  cta_label: string | null;
+  cta_link: string | null;
   bg_color: string;
   sort_order: number;
   is_active: boolean;
@@ -82,13 +169,13 @@ export function toBannerDto(row: StoreBannerRow): StoreBannerDto {
   return {
     id: row.id,
     org_id: row.org_id,
-    title: row.title,
+    title: row.title || null,
     subtitle: row.subtitle,
     badge: row.badge,
     image_url: row.image_url,
     mobile_image_url: row.mobile_image_url,
-    cta_label: row.cta_label,
-    cta_link: row.cta_link,
+    cta_label: row.cta_label || null,
+    cta_link: row.cta_link || null,
     bg_color: row.bg_color,
     sort_order: row.sort_order,
     is_active: row.is_active,
@@ -118,6 +205,7 @@ export async function createBanner(orgId: string, rawBody: unknown): Promise<Sto
 
   const row = await bannersQueries.createBanner(orgId, {
     ...parsed.data,
+    title: parsed.data.title || null,
     starts_at: parsed.data.starts_at ? new Date(parsed.data.starts_at) : null,
     ends_at: parsed.data.ends_at ? new Date(parsed.data.ends_at) : null,
   });
@@ -142,8 +230,18 @@ export async function updateBanner(
 
   const row = await bannersQueries.updateBanner(orgId, bannerId, {
     ...parsed.data,
-    starts_at: parsed.data.starts_at !== undefined ? (parsed.data.starts_at ? new Date(parsed.data.starts_at) : null) : undefined,
-    ends_at: parsed.data.ends_at !== undefined ? (parsed.data.ends_at ? new Date(parsed.data.ends_at) : null) : undefined,
+    starts_at:
+      parsed.data.starts_at !== undefined
+        ? parsed.data.starts_at
+          ? new Date(parsed.data.starts_at)
+          : null
+        : undefined,
+    ends_at:
+      parsed.data.ends_at !== undefined
+        ? parsed.data.ends_at
+          ? new Date(parsed.data.ends_at)
+          : null
+        : undefined,
   });
 
   if (!row) {

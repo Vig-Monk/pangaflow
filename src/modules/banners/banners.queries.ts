@@ -1,5 +1,5 @@
 // =============================================================================
-// soko-api/src/modules/banners/banners.queries.ts
+// soko-api/src/modules/banners/banner.queries.ts
 // Database access layer for store promotional hero banners.
 // =============================================================================
 
@@ -8,13 +8,13 @@ import { query, pool } from '../../config/db';
 export interface StoreBannerRow {
   id: string;
   org_id: string;
-  title: string;
+  title: string | null;
   subtitle: string | null;
   badge: string | null;
   image_url: string;
   mobile_image_url: string | null;
-  cta_label: string;
-  cta_link: string;
+  cta_label: string | null;
+  cta_link: string | null;
   bg_color: string;
   sort_order: number;
   is_active: boolean;
@@ -26,13 +26,13 @@ export interface StoreBannerRow {
 }
 
 export interface CreateBannerInput {
-  title: string;
+  title?: string | null;
   subtitle?: string | null;
   badge?: string | null;
   image_url: string;
   mobile_image_url?: string | null;
-  cta_label?: string;
-  cta_link?: string;
+  cta_label?: string | null;
+  cta_link?: string | null;
   bg_color?: string;
   sort_order?: number;
   is_active?: boolean;
@@ -41,13 +41,13 @@ export interface CreateBannerInput {
 }
 
 export interface UpdateBannerInput {
-  title?: string;
+  title?: string | null;
   subtitle?: string | null;
   badge?: string | null;
   image_url?: string;
   mobile_image_url?: string | null;
-  cta_label?: string;
-  cta_link?: string;
+  cta_label?: string | null;
+  cta_link?: string | null;
   bg_color?: string;
   sort_order?: number;
   is_active?: boolean;
@@ -100,7 +100,6 @@ export async function createBanner(
   orgId: string,
   data: CreateBannerInput
 ): Promise<StoreBannerRow> {
-  // If sort_order is not passed, default to highest + 1
   let nextSortOrder = data.sort_order;
   if (nextSortOrder === undefined) {
     const maxSortResult = await query<{ max_sort: number | null }>(
@@ -119,13 +118,13 @@ export async function createBanner(
      RETURNING ${BANNER_SELECT_FIELDS}`,
     [
       orgId,
-      data.title.trim(),
+      data.title?.trim() || '',
       data.subtitle?.trim() || null,
       data.badge?.trim().toUpperCase() || null,
       data.image_url.trim(),
       data.mobile_image_url?.trim() || null,
-      data.cta_label?.trim() || 'Explore',
-      data.cta_link?.trim() || '/#catalog-results',
+      data.cta_label?.trim() || null,
+      data.cta_link?.trim() || null,
       data.bg_color?.trim() || '#052219',
       nextSortOrder,
       data.is_active ?? true,
@@ -147,7 +146,7 @@ export async function updateBanner(
 
   if (data.title !== undefined) {
     setClauses.push(`title = $${paramIdx}`);
-    params.push(data.title.trim());
+    params.push(data.title?.trim() || '');
     paramIdx++;
   }
   if (data.subtitle !== undefined) {
@@ -172,12 +171,12 @@ export async function updateBanner(
   }
   if (data.cta_label !== undefined) {
     setClauses.push(`cta_label = $${paramIdx}`);
-    params.push(data.cta_label.trim());
+    params.push(data.cta_label?.trim() || null);
     paramIdx++;
   }
   if (data.cta_link !== undefined) {
     setClauses.push(`cta_link = $${paramIdx}`);
-    params.push(data.cta_link.trim());
+    params.push(data.cta_link?.trim() || null);
     paramIdx++;
   }
   if (data.bg_color !== undefined) {

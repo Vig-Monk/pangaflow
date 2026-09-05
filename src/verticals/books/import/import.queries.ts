@@ -1,6 +1,6 @@
+// src/verticals/books/import/import.queries.ts
 // =============================================================================
-// soko-api/src/verticals/books/import/import.queries.ts
-// Database queries for import_jobs with granular telemetry metrics.
+// Database queries for import_jobs with granular telemetry metrics and diagnostics.
 // =============================================================================
 
 import { query } from '../../../config/db';
@@ -114,8 +114,13 @@ export async function finalizeImportJob(
     insertedRows: number;
     updatedRows: number;
     skippedRows: number;
-  }
+  },
+  topLevelError?: string
 ): Promise<void> {
+  if (topLevelError) {
+    await appendJobError(jobId, { row: 0, error: topLevelError });
+  }
+
   if (finalCounts) {
     await query(
       `UPDATE import_jobs

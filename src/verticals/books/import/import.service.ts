@@ -1,6 +1,6 @@
+// src/verticals/books/import/import.service.ts
 // =============================================================================
-// soko-api/src/verticals/books/import/import.service.ts
-// Service layer handling BullMQ queue dispatch with cloud TLS Redis support.
+// Service layer handling BullMQ queue dispatch with Render Redis isolation.
 // =============================================================================
 
 import { Queue } from 'bullmq';
@@ -13,17 +13,28 @@ import type { ImportJobRow } from './import.queries';
 
 const redisUrl = env.REDIS_URL || process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 
-export const redisConnection = new Redis(redisUrl, {
-  maxRetriesPerRequest: null,
-  lazyConnect: true,
-  enableReadyCheck: false,
-  retryStrategy(times) {
-    return Math.min(times * 200, 2000);
-  },
-});
+/**
+ * Creates isolated Redis connection instances with TLS support for Render cloud instances.
+ */
+export function createRedisConnection(): Redis {
+  const isTls = redisUrl.startsWith('rediss://');
+
+  return new Redis(redisUrl, {
+    maxRetriesPerRequest: null,
+    lazyConnect: false,
+    enableReadyCheck: false,
+    tls: isTls ? { rejectUnauthorized: false } : undefined,
+    retryStrategy(times) {
+      return Math.min(times * 200, 2000);
+    },
+  });
+}
+
+// Dedicated connection for the Queue producer
+export const redisConnection = createRedisConnection();
 
 redisConnection.on('error', (err) => {
-  console.warn('Redis connection event (BullMQ):', err.message);
+  console.warn('Redis queue connection event:', err.message);
 });
 
 export const bookImportQueue = new Queue('book-import-queue', {
@@ -49,8 +60,8 @@ export async function enqueueExcelImport(
       filePath,
     },
     {
-      removeOnComplete: 100,
-      removeOnFail: 100,
+      removeOnComplete: true, // Prevents exceeding Render's 25 MB Redis RAM cap
+      removeOnFail: 10,
     }
   );
 
@@ -80,8 +91,8 @@ export async function enqueueGoogleSheetImport(
       sheetUrl: parsed.data.sheetUrl,
     },
     {
-      removeOnComplete: 100,
-      removeOnFail: 100,
+      removeOnComplete: true,
+      removeOnFail: 10,
     }
   );
 

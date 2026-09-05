@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/services/bookCover.service.ts
-// Ultra-High-Resolution (HD 800px+) Book Cover Discovery Engine.
+// Multi-Source High-Resolution Book Cover Discovery Engine
 // =============================================================================
 
 import axios from 'axios';
@@ -14,34 +14,11 @@ export interface CoverSearchResult {
 
 function cleanQueryString(input: string): string {
   return (input || '')
-    .replace(/\s*[\(\[\{][^\)\]\}]*[\)\]\}]/g, ' ') // Strip (Paperback), [E-Book], etc.
-    .replace(/:\s*.*$/, '')                          // Strip subtitles
-    .replace(/[^\w\s-]/g, ' ')                       // Strip punctuation
+    .replace(/\s*[\(\[\{][^\)\]\}]*[\)\]\}]/g, ' ')
+    .replace(/:\s*.*$/, '')
+    .replace(/[^\w\s-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-/**
- * Upgrades Google Books thumbnail URLs to 800px+ High-Resolution HD images
- */
-function upgradeToHighResGoogleUrl(url: string, volumeId?: string): string {
-  // If volumeId is present, use Google's direct 800x1200 HD publisher CDN endpoint
-  if (volumeId) {
-    return `https://books.google.com/books/publisher/content/images/frontcover/${volumeId}?fife=w800-h1200`;
-  }
-
-  let upgraded = url.replace(/^http:\/\//i, 'https://');
-  upgraded = upgraded.replace(/&edge=curl/g, '');
-
-  // zoom=0 removes thumbnail downscaling and returns uncompressed scan
-  upgraded = upgraded.replace(/zoom=[0-9]/g, 'zoom=0');
-
-  // Append 800px width scaling parameter if not present
-  if (!upgraded.includes('fife=')) {
-    upgraded += '&fife=w800-h1200';
-  }
-
-  return upgraded;
 }
 
 export async function findBestBookCover(
@@ -58,64 +35,14 @@ export async function findBestBookCover(
     return { coverUrl: null, title: rawTitle, source: null };
   }
 
-  // ---------------------------------------------------------------------------
-  // Tier 1: Google Books API (High-Resolution Discovery)
-  // ---------------------------------------------------------------------------
+  // 1. Direct Open Library Work Search (Zero Rate Limits, Returns Stable Cover ID)
   try {
-    const query = hasValidIsbn
-      ? `isbn:${cleanIsbn}`
-      : author
-        ? `${title} ${author}`
-        : title;
-
-    const gbooksUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=3&printType=books`;
-    const res = await axios.get(gbooksUrl, { timeout: 4500 });
-    const items = res.data?.items || [];
-
-    for (const item of items) {
-      const volumeId = item.id;
-      const volumeInfo = item.volumeInfo || {};
-      const imageLinks = volumeInfo.imageLinks;
-
-      if (imageLinks) {
-        const rawCover =
-          imageLinks.extraLarge ||
-          imageLinks.large ||
-          imageLinks.medium ||
-          imageLinks.thumbnail ||
-          imageLinks.smallThumbnail;
-
-        if (rawCover && typeof rawCover === 'string' && rawCover.length > 10) {
-          return {
-            coverUrl: upgradeToHighResGoogleUrl(rawCover, volumeId),
-            title: volumeInfo.title || rawTitle,
-            author: volumeInfo.authors?.[0] || rawAuthor,
-            source: 'googlebooks',
-          };
-        }
-      }
-    }
-  } catch (err) {
-    // Non-blocking fallback to Open Library
-  }
-
-  // ---------------------------------------------------------------------------
-  // Tier 2: Open Library API (Large -L.jpg Format)
-  // ---------------------------------------------------------------------------
-  try {
-    if (hasValidIsbn) {
-      return {
-        coverUrl: `https://covers.openlibrary.org/b/isbn/${cleanIsbn}-L.jpg`,
-        title: rawTitle,
-        author: rawAuthor,
-        source: 'openlibrary',
-      };
-    }
-
-    const olQueryUrl = `https://openlibrary.org/search.json?q=${encodeURIComponent(title)}&limit=3`;
-    const olRes = await axios.get(olQueryUrl, {
-      timeout: 4500,
-      headers: { 'User-Agent': 'FlemelaBookstoreApp/1.0 (support@flemela.co.ke)' },
+    const olUrl = `https://openlibrary.org/search.json?title=${encodeURIComponent(title)}${
+      author ? `&author=${encodeURIComponent(author)}` : ''
+    }&limit=3`;
+    const olRes = await axios.get(olUrl, {
+      timeout: 4000,
+      headers: { 'User-Agent': 'FlemelaBookstore/2.0 (contact@flemela.co.ke)' },
     });
 
     const docs = olRes.data?.docs || [];
@@ -128,17 +55,36 @@ export async function findBestBookCover(
           source: 'openlibrary',
         };
       }
-      if (doc.isbn && Array.isArray(doc.isbn) && doc.isbn.length > 0) {
-        return {
-          coverUrl: `https://covers.openlibrary.org/b/isbn/${doc.isbn[0]}-L.jpg`,
-          title: doc.title || rawTitle,
-          author: doc.author_name?.[0] || rawAuthor,
-          source: 'openlibrary',
-        };
+    }
+  } catch {
+    // Non-blocking cascade to Tier 2
+  }
+
+  // 2. Google Books Public Content Stream
+  try {
+    const query = hasValidIsbn ? `isbn:${cleanIsbn}` : `${title} ${author}`.trim();
+    const gbooksUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(
+      query
+    )}&maxResults=3&printType=books`;
+    const res = await axios.get(gbooksUrl, { timeout: 4500 });
+
+    for (const item of res.data?.items || []) {
+      const links = item.volumeInfo?.imageLinks;
+      if (links) {
+        const cover =
+          links.extraLarge || links.large || links.medium || links.thumbnail || links.smallThumbnail;
+        if (cover) {
+          return {
+            coverUrl: `https://books.google.com/books/content?id=${item.id}&printsec=frontcover&img=1&zoom=1`,
+            title: item.volumeInfo.title || rawTitle,
+            author: item.volumeInfo.authors?.[0] || rawAuthor,
+            source: 'googlebooks',
+          };
+        }
       }
     }
-  } catch (err) {
-    // Fallback
+  } catch {
+    // Non-blocking cascade
   }
 
   return { coverUrl: null, title: rawTitle, source: null };

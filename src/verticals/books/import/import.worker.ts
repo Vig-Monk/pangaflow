@@ -1,18 +1,20 @@
 // =============================================================================
 // soko-api/src/verticals/books/import/import.worker.ts
-// Ingestion Worker with Pre-Flight Duplicate Merging and R2 Asset Deduplication.
+// Ingestion Worker: Resilient Dual Parser, Currency Sanitizer & Atomic Transactions.
 // =============================================================================
 
 import { Worker, Job } from 'bullmq';
 import ExcelJS from 'exceljs';
-//import axios from 'axios';
+import axios from 'axios';
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import crypto from 'crypto';
 import { v2 as cloudinary } from 'cloudinary';
 import { pool } from '../../../config/db';
 import { env } from '../../../config/env';
-import { redisConnection } from './import.service';
+import { createRedisConnection } from './import.service';
 import * as importQueries from './import.queries';
-import { streamRemoteUrlToR2 } from '../../../services/r2.service';
 import { findBestBookCover } from '../../../services/bookCover.service';
 import {
   findOrCreateCategoryByName,
@@ -20,7 +22,6 @@ import {
   insertInventoryTransactional,
   insertProductImageTransactional,
 } from '../../../modules/products/products.queries';
-import { createProductFormat } from '../../../modules/product-formats/product-formats.queries';
 
 cloudinary.config({
   cloud_name: env.CLOUDINARY_CLOUD_NAME,
@@ -74,6 +75,31 @@ function extractCellString(cellValue: any): string {
   return String(cellValue).trim();
 }
 
+/**
+ * Strips currency symbols (KSh, $, etc.), commas, spaces, and parses numbers safely.
+ */
+function parseCleanNumber(val: any, fallback = 0): number {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === 'number') return isNaN(val) ? fallback : Math.max(0, val);
+
+  const rawStr = extractCellString(val);
+  if (!rawStr) return fallback;
+
+  const cleaned = rawStr.replace(/[^0-9.]/g, '');
+  const parsed = parseFloat(cleaned);
+  return isNaN(parsed) ? fallback : Math.max(0, parsed);
+}
+
+function parseCleanInt(val: any, fallback = 10): number {
+  if (val === null || val === undefined) return fallback;
+  const rawStr = extractCellString(val);
+  if (rawStr === '') return fallback;
+
+  const cleaned = rawStr.replace(/[^0-9-]/g, '');
+  const parsed = parseInt(cleaned, 10);
+  return isNaN(parsed) ? fallback : Math.max(0, parsed);
+}
+
 function sanitizeGoogleDriveUrl(rawVal: any): string | undefined {
   const urlStr = extractCellString(rawVal);
   if (!urlStr || urlStr.length < 5) return undefined;
@@ -83,6 +109,71 @@ function sanitizeGoogleDriveUrl(rawVal: any): string | undefined {
     return `https://drive.google.com/uc?export=download&id=${match[1]}&confirm=t`;
   }
   return urlStr;
+}
+
+function normalizeHeader(val: any): string {
+  return String(val || '')
+    .toLowerCase()
+    .replace(/^\uFEFF/, '') // Strip UTF-8 BOM
+    .trim()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Sniffs delimiters (comma, semicolon, tab) by checking the first line of a CSV.
+ */
+function sniffCsvDelimiter(filePath: string): string {
+  try {
+    const buffer = Buffer.alloc(2048);
+    const fd = fs.openSync(filePath, 'r');
+    const bytesRead = fs.readSync(fd, buffer, 0, 2048, 0);
+    fs.closeSync(fd);
+
+    const text = buffer.toString('utf8', 0, bytesRead).split(/\r?\n/)[0] || '';
+    const commas = (text.match(/,/g) || []).length;
+    const semicolons = (text.match(/;/g) || []).length;
+    const tabs = (text.match(/\t/g) || []).length;
+
+    if (semicolons > commas && semicolons > tabs) return ';';
+    if (tabs > commas && tabs > semicolons) return '\t';
+    return ',';
+  } catch {
+    return ',';
+  }
+}
+
+async function loadWorkbookSafely(filePath: string): Promise<ExcelJS.Workbook> {
+  const ext = path.extname(filePath).toLowerCase();
+
+  // 1. Direct CSV branch
+  if (ext === '.csv') {
+    const csvWorkbook = new ExcelJS.Workbook();
+    const delimiter = sniffCsvDelimiter(filePath);
+    await csvWorkbook.csv.readFile(filePath, {
+      parserOptions: { delimiter },
+    });
+    return csvWorkbook;
+  }
+
+  // 2. XLSX branch with fallback for misnamed CSV files
+  const xlsxWorkbook = new ExcelJS.Workbook();
+  try {
+    await xlsxWorkbook.xlsx.readFile(filePath);
+    return xlsxWorkbook;
+  } catch (xlsxErr: any) {
+    try {
+      const fallbackCsvWorkbook = new ExcelJS.Workbook();
+      const delimiter = sniffCsvDelimiter(filePath);
+      await fallbackCsvWorkbook.csv.readFile(filePath, {
+        parserOptions: { delimiter },
+      });
+      return fallbackCsvWorkbook;
+    } catch {
+      throw new Error(
+        `Failed to parse spreadsheet. Ensure it is a valid .xlsx or .csv file. (${xlsxErr.message})`
+      );
+    }
+  }
 }
 
 async function uploadCoverToCloudinary(
@@ -119,13 +210,6 @@ async function uploadCoverToCloudinary(
   return null;
 }
 
-function normalizeHeader(val: any): string {
-  return String(val || '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]/g, '');
-}
-
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function processExcelFile(
@@ -133,17 +217,11 @@ async function processExcelFile(
   orgId: string,
   filePath: string
 ): Promise<void> {
-  const workbook = new ExcelJS.Workbook();
-
-  try {
-    await workbook.xlsx.readFile(filePath);
-  } catch {
-    await workbook.csv.readFile(filePath);
-  }
-
+  const workbook = await loadWorkbookSafely(filePath);
   const worksheet = workbook.worksheets[0];
-  if (!worksheet) {
-    throw new Error('Spreadsheet contains no valid worksheet');
+
+  if (!worksheet || worksheet.rowCount === 0) {
+    throw new Error('Spreadsheet contains no readable rows or valid worksheet.');
   }
 
   const headerMap: Record<string, number> = {};
@@ -151,12 +229,23 @@ async function processExcelFile(
 
   firstRow.eachCell((cell, colNumber) => {
     const norm = normalizeHeader(cell.value);
-    headerMap[norm] = colNumber;
+    if (norm) {
+      headerMap[norm] = colNumber;
+    }
   });
 
-  const titleCol = headerMap['name'] || headerMap['title'] || headerMap['booktitle'];
+  const titleCol =
+    headerMap['name'] ||
+    headerMap['title'] ||
+    headerMap['booktitle'] ||
+    headerMap['productname'] ||
+    headerMap['itemname'];
+
   if (!titleCol) {
-    throw new Error('Spreadsheet must have a "Name" or "Title" column header');
+    throw new Error(
+      'Spreadsheet must have a "Name" or "Title" column header. Found headers: ' +
+        Object.keys(headerMap).slice(0, 8).join(', ')
+    );
   }
 
   const imageMapByRow: Record<number, Buffer> = {};
@@ -170,16 +259,34 @@ async function processExcelFile(
       }
     }
   } catch {
-    // Non-blocking preview extract
+    // Non-blocking image preview extraction
   }
 
-  const totalRows = Math.max(0, worksheet.rowCount - 1);
+  // Pre-scan non-empty rows for accurate progress calculations
+  let actualDataRows = 0;
+  for (let r = 2; r <= worksheet.rowCount; r++) {
+    const val = extractCellString(worksheet.getRow(r).getCell(titleCol).value);
+    if (val) actualDataRows++;
+  }
+
+  const totalRows = Math.max(1, actualDataRows);
   await importQueries.updateJobProgress(jobId, { processedRows: 0, totalRows }, 'processing');
 
   let processedCount = 0;
   let insertedCount = 0;
   let updatedCount = 0;
   let skippedCount = 0;
+
+  const getVal = (row: ExcelJS.Row, keys: string[]): any => {
+    for (const k of keys) {
+      const col = headerMap[k];
+      if (col) {
+        const v = row.getCell(col).value;
+        if (v !== null && v !== undefined) return v;
+      }
+    }
+    return null;
+  };
 
   for (let r = 2; r <= worksheet.rowCount; r++) {
     const row = worksheet.getRow(r);
@@ -188,32 +295,21 @@ async function processExcelFile(
     if (!titleVal) continue;
 
     try {
-      const getVal = (keys: string[]): any => {
-        for (const k of keys) {
-          const col = headerMap[k];
-          if (col) {
-            const v = row.getCell(col).value;
-            if (v !== null && v !== undefined) return v;
-          }
-        }
-        return null;
-      };
+      const description = extractCellString(getVal(row, ['description', 'synopsis', 'summary', 'about', 'details']));
+      const sku = extractCellString(getVal(row, ['sellersku', 'sku', 'isbn', 'isbn13', 'isbn10', 'barcode']));
+      const category = extractCellString(getVal(row, ['primarycategory', 'category', 'genre', 'categories', 'collection']));
+      const author = extractCellString(getVal(row, ['author', 'authorname', 'writer', 'authors']));
 
-      const description = extractCellString(getVal(['description', 'synopsis']));
-      const sku = extractCellString(getVal(['sellersku', 'sku', 'isbn', 'barcode']));
-      const category = extractCellString(getVal(['primarycategory', 'category', 'genre']));
-      const author = extractCellString(getVal(['author', 'authorname']));
+      const regularPrice = parseCleanNumber(getVal(row, ['pricekes', 'price', 'regularprice', 'listprice', 'msrp', 'amount']), 0);
+      const salePrice = parseCleanNumber(getVal(row, ['salepricekes', 'saleprice', 'discountedprice', 'offerprice', 'specialprice']), 0);
+      const hardcopyStock = parseCleanInt(getVal(row, ['stock', 'quantity', 'hardcopystock', 'qty', 'inventory']), 10);
 
-      const regularPrice = parseFloat(extractCellString(getVal(['pricekes', 'price', 'regularprice'])) || '0');
-      const salePrice = parseFloat(extractCellString(getVal(['salepricekes', 'saleprice', 'discountedprice'])) || '0');
-      const hardcopyStock = parseInt(extractCellString(getVal(['stock', 'quantity', 'hardcopystock'])) || '10', 10);
+      const pdfFileUrl = sanitizeGoogleDriveUrl(getVal(row, ['pdffile', 'pdffileurl', 'pdfurl', 'pdflink', 'pdf', 'ebookurl']));
+      const pdfPrice = parseCleanNumber(getVal(row, ['pdfsprice', 'pdfprice', 'ebookprice']), 0);
+      const epubFileUrl = sanitizeGoogleDriveUrl(getVal(row, ['epubfile', 'epubfileurl', 'epuburl', 'epublink', 'epub']));
+      const epubPrice = parseCleanNumber(getVal(row, ['epubsprice', 'epubprice']), 0);
 
-      const pdfFileUrl = sanitizeGoogleDriveUrl(getVal(['pdffile', 'pdffileurl', 'pdfurl', 'pdflink']));
-      const pdfPrice = parseFloat(extractCellString(getVal(['pdfsprice', 'pdfprice', 'ebookprice'])) || '0');
-      const epubFileUrl = sanitizeGoogleDriveUrl(getVal(['epubfile', 'epubfileurl', 'epuburl', 'epublink']));
-      const epubPrice = parseFloat(extractCellString(getVal(['epubsprice', 'epubprice'])) || '0');
-
-      const coverImageUrl = extractCellString(getVal(['image1', 'image2', 'coverimageurl', 'coverurl']));
+      const coverImageUrl = extractCellString(getVal(row, ['image1', 'image2', 'coverimageurl', 'coverurl', 'cover', 'photo', 'image']));
       const coverBuffer = imageMapByRow[r];
 
       const outcome = await upsertBookFromImport(orgId, {
@@ -225,11 +321,11 @@ async function processExcelFile(
         category: category || 'General',
         description: description || undefined,
         regularPrice: regularPrice > 0 ? regularPrice : undefined,
-        salePrice: salePrice > 0 ? salePrice : (regularPrice > 0 ? regularPrice : undefined),
-        hardcopyStock: hardcopyStock >= 0 ? hardcopyStock : 10,
-        pdfPrice: pdfPrice > 0 ? pdfPrice : undefined,
+        salePrice: salePrice > 0 ? salePrice : regularPrice > 0 ? regularPrice : undefined,
+        hardcopyStock,
+        pdfPrice: pdfPrice > 0 ? pdfPrice : regularPrice > 0 ? regularPrice : undefined,
         pdfFileUrl,
-        epubPrice: epubPrice > 0 ? epubPrice : undefined,
+        epubPrice: epubPrice > 0 ? epubPrice : regularPrice > 0 ? regularPrice : undefined,
         epubFileUrl,
         coverImageUrl: coverImageUrl || undefined,
         coverBuffer,
@@ -246,8 +342,9 @@ async function processExcelFile(
         title: titleVal,
         error: rowErr.message || 'Row processing failed',
       });
+      skippedCount++;
     } finally {
-      if (r % 5 === 0) {
+      if (r % 5 === 0 || r === worksheet.rowCount) {
         await importQueries.updateJobProgress(
           jobId,
           {
@@ -259,7 +356,7 @@ async function processExcelFile(
           'processing'
         );
       }
-      await sleep(100);
+      await sleep(30);
     }
   }
 
@@ -269,12 +366,49 @@ async function processExcelFile(
     updatedRows: updatedCount,
     skippedRows: skippedCount,
   });
-
-  fs.unlink(filePath, () => {});
 }
 
 /**
- * Smart Pre-Flight Check: Upserts existing books by SKU or Title/Author without duplication.
+ * Processes public Google Sheet URLs by exporting directly to CSV.
+ */
+async function processGoogleSheet(
+  jobId: string,
+  orgId: string,
+  sheetUrl: string
+): Promise<void> {
+  const match = sheetUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (!match || !match[1]) {
+    throw new Error('Invalid Google Sheet URL format. Unable to extract Sheet ID.');
+  }
+
+  const sheetId = match[1];
+  const exportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+  const tempFilePath = path.join(os.tmpdir(), `gsheet-${jobId}-${Date.now()}.csv`);
+
+  try {
+    const response = await axios.get(exportUrl, {
+      responseType: 'stream',
+      timeout: 20000,
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const writer = fs.createWriteStream(tempFilePath);
+      response.data.pipe(writer);
+      writer.on('finish', () => resolve());
+      writer.on('error', (err) => reject(err));
+    });
+
+    await processExcelFile(jobId, orgId, tempFilePath);
+  } finally {
+    if (fs.existsSync(tempFilePath)) {
+      fs.unlink(tempFilePath, () => {});
+    }
+  }
+}
+
+/**
+ * Atomic per-book transaction: inserts/updates products, inventory, images, and formats
+ * in a single committed unit.
  */
 async function upsertBookFromImport(
   orgId: string,
@@ -285,16 +419,18 @@ async function upsertBookFromImport(
   try {
     await client.query('BEGIN');
 
-    // 1. Resolve Category
+    // 1. Resolve Category safely
     const categoryName = row.category || 'General';
     const categoryId = await findOrCreateCategoryByName(client, orgId, categoryName);
 
-    // 2. Pre-Flight Duplicate Lookup: Match on SKU first, or fallback to exact Title & Author
+    // 2. Pre-Flight Duplicate Check (SKU first, fallback to exact Title)
     let existingProductId: string | null = null;
 
     if (row.sku && row.sku.trim()) {
       const skuCheck = await client.query<{ id: string }>(
-        `SELECT id FROM products WHERE org_id = $1 AND LOWER(TRIM(sku)) = LOWER(TRIM($2)) AND deleted_at IS NULL LIMIT 1`,
+        `SELECT id FROM products 
+         WHERE org_id = $1 AND LOWER(TRIM(sku)) = LOWER(TRIM($2)) AND deleted_at IS NULL 
+         LIMIT 1`,
         [orgId, row.sku.trim()]
       );
       if (skuCheck.rows.length > 0) {
@@ -304,7 +440,9 @@ async function upsertBookFromImport(
 
     if (!existingProductId) {
       const titleCheck = await client.query<{ id: string }>(
-        `SELECT id FROM products WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) AND deleted_at IS NULL LIMIT 1`,
+        `SELECT id FROM products 
+         WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) AND deleted_at IS NULL 
+         LIMIT 1`,
         [orgId, row.title.trim()]
       );
       if (titleCheck.rows.length > 0) {
@@ -312,7 +450,7 @@ async function upsertBookFromImport(
       }
     }
 
-    // 3. Price and Discount Normalization
+    // 3. Normalize Price and Discounts (Respecting chk_products_compare_at_price)
     let sellingPrice = row.salePrice || row.regularPrice || row.pdfPrice || row.epubPrice || 999;
     let compareAtPrice: number | null = null;
 
@@ -321,10 +459,10 @@ async function upsertBookFromImport(
       compareAtPrice = row.regularPrice;
     }
 
+    // 4. Resolve Cover Art
     let targetImageUrl: string | null = null;
     let targetImageBuffer: Buffer | undefined = undefined;
 
-    // Only discover/upload cover if it's a new book or existing product has no images
     if (!existingProductId) {
       try {
         const discovered = await findBestBookCover(row.title, row.author, row.isbn || row.sku);
@@ -332,7 +470,7 @@ async function upsertBookFromImport(
           targetImageUrl = discovered.coverUrl;
         }
       } catch {
-        // Non-blocking fallback
+        // Non-blocking cover discovery fallback
       }
 
       if (!targetImageUrl) {
@@ -361,14 +499,14 @@ async function upsertBookFromImport(
 
     if (existingProductId) {
       // -----------------------------------------------------------------------
-      // EXISTING BOOK: Update without creating duplicates
+      // EXISTING BOOK: Sync details & stock
       // -----------------------------------------------------------------------
       outcome = 'updated';
       await client.query(
         `UPDATE products
          SET category_id      = $2,
              price            = $3,
-             compare_at_price = $4,
+             compare_at_price = COALESCE($4, compare_at_price),
              sku              = COALESCE(products.sku, $5),
              description      = COALESCE($6, products.description),
              badge            = (CASE WHEN $4 IS NOT NULL THEN 'FLASH_SALE' ELSE products.badge END),
@@ -385,16 +523,17 @@ async function upsertBookFromImport(
         ]
       );
 
-      // Increment / update physical inventory stock
       if (row.hardcopyStock !== undefined) {
         await client.query(
-          `UPDATE inventory SET stock = stock + $2, updated_at = NOW() WHERE product_id = $1`,
+          `UPDATE inventory 
+           SET stock = $2, updated_at = NOW() 
+           WHERE product_id = $1`,
           [existingProductId, row.hardcopyStock]
         );
       }
     } else {
       // -----------------------------------------------------------------------
-      // NEW BOOK: Insert fresh product
+      // NEW BOOK: Collision-proof cryptographic slug
       // -----------------------------------------------------------------------
       outcome = 'inserted';
       const cleanSlugTitle = row.title
@@ -402,8 +541,9 @@ async function upsertBookFromImport(
         .trim()
         .replace(/[^a-z0-9]/g, '-')
         .replace(/-+/g, '-')
-        .slice(0, 50);
-      const slug = `${cleanSlugTitle}-${Date.now().toString().slice(-4)}`;
+        .slice(0, 45);
+      const slugSuffix = crypto.randomBytes(3).toString('hex');
+      const slug = `${cleanSlugTitle}-${slugSuffix}`;
 
       productId = await insertProductTransactional(client, orgId, {
         category_id: categoryId,
@@ -431,91 +571,59 @@ async function upsertBookFromImport(
       }
     }
 
-    await client.query('COMMIT');
-
-    // 4. Formats Upsert (Hardcopy)
+    // 5. Hardcopy Format
     if (productId && sellingPrice) {
-      await createProductFormat(orgId, productId, {
-        format: 'hardcopy',
-        price: sellingPrice,
-        compareAtPrice,
-        stock: row.hardcopyStock ?? 10,
-      });
-    }
-
-    // 5. Digital PDF File (Only stream to R2 if format file does not already exist)
-    if (productId && row.pdfPrice && row.pdfFileUrl) {
-      const existingPdf = await pool.query<{ file_url: string | null }>(
-        `SELECT file_url FROM product_formats WHERE product_id = $1 AND format = 'pdf'`,
-        [productId]
+      await client.query(
+        `INSERT INTO product_formats (
+           product_id, format, price, compare_at_price, stock
+         )
+         VALUES ($1, 'hardcopy', $2, $3, $4)
+         ON CONFLICT (product_id, format) DO UPDATE SET
+           price            = EXCLUDED.price,
+           compare_at_price = EXCLUDED.compare_at_price,
+           stock            = EXCLUDED.stock,
+           updated_at       = NOW()`,
+        [productId, sellingPrice, compareAtPrice, row.hardcopyStock ?? 10]
       );
-
-      let r2Key = existingPdf.rows[0]?.file_url || null;
-      let r2SizeBytes: number | null = null;
-
-      // Stream to R2 only if absent
-      if (!r2Key && env.R2_ACCOUNT_ID && env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY) {
-        try {
-          const cleanName = row.title.toLowerCase().trim().replace(/[^a-z0-9]/g, '-').slice(0, 30);
-          const streamResult = await streamRemoteUrlToR2(
-            row.pdfFileUrl,
-            orgId,
-            `${cleanName}.pdf`,
-            'application/pdf'
-          );
-          r2Key = streamResult.key;
-          r2SizeBytes = streamResult.fileSizeBytes;
-        } catch {
-          r2Key = row.pdfFileUrl;
-        }
-      }
-
-      await createProductFormat(orgId, productId, {
-        format: 'pdf',
-        price: row.pdfPrice,
-        compareAtPrice: null,
-        fileUrl: r2Key || row.pdfFileUrl,
-        filePublicId: r2Key,
-        fileSizeBytes: r2SizeBytes,
-      });
     }
 
-    // 6. Digital EPUB File
-    if (productId && row.epubPrice && row.epubFileUrl) {
-      const existingEpub = await pool.query<{ file_url: string | null }>(
-        `SELECT file_url FROM product_formats WHERE product_id = $1 AND format = 'epub'`,
-        [productId]
+    // 6. Digital PDF Format (Inherits price if omitted)
+    if (productId && (row.pdfFileUrl || row.pdfPrice)) {
+      const formatPrice = row.pdfPrice && row.pdfPrice > 0 ? row.pdfPrice : sellingPrice;
+
+      await client.query(
+        `INSERT INTO product_formats (
+           product_id, format, price, compare_at_price, file_url, file_public_id
+         )
+         VALUES ($1, 'pdf', $2, NULL, $3, $3)
+         ON CONFLICT (product_id, format) DO UPDATE SET
+           price            = EXCLUDED.price,
+           file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
+           file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
+           updated_at       = NOW()`,
+        [productId, formatPrice, row.pdfFileUrl || null]
       );
-
-      let r2Key = existingEpub.rows[0]?.file_url || null;
-      let r2SizeBytes: number | null = null;
-
-      if (!r2Key && env.R2_ACCOUNT_ID && env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY) {
-        try {
-          const cleanName = row.title.toLowerCase().trim().replace(/[^a-z0-9]/g, '-').slice(0, 30);
-          const streamResult = await streamRemoteUrlToR2(
-            row.epubFileUrl,
-            orgId,
-            `${cleanName}.epub`,
-            'application/epub+zip'
-          );
-          r2Key = streamResult.key;
-          r2SizeBytes = streamResult.fileSizeBytes;
-        } catch {
-          r2Key = row.epubFileUrl;
-        }
-      }
-
-      await createProductFormat(orgId, productId, {
-        format: 'epub',
-        price: row.epubPrice,
-        compareAtPrice: null,
-        fileUrl: r2Key || row.epubFileUrl,
-        filePublicId: r2Key,
-        fileSizeBytes: r2SizeBytes,
-      });
     }
 
+    // 7. Digital EPUB Format
+    if (productId && (row.epubFileUrl || row.epubPrice)) {
+      const formatPrice = row.epubPrice && row.epubPrice > 0 ? row.epubPrice : sellingPrice;
+
+      await client.query(
+        `INSERT INTO product_formats (
+           product_id, format, price, compare_at_price, file_url, file_public_id
+         )
+         VALUES ($1, 'epub', $2, NULL, $3, $3)
+         ON CONFLICT (product_id, format) DO UPDATE SET
+           price            = EXCLUDED.price,
+           file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
+           file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
+           updated_at       = NOW()`,
+        [productId, formatPrice, row.epubFileUrl || null]
+      );
+    }
+
+    await client.query('COMMIT');
     return outcome;
   } catch (err) {
     await client.query('ROLLBACK');
@@ -525,22 +633,40 @@ async function upsertBookFromImport(
   }
 }
 
+// Dedicated BullMQ Worker with isolated Redis connection
 export const bookImportWorker = new Worker<ImportJobPayload>(
   'book-import-queue',
   async (job: Job<ImportJobPayload>) => {
-    const { jobId, orgId, source, filePath } = job.data;
+    const { jobId, orgId, source, filePath, sheetUrl } = job.data;
 
     try {
       if (source === 'excel' && filePath) {
         await processExcelFile(jobId, orgId, filePath);
+      } else if (source === 'google_sheet' && sheetUrl) {
+        await processGoogleSheet(jobId, orgId, sheetUrl);
+      } else {
+        throw new Error('Invalid import source or missing payload parameters.');
       }
     } catch (err: any) {
-      await importQueries.finalizeImportJob(jobId, 'failed');
+      await importQueries.finalizeImportJob(jobId, 'failed', undefined, err.message);
       throw err;
+    } finally {
+      if (filePath && fs.existsSync(filePath)) {
+        fs.unlink(filePath, () => {});
+      }
     }
   },
   {
-    connection: redisConnection,
-    concurrency: 2,
+    connection: createRedisConnection(),
+    concurrency: 1, // Safe sequential processing to eliminate database contention on Render Free
+    lockDuration: 60000, // 60s lock duration prevents false stalling during network downloads
   }
 );
+
+bookImportWorker.on('completed', (job) => {
+  console.log(`[BullMQ] Book import job ${job.id} completed successfully.`);
+});
+
+bookImportWorker.on('failed', (job, err) => {
+  console.error(`[BullMQ] Book import job ${job?.id} failed with error:`, err.message);
+})
