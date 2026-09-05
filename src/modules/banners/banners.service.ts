@@ -57,11 +57,26 @@ export const CreateBannerSchema = z
     bg_color: z
       .string()
       .regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, 'Invalid hex color code')
-      .default('#052219'),
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v && v.trim() ? v.trim() : '#052219')),
     sort_order: z.number().int().optional(),
     is_active: z.boolean().default(true),
-    starts_at: z.string().datetime().nullable().optional(),
-    ends_at: z.string().datetime().nullable().optional(),
+    starts_at: z
+      .string()
+      .datetime()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v ? v : null)),
+    ends_at: z
+      .string()
+      .datetime()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v ? v : null)),
   })
   .refine(
     (data) => {
@@ -122,11 +137,29 @@ export const UpdateBannerSchema = z
       .optional()
       .or(z.literal(''))
       .transform((v) => (v === '' ? null : v)),
-    bg_color: z.string().regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/).optional(),
+    bg_color: z
+      .string()
+      .regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v && v.trim() ? v.trim() : '#052219')),
     sort_order: z.number().int().optional(),
     is_active: z.boolean().optional(),
-    starts_at: z.string().datetime().nullable().optional(),
-    ends_at: z.string().datetime().nullable().optional(),
+    starts_at: z
+      .string()
+      .datetime()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v ? v : null)),
+    ends_at: z
+      .string()
+      .datetime()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v ? v : null)),
   })
   .refine(
     (data) => {
@@ -205,7 +238,7 @@ export async function createBanner(orgId: string, rawBody: unknown): Promise<Sto
 
   const row = await bannersQueries.createBanner(orgId, {
     ...parsed.data,
-    title: parsed.data.title || null,
+    title: parsed.data.title || '',
     starts_at: parsed.data.starts_at ? new Date(parsed.data.starts_at) : null,
     ends_at: parsed.data.ends_at ? new Date(parsed.data.ends_at) : null,
   });
@@ -230,6 +263,7 @@ export async function updateBanner(
 
   const row = await bannersQueries.updateBanner(orgId, bannerId, {
     ...parsed.data,
+    title: parsed.data.title !== undefined ? (parsed.data.title || '') : undefined,
     starts_at:
       parsed.data.starts_at !== undefined
         ? parsed.data.starts_at
