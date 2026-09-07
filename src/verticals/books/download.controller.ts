@@ -33,22 +33,48 @@ interface DownloadSnapshotRow {
   book_title: string;
 }
 
+/**
+ * Normalizes Google Drive sharing links to direct download streams:
+ * e.g., https://drive.google.com/file/d/FILE_ID/view?usp=sharing -> https://drive.google.com/uc?export=download&id=FILE_ID
+ */
+function normalizeGoogleDriveUrl(url: string): string {
+  const fileIdMatch = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (fileIdMatch && fileIdMatch[1]) {
+    return `https://drive.google.com/uc?export=download&id=${fileIdMatch[1]}`;
+  }
+  return url;
+}
+
 async function generateSignedDeliveryUrl(row: DownloadSnapshotRow): Promise<string> {
   const safeTitle = (row.book_title || 'book').replace(/[^a-zA-Z0-9_-]/g, '_');
   const fileName = `${safeTitle}.${row.format}`;
 
-  // 1. Cloudflare R2 Private Bucket
-  const r2Key = row.file_public_id || (row.file_url?.startsWith('ebooks/') ? row.file_url : null);
-  if (r2Key && r2Key.startsWith('ebooks/')) {
+  // 1. Resolve Cloudflare R2 Key
+  // An R2 key is either row.file_public_id or row.file_url starting with "ebooks/"
+  const rawKey = row.file_public_id || row.file_url;
+  const isR2Key = rawKey && (rawKey.startsWith('ebooks/') || (!rawKey.startsWith('http://') && !rawKey.startsWith('https://') && rawKey.includes('/')));
+
+  if (isR2Key && rawKey.startsWith('ebooks/')) {
     try {
-      return await generatePresignedDownloadUrl(r2Key, fileName, 3600);
+      return await generatePresignedDownloadUrl(rawKey, fileName, 3600);
     } catch (err) {
       console.error('Failed to sign R2 download URL:', err);
     }
   }
 
-  // 2. Cloudinary Media Fallback
-  if (row.file_public_id && !row.file_public_id.startsWith('ebooks/')) {
+  // 2. Direct External Storage / Google Drive Link
+  const targetUrl = row.file_url || row.file_public_id;
+  if (targetUrl && (targetUrl.startsWith('http://') || targetUrl.startsWith('https://'))) {
+    // If it's a Google Drive link, convert to direct download stream
+    if (targetUrl.includes('drive.google.com')) {
+      return normalizeGoogleDriveUrl(targetUrl);
+    }
+    // Any other direct HTTP/HTTPS file host
+    return targetUrl;
+  }
+
+  // 3. Genuine Cloudinary Media Fallback (ONLY if it's not a URL and not an R2 key)
+  if (row.file_public_id && !row.file_public_id.startsWith('http') && !row.file_public_id.startsWith('ebooks/')) {
     const expiresAtEpoch = Math.floor(Date.now() / 1000) + 3600;
     try {
       return cloudinary.utils.private_download_url(
@@ -71,7 +97,7 @@ async function generateSignedDeliveryUrl(row: DownloadSnapshotRow): Promise<stri
     }
   }
 
-  return row.file_url || '#';
+  return targetUrl || '#';
 }
 
 export async function downloadBookHandler(
@@ -86,7 +112,7 @@ export async function downloadBookHandler(
       throw new AppError('Invalid download token', 400);
     }
 
-    // Direct snapshot resolution (no vulnerable inner joins to mutable catalog tables)
+    // Direct snapshot resolution
     const result = await query<DownloadSnapshotRow>(
       `SELECT dd.id,
               dd.order_item_id,
@@ -134,7 +160,7 @@ export async function downloadBookHandler(
     const isHeadRequest = req.method === 'HEAD';
     const now = Date.now();
     const lastDownloadedEpoch = record.last_download_at ? new Date(record.last_download_at).getTime() : 0;
-    const isDuplicateRetry = (now - lastDownloadedEpoch) < 60_000; // 60s Grace Window
+    const isDuplicateRetry = (now - lastDownloadedEpoch) < 60_000;
 
     if (!isHeadRequest && !isDuplicateRetry) {
       await query(

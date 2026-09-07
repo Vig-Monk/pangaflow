@@ -160,7 +160,7 @@ export async function sendOrderConfirmationEmail(
           <!-- Footer -->
           <div style="background-color: #F8F9FA; padding: 20px; text-align: center; font-size: 11px; color: #A0AEC0; border-top: 1px solid #EDF2F7;">
             &copy; ${new Date().getFullYear()} Flemela Bookstore • Sarit Centre, Westlands, Nairobi.<br>
-            Need assistance? Reach out to our concierge at <a href="https://wa.me/254700000000" style="color: #052219; font-weight: bold;">WhatsApp Concierge</a>.
+            Need assistance? Reach out to our concierge at <a href="https://wa.me/254143304460" style="color: #052219; font-weight: bold;">WhatsApp Concierge (0143304460)</a>
           </div>
         </div>
       </body>

@@ -139,7 +139,7 @@ async function upsertBookFromImport(
       sellingPrice = row.salePrice || row.regularPrice || 999;
     }
 
-    // 4. Synchronize PDF & EPUB eBook prices to be identical
+    // 4. Synchronize PDF & EPUB eBook prices
     const digitalPrice = row.pdfPrice && row.pdfPrice > 0
       ? row.pdfPrice
       : (row.epubPrice && row.epubPrice > 0 ? row.epubPrice : 149);
@@ -260,7 +260,7 @@ async function upsertBookFromImport(
       }
     }
 
-    // 5. Hardcopy Format
+    // 5. Hardcopy Format (Always assume/create Hardcopy when sellingPrice is present)
     if (productId && sellingPrice) {
       await client.query(
         `INSERT INTO product_formats (
@@ -276,37 +276,43 @@ async function upsertBookFromImport(
       );
     }
 
-    // 6. Digital PDF Format (uses digitalPrice & digitalCompareAt)
-    if (productId) {
+    // 6. Digital PDF Format (Strict Guard: Only create if a PDF link or price was explicitly provided)
+    if (productId && (row.pdfFileUrl || row.pdfPrice)) {
+      const isExternalUrl = row.pdfFileUrl?.startsWith('http://') || row.pdfFileUrl?.startsWith('https://');
+      const filePublicId = isExternalUrl ? null : (row.pdfFileUrl || null);
+
       await client.query(
         `INSERT INTO product_formats (
            product_id, format, price, compare_at_price, file_url, file_public_id
          )
-         VALUES ($1, 'pdf', $2, $3, $4, $4)
+         VALUES ($1, 'pdf', $2, $3, $4, $5)
          ON CONFLICT (product_id, format) DO UPDATE SET
            price            = EXCLUDED.price,
            compare_at_price = EXCLUDED.compare_at_price,
            file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
            file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
            updated_at       = NOW()`,
-        [productId, digitalPrice, digitalCompareAt, row.pdfFileUrl || null]
+        [productId, digitalPrice, digitalCompareAt, row.pdfFileUrl || null, filePublicId]
       );
     }
 
-    // 7. Digital EPUB Format (uses identical digitalPrice & digitalCompareAt)
-    if (productId) {
+    // 7. Digital EPUB Format (Strict Guard: Only create if an EPUB link or price was explicitly provided)
+    if (productId && (row.epubFileUrl || row.epubPrice)) {
+      const isExternalUrl = row.epubFileUrl?.startsWith('http://') || row.epubFileUrl?.startsWith('https://');
+      const filePublicId = isExternalUrl ? null : (row.epubFileUrl || null);
+
       await client.query(
         `INSERT INTO product_formats (
            product_id, format, price, compare_at_price, file_url, file_public_id
          )
-         VALUES ($1, 'epub', $2, $3, $4, $4)
+         VALUES ($1, 'epub', $2, $3, $4, $5)
          ON CONFLICT (product_id, format) DO UPDATE SET
            price            = EXCLUDED.price,
            compare_at_price = EXCLUDED.compare_at_price,
            file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
            file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
            updated_at       = NOW()`,
-        [productId, digitalPrice, digitalCompareAt, row.epubFileUrl || null]
+        [productId, digitalPrice, digitalCompareAt, row.epubFileUrl || null, filePublicId]
       );
     }
 
