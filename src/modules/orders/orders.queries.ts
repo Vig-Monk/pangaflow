@@ -110,6 +110,31 @@ export interface CashReconciliationSummary {
 const UUID_REGEX =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Self-healing guard: ensures payment_reference column and index exist in PostgreSQL.
+ */
+let orderSchemaChecked = false;
+export async function ensureOrderSchema(client?: PoolClient): Promise<void> {
+    if (orderSchemaChecked) return;
+    const runner = client || pool;
+    try {
+        await runner.query(`
+            ALTER TABLE orders
+              ADD COLUMN IF NOT EXISTS payment_reference TEXT DEFAULT NULL;
+            
+            CREATE INDEX IF NOT EXISTS idx_orders_org_payment_ref
+              ON orders(org_id, UPPER(TRIM(payment_reference)))
+              WHERE payment_reference IS NOT NULL;
+
+            CREATE INDEX IF NOT EXISTS idx_orders_org_payment_method
+              ON orders(org_id, payment_method);
+        `);
+        orderSchemaChecked = true;
+    } catch {
+        orderSchemaChecked = true;
+    }
+}
+
 export async function getOrdersSummary(orgId: string): Promise<OrdersSummary> {
     const result = await query<{
         today_count: string;
@@ -184,6 +209,8 @@ export async function insertOrderTransactional(
         deliveryConfirmationCode?: string | null;
     }
 ): Promise<string> {
+    await ensureOrderSchema(client);
+
     const locationCapturedAt =
         data.customerLat !== null && data.customerLat !== undefined
             ? new Date()
@@ -306,6 +333,8 @@ export async function findOrderForWebhook(
         return null;
     }
 
+    await ensureOrderSchema(client);
+
     const result = await client.query<Order>(
         `SELECT id, org_id, store_id, customer_name, customer_phone, customer_email,
             delivery_location, notes, status, payment_method, payment_status,
@@ -331,6 +360,8 @@ export async function markOrderAsPaidTransactional(
     if (!UUID_REGEX.test(orderId.trim())) {
         return null;
     }
+
+    await ensureOrderSchema(client);
 
     const result = await client.query<Order>(
         `UPDATE orders
@@ -361,6 +392,8 @@ export async function markOrderPaymentFailedTransactional(
         return null;
     }
 
+    await ensureOrderSchema(client);
+
     const result = await client.query<Order>(
         `UPDATE orders
      SET    payment_status = 'failed',
@@ -385,6 +418,8 @@ export async function listOrders(
     orgId: string,
     options: ListOrdersOptions
 ): Promise<{ orders: OrderWithItems[]; total: number }> {
+    await ensureOrderSchema();
+
     const limit = isNaN(options.limit) || options.limit <= 0 ? 20 : options.limit;
     const offset = (options.page - 1) * limit;
 
@@ -486,6 +521,8 @@ export async function getOrderById(
         return null;
     }
 
+    await ensureOrderSchema();
+
     const orderResult = await query<Order>(
         `SELECT id, org_id, store_id, customer_name, customer_phone, customer_email,
             delivery_location, notes, status, payment_method, payment_status,
@@ -562,6 +599,7 @@ export async function updateOrderPaymentStatus(
     const client = await pool.connect();
     try {
         await client.query("BEGIN");
+        await ensureOrderSchema(client);
 
         const orderRes = await client.query<Order>(
             `UPDATE orders
@@ -702,7 +740,6 @@ export async function findNearbyConfirmedOrders(
     nearby.sort((a, b) => a.distance_km - b.distance_km);
     return nearby;
 }
-
 export async function assignRiderToOrders(
     orgId: string,
     orderIds: string[],
@@ -712,6 +749,7 @@ export async function assignRiderToOrders(
     const client = await pool.connect();
     try {
         await client.query("BEGIN");
+        await ensureOrderSchema(client);
 
         const result = await client.query<Order>(
             `UPDATE orders
@@ -747,6 +785,7 @@ export async function assignRiderToOrders(
         client.release();
     }
 }
+
 export async function completeOrderDeliveryTransactional(
     orgId: string,
     orderId: string,
@@ -763,6 +802,7 @@ export async function completeOrderDeliveryTransactional(
     const client = await pool.connect();
     try {
         await client.query("BEGIN");
+        await ensureOrderSchema(client);
 
         const order = await getOrderById(orgId, orderId.trim());
         if (!order) {
@@ -921,5 +961,4 @@ export async function getCashReconciliationSummary(
         collected_total: row?.collected_total || "0.00",
         variance,
         unreconciled_count: parseInt(row?.unreconciled_count || "0", 10)
-    };
-}
+    };}

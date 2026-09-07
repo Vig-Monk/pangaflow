@@ -1,6 +1,7 @@
 // =============================================================================
 // soko-api/src/modules/public/public.service.ts
-// Storefront API with phone-gated downloads, email capture, and promo expiration.
+// Storefront API with phone-gated downloads, email capture, promo expiration,
+// and in-place payment recovery retries.
 // =============================================================================
 
 import axios from 'axios';
@@ -628,7 +629,6 @@ export async function placeOrder(
     client.release();
   }
 }
-
 export async function getPublicOrderDetails(
   storeSlug: string,
   orderId: string,
@@ -737,4 +737,82 @@ export async function getPublicOrderDetails(
     downloads,
     isVerifiedCustomer,
   };
-	}
+}
+
+export async function retryOrderPayment(
+  storeSlug: string,
+  orderId: string,
+  rawBody: unknown
+): Promise<{ success: boolean; checkoutRequestId?: string }> {
+  const schema = z.object({
+    paymentMethod: z.enum(['mpesa', 'mpesa_manual', 'mpesa_cash']),
+    phone: z.string().optional(),
+    mpesaCode: z.string().nullable().optional(),
+  });
+
+  const parsed = schema.safeParse(rawBody);
+  if (!parsed.success) {
+    throw new AppError(parsed.error.issues[0]?.message || 'Invalid retry payload', 400);
+  }
+
+  const store = await publicQueries.getStoreBySlugPublic(storeSlug);
+  if (!store) throw new AppError('Store not found', 404);
+
+  const orderRes = await pool.query<{ id: string; total: string; customer_phone: string }>(
+    `SELECT id, total::text AS total, customer_phone FROM orders WHERE id = $1 AND org_id = $2`,
+    [orderId, store.org_id]
+  );
+  const order = orderRes.rows[0];
+  if (!order) throw new AppError('Order not found', 404);
+
+  const cleanPhone = parsed.data.phone ? normalizeCustomerPhone(parsed.data.phone) : order.customer_phone;
+  const paymentRef = parsed.data.mpesaCode ? parsed.data.mpesaCode.trim().toUpperCase() : null;
+
+  await pool.query(
+    `UPDATE orders 
+     SET payment_method = $3,
+         payment_reference = COALESCE($4, payment_reference),
+         payment_status = 'pending',
+         updated_at = NOW()
+     WHERE id = $1 AND org_id = $2`,
+    [orderId, store.org_id, parsed.data.paymentMethod, paymentRef]
+  );
+
+  let checkoutRequestId: string | undefined;
+
+  if (parsed.data.paymentMethod === 'mpesa') {
+    const creds = await getDecryptedCredentials(store.org_id);
+    if (creds) {
+      const callbackUrl = `${env.API_PUBLIC_URL.replace(/\/$/, '')}/api/v1/payments/mpesa/callback`;
+      const stkResult = await darajaService.stkPush({
+        credentials: creds,
+        phone: cleanPhone,
+        amount: parseFloat(order.total),
+        accountReference: orderId,
+        transactionDesc: `Order ${orderId.slice(0, 8)}`,
+        callbackUrl,
+      });
+
+      checkoutRequestId = stkResult.checkoutRequestId;
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await createPendingMpesaTransaction(client, {
+          orgId: store.org_id,
+          checkoutRequestId: stkResult.checkoutRequestId,
+          merchantRequestId: stkResult.merchantRequestId,
+          phone: cleanPhone,
+          amount: parseFloat(order.total),
+          accountReference: orderId,
+          transactionDesc: `Order ${orderId.slice(0, 8)}`,
+        });
+        await client.query('COMMIT');
+      } finally {
+        client.release();
+      }
+    }
+  }
+
+  return { success: true, checkoutRequestId };
+}

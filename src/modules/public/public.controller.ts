@@ -1,5 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/public/public.controller.ts
+// Public HTTP controller handling catalog, orders, and payment recovery.
 // =============================================================================
 
 import { Request, Response, NextFunction } from 'express';
@@ -84,6 +85,23 @@ export async function getPublicOrderDetailsHandler(
       verifyingPhone
     );
     success(res, orderDetails);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function retryOrderPaymentHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const result = await publicService.retryOrderPayment(
+      req.params.storeSlug,
+      req.params.orderId,
+      req.body
+    );
+    success(res, result);
   } catch (err) {
     next(err);
   }

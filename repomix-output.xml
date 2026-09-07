@@ -82,6 +82,8 @@ src/
     024_category_enhancement.sql
     025_hero_banner.sql
     026_import_deduplication.sql
+    027_relax_banner_not_null.sql
+    028_order_payment_reference.sql
     run.ts
   modules/
     admin/
@@ -1485,6 +1487,34 @@ CREATE INDEX IF NOT EXISTS idx_products_org_name_ci
   WHERE deleted_at IS NULL;
 </file>
 
+<file path="src/migrations/027_relax_banner_not_null.sql">
+-- =============================================================================
+-- Migration: 027_relax_banner_not_null.sql
+-- Soko Platform — Relax NOT NULL Constraints on Optional Hero Banner Fields
+-- =============================================================================
+
+ALTER TABLE store_banners ALTER COLUMN title DROP NOT NULL;
+ALTER TABLE store_banners ALTER COLUMN cta_label DROP NOT NULL;
+ALTER TABLE store_banners ALTER COLUMN cta_link DROP NOT NULL;
+</file>
+
+<file path="src/migrations/028_order_payment_reference.sql">
+-- =============================================================================
+-- Migration: 028_order_payment_reference.sql
+-- Soko Platform — First-Class Payment Reference & Fast Admin Order Search
+-- =============================================================================
+
+ALTER TABLE orders
+  ADD COLUMN IF NOT EXISTS payment_reference TEXT DEFAULT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_orders_org_payment_ref
+  ON orders(org_id, UPPER(TRIM(payment_reference)))
+  WHERE payment_reference IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_orders_org_payment_method
+  ON orders(org_id, payment_method);
+</file>
+
 <file path="src/migrations/run.ts">
 /**
  * src/migrations/run.ts
@@ -2027,177 +2057,6 @@ const router = Router();
 router.use(verifyToken);
 
 router.get('/overview', getAnalyticsOverviewHandler);
-
-export default router;
-</file>
-
-<file path="src/modules/banners/banners.controller.ts">
-// =============================================================================
-// soko-api/src/modules/banners/banners.controller.ts
-// Controller layer for promotional hero banners.
-// =============================================================================
-
-import { Request, Response, NextFunction } from 'express';
-import { success } from '../../utils/response';
-import { AppError } from '../../utils/error';
-import * as bannersService from './banners.service';
-import { getStoreBySlugPublic } from '../public/public.queries';
-
-function requireOrgId(req: Request): string {
-  if (!req.orgId) {
-    throw new AppError('Unauthorized', 401);
-  }
-  return req.orgId;
-}
-
-export async function listPublicBannersHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const { storeSlug } = req.params;
-    if (!storeSlug) {
-      throw new AppError('Store slug is required', 400);
-    }
-
-    const store = await getStoreBySlugPublic(storeSlug);
-    if (!store) {
-      throw new AppError('Store not found', 404);
-    }
-
-    const banners = await bannersService.getPublicActiveBanners(store.org_id);
-    success(res, banners);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function trackBannerClickHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const { id } = req.params;
-    if (!id) {
-      throw new AppError('Banner ID is required', 400);
-    }
-
-    await bannersService.recordClick(id);
-    success(res, { tracked: true });
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function listAdminBannersHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const banners = await bannersService.getAdminBanners(orgId);
-    success(res, banners);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function createBannerHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const banner = await bannersService.createBanner(orgId, req.body);
-    success(res, banner, undefined, 201);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function updateBannerHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const banner = await bannersService.updateBanner(orgId, req.params.id, req.body);
-    success(res, banner);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function deleteBannerHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    await bannersService.deleteBanner(orgId, req.params.id);
-    success(res, { deleted: true });
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function reorderBannersHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    await bannersService.reorderBanners(orgId, req.body);
-    success(res, { reordered: true });
-  } catch (err) {
-    next(err);
-  }
-}
-</file>
-
-<file path="src/modules/banners/banners.routes.ts">
-// =============================================================================
-// soko-api/src/modules/banners/banners.routes.ts
-// Route wiring for promotional hero banners.
-// =============================================================================
-
-import { Router } from 'express';
-import { verifyToken } from '../../middleware/auth';
-import {
-  listPublicBannersHandler,
-  trackBannerClickHandler,
-  listAdminBannersHandler,
-  createBannerHandler,
-  updateBannerHandler,
-  deleteBannerHandler,
-  reorderBannersHandler,
-} from './banners.controller';
-
-const router = Router();
-
-// -----------------------------------------------------------------------------
-// 1. Public Storefront Endpoints (No Auth Required)
-// -----------------------------------------------------------------------------
-router.get('/public/:storeSlug', listPublicBannersHandler);
-router.post('/:id/click', trackBannerClickHandler);
-
-// -----------------------------------------------------------------------------
-// 2. Admin Management Endpoints (Requires Valid Admin Bearer JWT)
-// -----------------------------------------------------------------------------
-router.use(verifyToken);
-
-router.get('/', listAdminBannersHandler);
-router.post('/', createBannerHandler);
-router.post('/reorder', reorderBannersHandler);
-router.patch('/:id', updateBannerHandler);
-router.delete('/:id', deleteBannerHandler);
 
 export default router;
 </file>
@@ -6134,545 +5993,223 @@ export async function logout(refreshToken: string): Promise<void> {
 }
 </file>
 
-<file path="src/modules/banners/banners.queries.ts">
+<file path="src/modules/banners/banners.controller.ts">
 // =============================================================================
-// soko-api/src/modules/banners/banner.queries.ts
-// Database access layer for store promotional hero banners.
+// soko-api/src/modules/banners/banners.controller.ts
+// Controller layer for promotional hero banners.
 // =============================================================================
 
-import { query, pool } from '../../config/db';
+import { Request, Response, NextFunction } from 'express';
+import { v2 as cloudinary } from 'cloudinary';
+import { success } from '../../utils/response';
+import { AppError } from '../../utils/error';
+import * as bannersService from './banners.service';
+import { getStoreBySlugPublic } from '../public/public.queries';
 
-export interface StoreBannerRow {
-  id: string;
-  org_id: string;
-  title: string | null;
-  subtitle: string | null;
-  badge: string | null;
-  image_url: string;
-  mobile_image_url: string | null;
-  cta_label: string | null;
-  cta_link: string | null;
-  bg_color: string;
-  sort_order: number;
-  is_active: boolean;
-  starts_at: Date | null;
-  ends_at: Date | null;
-  click_count: number;
-  created_at: Date;
-  updated_at: Date;
+function requireOrgId(req: Request): string {
+  if (!req.orgId) {
+    throw new AppError('Unauthorized', 401);
+  }
+  return req.orgId;
 }
 
-export interface CreateBannerInput {
-  title?: string | null;
-  subtitle?: string | null;
-  badge?: string | null;
-  image_url: string;
-  mobile_image_url?: string | null;
-  cta_label?: string | null;
-  cta_link?: string | null;
-  bg_color?: string;
-  sort_order?: number;
-  is_active?: boolean;
-  starts_at?: Date | null;
-  ends_at?: Date | null;
-}
-
-export interface UpdateBannerInput {
-  title?: string | null;
-  subtitle?: string | null;
-  badge?: string | null;
-  image_url?: string;
-  mobile_image_url?: string | null;
-  cta_label?: string | null;
-  cta_link?: string | null;
-  bg_color?: string;
-  sort_order?: number;
-  is_active?: boolean;
-  starts_at?: Date | null;
-  ends_at?: Date | null;
-}
-
-const BANNER_SELECT_FIELDS = `
-  id, org_id, title, subtitle, badge, image_url, mobile_image_url,
-  cta_label, cta_link, bg_color, sort_order, is_active,
-  starts_at, ends_at, click_count, created_at, updated_at
-`;
-
-export async function listBannersAdmin(orgId: string): Promise<StoreBannerRow[]> {
-  const result = await query<StoreBannerRow>(
-    `SELECT ${BANNER_SELECT_FIELDS}
-     FROM   store_banners
-     WHERE  org_id = $1
-     ORDER  BY sort_order ASC, created_at DESC`,
-    [orgId]
-  );
-  return result.rows;
-}
-
-export async function listActiveBannersPublic(orgId: string): Promise<StoreBannerRow[]> {
-  const result = await query<StoreBannerRow>(
-    `SELECT ${BANNER_SELECT_FIELDS}
-     FROM   store_banners
-     WHERE  org_id = $1
-       AND  is_active = TRUE
-       AND  (starts_at IS NULL OR starts_at <= NOW())
-       AND  (ends_at IS NULL OR ends_at > NOW())
-     ORDER  BY sort_order ASC, created_at DESC`,
-    [orgId]
-  );
-  return result.rows;
-}
-
-export async function getBannerById(orgId: string, bannerId: string): Promise<StoreBannerRow | null> {
-  const result = await query<StoreBannerRow>(
-    `SELECT ${BANNER_SELECT_FIELDS}
-     FROM   store_banners
-     WHERE  org_id = $1 AND id = $2`,
-    [orgId, bannerId]
-  );
-  return result.rows[0] ?? null;
-}
-
-export async function createBanner(
-  orgId: string,
-  data: CreateBannerInput
-): Promise<StoreBannerRow> {
-  let nextSortOrder = data.sort_order;
-  if (nextSortOrder === undefined) {
-    const maxSortResult = await query<{ max_sort: number | null }>(
-      `SELECT MAX(sort_order) AS max_sort FROM store_banners WHERE org_id = $1`,
-      [orgId]
-    );
-    nextSortOrder = (maxSortResult.rows[0]?.max_sort ?? -1) + 1;
-  }
-
-  const result = await query<StoreBannerRow>(
-    `INSERT INTO store_banners (
-       org_id, title, subtitle, badge, image_url, mobile_image_url,
-       cta_label, cta_link, bg_color, sort_order, is_active, starts_at, ends_at
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-     RETURNING ${BANNER_SELECT_FIELDS}`,
-    [
-      orgId,
-      data.title?.trim() || '',
-      data.subtitle?.trim() || null,
-      data.badge?.trim().toUpperCase() || null,
-      data.image_url.trim(),
-      data.mobile_image_url?.trim() || null,
-      data.cta_label?.trim() || null,
-      data.cta_link?.trim() || null,
-      data.bg_color?.trim() || '#052219',
-      nextSortOrder,
-      data.is_active ?? true,
-      data.starts_at ?? null,
-      data.ends_at ?? null,
-    ]
-  );
-  return result.rows[0];
-}
-
-export async function updateBanner(
-  orgId: string,
-  bannerId: string,
-  data: UpdateBannerInput
-): Promise<StoreBannerRow | null> {
-  const setClauses: string[] = [];
-  const params: unknown[] = [orgId, bannerId];
-  let paramIdx = 3;
-
-  if (data.title !== undefined) {
-    setClauses.push(`title = $${paramIdx}`);
-    params.push(data.title?.trim() || '');
-    paramIdx++;
-  }
-  if (data.subtitle !== undefined) {
-    setClauses.push(`subtitle = $${paramIdx}`);
-    params.push(data.subtitle?.trim() || null);
-    paramIdx++;
-  }
-  if (data.badge !== undefined) {
-    setClauses.push(`badge = $${paramIdx}`);
-    params.push(data.badge?.trim().toUpperCase() || null);
-    paramIdx++;
-  }
-  if (data.image_url !== undefined) {
-    setClauses.push(`image_url = $${paramIdx}`);
-    params.push(data.image_url.trim());
-    paramIdx++;
-  }
-  if (data.mobile_image_url !== undefined) {
-    setClauses.push(`mobile_image_url = $${paramIdx}`);
-    params.push(data.mobile_image_url?.trim() || null);
-    paramIdx++;
-  }
-  if (data.cta_label !== undefined) {
-    setClauses.push(`cta_label = $${paramIdx}`);
-    params.push(data.cta_label?.trim() || null);
-    paramIdx++;
-  }
-  if (data.cta_link !== undefined) {
-    setClauses.push(`cta_link = $${paramIdx}`);
-    params.push(data.cta_link?.trim() || null);
-    paramIdx++;
-  }
-  if (data.bg_color !== undefined) {
-    setClauses.push(`bg_color = $${paramIdx}`);
-    params.push(data.bg_color.trim());
-    paramIdx++;
-  }
-  if (data.sort_order !== undefined) {
-    setClauses.push(`sort_order = $${paramIdx}`);
-    params.push(data.sort_order);
-    paramIdx++;
-  }
-  if (data.is_active !== undefined) {
-    setClauses.push(`is_active = $${paramIdx}`);
-    params.push(data.is_active);
-    paramIdx++;
-  }
-  if (data.starts_at !== undefined) {
-    setClauses.push(`starts_at = $${paramIdx}`);
-    params.push(data.starts_at);
-    paramIdx++;
-  }
-  if (data.ends_at !== undefined) {
-    setClauses.push(`ends_at = $${paramIdx}`);
-    params.push(data.ends_at);
-    paramIdx++;
-  }
-
-  if (setClauses.length === 0) {
-    return getBannerById(orgId, bannerId);
-  }
-
-  setClauses.push('updated_at = NOW()');
-
-  const result = await query<StoreBannerRow>(
-    `UPDATE store_banners
-     SET    ${setClauses.join(', ')}
-     WHERE  org_id = $1 AND id = $2
-     RETURNING ${BANNER_SELECT_FIELDS}`,
-    params
-  );
-  return result.rows[0] ?? null;
-}
-
-export async function deleteBanner(orgId: string, bannerId: string): Promise<boolean> {
-  const result = await query(
-    `DELETE FROM store_banners WHERE org_id = $1 AND id = $2`,
-    [orgId, bannerId]
-  );
-  return (result.rowCount ?? 0) > 0;
-}
-
-export async function reorderBannersTransactional(
-  orgId: string,
-  bannerIdsInOrder: string[]
+export async function listPublicBannersHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
 ): Promise<void> {
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-    for (let i = 0; i < bannerIdsInOrder.length; i++) {
-      await client.query(
-        `UPDATE store_banners
-         SET    sort_order = $3, updated_at = NOW()
-         WHERE  org_id = $1 AND id = $2`,
-        [orgId, bannerIdsInOrder[i], i]
-      );
+    const { storeSlug } = req.params;
+    if (!storeSlug) {
+      throw new AppError('Store slug is required', 400);
     }
-    await client.query('COMMIT');
+
+    const store = await getStoreBySlugPublic(storeSlug);
+    if (!store) {
+      throw new AppError('Store not found', 404);
+    }
+
+    const banners = await bannersService.getPublicActiveBanners(store.org_id);
+    success(res, banners);
   } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
+    next(err);
   }
 }
 
-export async function trackBannerClick(bannerId: string): Promise<void> {
-  await query(
-    `UPDATE store_banners
-     SET    click_count = click_count + 1
-     WHERE  id = $1`,
-    [bannerId]
-  );
+export async function trackBannerClickHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      throw new AppError('Banner ID is required', 400);
+    }
+
+    await bannersService.recordClick(id);
+    success(res, { tracked: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function listAdminBannersHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const banners = await bannersService.getAdminBanners(orgId);
+    success(res, banners);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function createBannerHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const banner = await bannersService.createBanner(orgId, req.body);
+    success(res, banner, undefined, 201);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateBannerHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const banner = await bannersService.updateBanner(orgId, req.params.id, req.body);
+    success(res, banner);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function deleteBannerHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    await bannersService.deleteBanner(orgId, req.params.id);
+    success(res, { deleted: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function reorderBannersHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    await bannersService.reorderBanners(orgId, req.body);
+    success(res, { reordered: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function uploadBannerImageHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const file = req.file;
+
+    if (!file) {
+      throw new AppError('No image file provided', 400);
+    }
+
+    const uploadResult = await new Promise<{ secure_url: string }>((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        {
+          folder: `soko/${orgId}/banners`,
+          resource_type: 'image',
+        },
+        (error, result) => {
+          if (error || !result) {
+            return reject(error || new Error('Upload to Cloudinary failed'));
+          }
+          resolve({ secure_url: result.secure_url });
+        }
+      );
+      stream.end(file.buffer);
+    });
+
+    success(res, { url: uploadResult.secure_url });
+  } catch (err) {
+    next(err);
+  }
 }
 </file>
 
-<file path="src/modules/banners/banners.service.ts">
+<file path="src/modules/banners/banners.routes.ts">
 // =============================================================================
-// soko-api/src/modules/banners/banners.service.ts
-// Business logic for customizable promotional hero banners.
+// soko-api/src/modules/banners/banners.routes.ts
+// Route wiring for promotional hero banners.
 // =============================================================================
 
-import { z } from 'zod';
+import { Router } from 'express';
+import multer from 'multer';
+import { verifyToken } from '../../middleware/auth';
 import { AppError } from '../../utils/error';
-import * as bannersQueries from './banners.queries';
-import type { StoreBannerRow } from './banners.queries';
+import {
+  listPublicBannersHandler,
+  trackBannerClickHandler,
+  listAdminBannersHandler,
+  createBannerHandler,
+  updateBannerHandler,
+  deleteBannerHandler,
+  reorderBannersHandler,
+  uploadBannerImageHandler,
+} from './banners.controller';
 
-export const CreateBannerSchema = z
-  .object({
-    title: z
-      .string()
-      .max(200)
-      .trim()
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    subtitle: z
-      .string()
-      .max(500)
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    badge: z
-      .string()
-      .max(50)
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    image_url: z.string().url('A valid desktop image URL is required'),
-    mobile_image_url: z
-      .string()
-      .url('Invalid mobile image URL')
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    cta_label: z
-      .string()
-      .max(50)
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    cta_link: z
-      .string()
-      .max(500)
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    bg_color: z
-      .string()
-      .regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, 'Invalid hex color code')
-      .default('#052219'),
-    sort_order: z.number().int().optional(),
-    is_active: z.boolean().default(true),
-    starts_at: z.string().datetime().nullable().optional(),
-    ends_at: z.string().datetime().nullable().optional(),
-  })
-  .refine(
-    (data) => {
-      if (data.starts_at && data.ends_at) {
-        return new Date(data.ends_at).getTime() > new Date(data.starts_at).getTime();
-      }
-      return true;
-    },
-    {
-      message: 'Expiration date must be strictly after the start date',
-      path: ['ends_at'],
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new AppError('Only image files are allowed', 400));
     }
-  );
-
-export const UpdateBannerSchema = z
-  .object({
-    title: z
-      .string()
-      .max(200)
-      .trim()
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    subtitle: z
-      .string()
-      .max(500)
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    badge: z
-      .string()
-      .max(50)
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    image_url: z.string().url().optional(),
-    mobile_image_url: z
-      .string()
-      .url()
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    cta_label: z
-      .string()
-      .max(50)
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    cta_link: z
-      .string()
-      .max(500)
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    bg_color: z.string().regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/).optional(),
-    sort_order: z.number().int().optional(),
-    is_active: z.boolean().optional(),
-    starts_at: z.string().datetime().nullable().optional(),
-    ends_at: z.string().datetime().nullable().optional(),
-  })
-  .refine(
-    (data) => {
-      if (data.starts_at && data.ends_at) {
-        return new Date(data.ends_at).getTime() > new Date(data.starts_at).getTime();
-      }
-      return true;
-    },
-    {
-      message: 'Expiration date must be strictly after the start date',
-      path: ['ends_at'],
-    }
-  );
-
-export const ReorderBannersSchema = z.object({
-  bannerIds: z.array(z.string().uuid()).min(1, 'At least one banner ID is required to reorder'),
+  },
 });
 
-export interface StoreBannerDto {
-  id: string;
-  org_id: string;
-  title: string | null;
-  subtitle: string | null;
-  badge: string | null;
-  image_url: string;
-  mobile_image_url: string | null;
-  cta_label: string | null;
-  cta_link: string | null;
-  bg_color: string;
-  sort_order: number;
-  is_active: boolean;
-  starts_at: string | null;
-  ends_at: string | null;
-  click_count: number;
-  created_at: string;
-  updated_at: string;
-}
+const router = Router();
 
-export function toBannerDto(row: StoreBannerRow): StoreBannerDto {
-  return {
-    id: row.id,
-    org_id: row.org_id,
-    title: row.title || null,
-    subtitle: row.subtitle,
-    badge: row.badge,
-    image_url: row.image_url,
-    mobile_image_url: row.mobile_image_url,
-    cta_label: row.cta_label || null,
-    cta_link: row.cta_link || null,
-    bg_color: row.bg_color,
-    sort_order: row.sort_order,
-    is_active: row.is_active,
-    starts_at: row.starts_at ? new Date(row.starts_at).toISOString() : null,
-    ends_at: row.ends_at ? new Date(row.ends_at).toISOString() : null,
-    click_count: row.click_count,
-    created_at: new Date(row.created_at).toISOString(),
-    updated_at: new Date(row.updated_at).toISOString(),
-  };
-}
+// 1. Public Storefront Endpoints (No Auth Required)
+router.get('/public/:storeSlug', listPublicBannersHandler);
+router.post('/:id/click', trackBannerClickHandler);
 
-export async function getAdminBanners(orgId: string): Promise<StoreBannerDto[]> {
-  const rows = await bannersQueries.listBannersAdmin(orgId);
-  return rows.map(toBannerDto);
-}
+// 2. Admin Management Endpoints (Requires Valid Admin Bearer JWT)
+router.use(verifyToken);
 
-export async function getPublicActiveBanners(orgId: string): Promise<StoreBannerDto[]> {
-  const rows = await bannersQueries.listActiveBannersPublic(orgId);
-  return rows.map(toBannerDto);
-}
+router.get('/', listAdminBannersHandler);
+router.post('/', createBannerHandler);
+router.post('/upload', upload.single('file'), uploadBannerImageHandler);
+router.post('/reorder', reorderBannersHandler);
+router.patch('/:id', updateBannerHandler);
+router.delete('/:id', deleteBannerHandler);
 
-export async function createBanner(orgId: string, rawBody: unknown): Promise<StoreBannerDto> {
-  const parsed = CreateBannerSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid banner payload', 400);
-  }
-
-  const row = await bannersQueries.createBanner(orgId, {
-    ...parsed.data,
-    title: parsed.data.title || null,
-    starts_at: parsed.data.starts_at ? new Date(parsed.data.starts_at) : null,
-    ends_at: parsed.data.ends_at ? new Date(parsed.data.ends_at) : null,
-  });
-
-  return toBannerDto(row);
-}
-
-export async function updateBanner(
-  orgId: string,
-  bannerId: string,
-  rawBody: unknown
-): Promise<StoreBannerDto> {
-  const existing = await bannersQueries.getBannerById(orgId, bannerId);
-  if (!existing) {
-    throw new AppError('Banner not found', 404);
-  }
-
-  const parsed = UpdateBannerSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid banner update payload', 400);
-  }
-
-  const row = await bannersQueries.updateBanner(orgId, bannerId, {
-    ...parsed.data,
-    starts_at:
-      parsed.data.starts_at !== undefined
-        ? parsed.data.starts_at
-          ? new Date(parsed.data.starts_at)
-          : null
-        : undefined,
-    ends_at:
-      parsed.data.ends_at !== undefined
-        ? parsed.data.ends_at
-          ? new Date(parsed.data.ends_at)
-          : null
-        : undefined,
-  });
-
-  if (!row) {
-    throw new AppError('Banner not found', 404);
-  }
-
-  return toBannerDto(row);
-}
-
-export async function deleteBanner(orgId: string, bannerId: string): Promise<void> {
-  const deleted = await bannersQueries.deleteBanner(orgId, bannerId);
-  if (!deleted) {
-    throw new AppError('Banner not found', 404);
-  }
-}
-
-export async function reorderBanners(orgId: string, rawBody: unknown): Promise<void> {
-  const parsed = ReorderBannersSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid reordering payload', 400);
-  }
-
-  await bannersQueries.reorderBannersTransactional(orgId, parsed.data.bannerIds);
-}
-
-export async function recordClick(bannerId: string): Promise<void> {
-  await bannersQueries.trackBannerClick(bannerId);
-}
+export default router;
 </file>
 
 <file path="src/modules/expenses/expenses.controller.ts">
@@ -7720,7 +7257,8 @@ export async function deleteProductFormat(
 
 <file path="src/modules/public/public.routes.ts">
 // =============================================================================
-// src/modules/public/public.routes.ts
+// soko-api/src/modules/public/public.routes.ts
+// Public storefront routes for catalog, locations, orders, and payment retry.
 // =============================================================================
 
 import { Router } from "express";
@@ -7730,7 +7268,8 @@ import {
     listStoreProductsHandler,
     getProductDetailsHandler,
     placeOrderHandler,
-    getPublicOrderDetailsHandler
+    getPublicOrderDetailsHandler,
+    retryOrderPaymentHandler,
 } from "./public.controller";
 
 const router = Router();
@@ -7738,12 +7277,15 @@ const router = Router();
 // Location & Estate Search (Zero-Cost Local First, Nominatim Fallback)
 router.get("/estates/search", searchDeliveryLocationsHandler);
 
-// Public Storefront Catalog & Checkout Endpoints
+// Public Storefront Catalog Endpoints
 router.get("/stores/:storeSlug", getStoreMetadataHandler);
 router.get("/stores/:storeSlug/products", listStoreProductsHandler);
 router.get("/stores/:storeSlug/products/:productSlug", getProductDetailsHandler);
+
+// Public Order Placement, Receipts & In-Place Payment Retry
 router.post('/stores/:storeSlug/orders', placeOrderHandler);
 router.get('/stores/:storeSlug/orders/:orderId', getPublicOrderDetailsHandler);
+router.post('/stores/:storeSlug/orders/:orderId/retry-payment', retryOrderPaymentHandler);
 
 export default router;
 </file>
@@ -8124,75 +7666,6 @@ router.get('/summary', dashboardSummaryHandler);
 router.get('/full', fullDashboardHandler);
 
 export default router;
-</file>
-
-<file path="src/scripts/backfill-covers.ts">
-// =============================================================================
-// soko-api/src/scripts/backfill-covers.ts
-// Re-syncs all catalog books with Ultra-High-Resolution (800px+) cover art.
-// Run via: npx tsx src/scripts/backfill-covers.ts
-// =============================================================================
-
-import { pool } from '../config/db';
-import { findBestBookCover } from '../services/bookCover.service';
-
-async function backfill(): Promise<void> {
-  console.log('====================================================');
-  console.log('     UPGRADING BOOK COVERS TO HD RESOLUTION (800px+) ');
-  console.log('====================================================\n');
-
-  const client = await pool.connect();
-
-  try {
-    const booksRes = await client.query<{ id: string; name: string; sku: string | null; description: string | null }>(
-      `SELECT p.id, p.name, p.sku, p.description
-       FROM products p
-       WHERE p.deleted_at IS NULL
-       ORDER BY p.created_at DESC`
-    );
-
-    const books = booksRes.rows;
-    console.log(`Found ${books.length} book(s) in catalog to upgrade.\n`);
-
-    for (const book of books) {
-      let author: string | undefined = undefined;
-      if (book.description && book.description.startsWith('By ')) {
-        const match = book.description.match(/^By\s+([^<\n]+)/);
-        if (match) author = match[1].trim();
-      }
-
-      console.log(`  → Fetching HD cover for: "${book.name}"...`);
-      const discovered = await findBestBookCover(book.name, author, book.sku || undefined);
-
-      if (discovered.coverUrl) {
-        // Wipe old low-res thumbnail
-        await client.query('DELETE FROM product_images WHERE product_id = $1', [book.id]);
-
-        // Insert new HD 800px+ cover
-        await client.query(
-          `INSERT INTO product_images (product_id, image_url, image_public_id, sort_order)
-           VALUES ($1, $2, $3, 0)`,
-          [book.id, discovered.coverUrl, `auto_${discovered.source || 'web'}`]
-        );
-        console.log(`    ✓ Saved HD: ${discovered.coverUrl}`);
-      } else {
-        console.log(`    ✗ No HD cover found for: "${book.name}"`);
-      }
-
-      // 150ms delay
-      await new Promise((r) => setTimeout(r, 150));
-    }
-
-    console.log('\n✅ All covers upgraded to HD resolution!\n');
-  } catch (err) {
-    console.error('Failed to upgrade covers:', err);
-  } finally {
-    client.release();
-    await pool.end();
-  }
-}
-
-backfill();
 </file>
 
 <file path="src/scripts/seed-admin.ts">
@@ -9916,6 +9389,294 @@ router.delete(
 export default router;
 </file>
 
+<file path="src/modules/banners/banners.queries.ts">
+// =============================================================================
+// soko-api/src/modules/banners/banners.queries.ts
+// Database access layer for store promotional hero banners.
+// =============================================================================
+
+import { query, pool } from '../../config/db';
+
+export interface StoreBannerRow {
+  id: string;
+  org_id: string;
+  title: string | null;
+  subtitle: string | null;
+  badge: string | null;
+  image_url: string;
+  mobile_image_url: string | null;
+  cta_label: string | null;
+  cta_link: string | null;
+  bg_color: string;
+  sort_order: number;
+  is_active: boolean;
+  starts_at: Date | null;
+  ends_at: Date | null;
+  click_count: number;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface CreateBannerInput {
+  title?: string | null;
+  subtitle?: string | null;
+  badge?: string | null;
+  image_url: string;
+  mobile_image_url?: string | null;
+  cta_label?: string | null;
+  cta_link?: string | null;
+  bg_color?: string;
+  sort_order?: number;
+  is_active?: boolean;
+  starts_at?: Date | null;
+  ends_at?: Date | null;
+}
+
+export interface UpdateBannerInput {
+  title?: string | null;
+  subtitle?: string | null;
+  badge?: string | null;
+  image_url?: string;
+  mobile_image_url?: string | null;
+  cta_label?: string | null;
+  cta_link?: string | null;
+  bg_color?: string;
+  sort_order?: number;
+  is_active?: boolean;
+  starts_at?: Date | null;
+  ends_at?: Date | null;
+}
+
+const BANNER_SELECT_FIELDS = `
+  id, org_id, title, subtitle, badge, image_url, mobile_image_url,
+  cta_label, cta_link, bg_color, sort_order, is_active,
+  starts_at, ends_at, click_count, created_at, updated_at
+`;
+
+let schemaRelaxed = false;
+export async function ensureBannerSchema(): Promise<void> {
+  if (schemaRelaxed) return;
+  try {
+    await query(`
+      ALTER TABLE store_banners ALTER COLUMN title DROP NOT NULL;
+      ALTER TABLE store_banners ALTER COLUMN cta_label DROP NOT NULL;
+      ALTER TABLE store_banners ALTER COLUMN cta_link DROP NOT NULL;
+    `);
+    schemaRelaxed = true;
+  } catch {
+    schemaRelaxed = true;
+  }
+}
+
+export async function listBannersAdmin(orgId: string): Promise<StoreBannerRow[]> {
+  await ensureBannerSchema();
+  const result = await query<StoreBannerRow>(
+    `SELECT ${BANNER_SELECT_FIELDS}
+     FROM   store_banners
+     WHERE  org_id = $1
+     ORDER  BY sort_order ASC, created_at DESC`,
+    [orgId]
+  );
+  return result.rows;
+}
+
+export async function listActiveBannersPublic(orgId: string): Promise<StoreBannerRow[]> {
+  await ensureBannerSchema();
+  const result = await query<StoreBannerRow>(
+    `SELECT ${BANNER_SELECT_FIELDS}
+     FROM   store_banners
+     WHERE  org_id = $1
+       AND  is_active = TRUE
+       AND  (starts_at IS NULL OR starts_at <= NOW())
+       AND  (ends_at IS NULL OR ends_at > NOW())
+     ORDER  BY sort_order ASC, created_at DESC`,
+    [orgId]
+  );
+  return result.rows;
+}
+
+export async function getBannerById(orgId: string, bannerId: string): Promise<StoreBannerRow | null> {
+  await ensureBannerSchema();
+  const result = await query<StoreBannerRow>(
+    `SELECT ${BANNER_SELECT_FIELDS}
+     FROM   store_banners
+     WHERE  org_id = $1 AND id = $2`,
+    [orgId, bannerId]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function createBanner(
+  orgId: string,
+  data: CreateBannerInput
+): Promise<StoreBannerRow> {
+  await ensureBannerSchema();
+
+  let nextSortOrder = data.sort_order;
+  if (nextSortOrder === undefined) {
+    const maxSortResult = await query<{ max_sort: number | null }>(
+      `SELECT MAX(sort_order) AS max_sort FROM store_banners WHERE org_id = $1`,
+      [orgId]
+    );
+    nextSortOrder = (maxSortResult.rows[0]?.max_sort ?? -1) + 1;
+  }
+
+  const result = await query<StoreBannerRow>(
+    `INSERT INTO store_banners (
+       org_id, title, subtitle, badge, image_url, mobile_image_url,
+       cta_label, cta_link, bg_color, sort_order, is_active, starts_at, ends_at
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+     RETURNING ${BANNER_SELECT_FIELDS}`,
+    [
+      orgId,
+      data.title?.trim() || null,
+      data.subtitle?.trim() || null,
+      data.badge?.trim().toUpperCase() || null,
+      data.image_url.trim(),
+      data.mobile_image_url?.trim() || null,
+      data.cta_label?.trim() || null,
+      data.cta_link?.trim() || null,
+      data.bg_color?.trim() || '#052219',
+      nextSortOrder,
+      data.is_active ?? true,
+      data.starts_at ?? null,
+      data.ends_at ?? null,
+    ]
+  );
+  return result.rows[0];
+}
+
+export async function updateBanner(
+  orgId: string,
+  bannerId: string,
+  data: UpdateBannerInput
+): Promise<StoreBannerRow | null> {
+  await ensureBannerSchema();
+
+  const setClauses: string[] = [];
+  const params: unknown[] = [orgId, bannerId];
+  let paramIdx = 3;
+
+  if (data.title !== undefined) {
+    setClauses.push(`title = $${paramIdx}`);
+    params.push(data.title?.trim() || null);
+    paramIdx++;
+  }
+  if (data.subtitle !== undefined) {
+    setClauses.push(`subtitle = $${paramIdx}`);
+    params.push(data.subtitle?.trim() || null);
+    paramIdx++;
+  }
+  if (data.badge !== undefined) {
+    setClauses.push(`badge = $${paramIdx}`);
+    params.push(data.badge?.trim().toUpperCase() || null);
+    paramIdx++;
+  }
+  if (data.image_url !== undefined) {
+    setClauses.push(`image_url = $${paramIdx}`);
+    params.push(data.image_url.trim());
+    paramIdx++;
+  }
+  if (data.mobile_image_url !== undefined) {
+    setClauses.push(`mobile_image_url = $${paramIdx}`);
+    params.push(data.mobile_image_url?.trim() || null);
+    paramIdx++;
+  }
+  if (data.cta_label !== undefined) {
+    setClauses.push(`cta_label = $${paramIdx}`);
+    params.push(data.cta_label?.trim() || null);
+    paramIdx++;
+  }
+  if (data.cta_link !== undefined) {
+    setClauses.push(`cta_link = $${paramIdx}`);
+    params.push(data.cta_link?.trim() || null);
+    paramIdx++;
+  }
+  if (data.bg_color !== undefined) {
+    setClauses.push(`bg_color = $${paramIdx}`);
+    params.push(data.bg_color.trim() || '#052219');
+    paramIdx++;
+  }
+  if (data.sort_order !== undefined) {
+    setClauses.push(`sort_order = $${paramIdx}`);
+    params.push(data.sort_order);
+    paramIdx++;
+  }
+  if (data.is_active !== undefined) {
+    setClauses.push(`is_active = $${paramIdx}`);
+    params.push(data.is_active);
+    paramIdx++;
+  }
+  if (data.starts_at !== undefined) {
+    setClauses.push(`starts_at = $${paramIdx}`);
+    params.push(data.starts_at);
+    paramIdx++;
+  }
+  if (data.ends_at !== undefined) {
+    setClauses.push(`ends_at = $${paramIdx}`);
+    params.push(data.ends_at);
+    paramIdx++;
+  }
+
+  if (setClauses.length === 0) {
+    return getBannerById(orgId, bannerId);
+  }
+
+  setClauses.push('updated_at = NOW()');
+
+  const result = await query<StoreBannerRow>(
+    `UPDATE store_banners
+     SET    ${setClauses.join(', ')}
+     WHERE  org_id = $1 AND id = $2
+     RETURNING ${BANNER_SELECT_FIELDS}`,
+    params
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function deleteBanner(orgId: string, bannerId: string): Promise<boolean> {
+  const result = await query(
+    `DELETE FROM store_banners WHERE org_id = $1 AND id = $2`,
+    [orgId, bannerId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export async function reorderBannersTransactional(
+  orgId: string,
+  bannerIdsInOrder: string[]
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (let i = 0; i < bannerIdsInOrder.length; i++) {
+      await client.query(
+        `UPDATE store_banners
+         SET    sort_order = $3, updated_at = NOW()
+         WHERE  org_id = $1 AND id = $2`,
+        [orgId, bannerIdsInOrder[i], i]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function trackBannerClick(bannerId: string): Promise<void> {
+  await query(
+    `UPDATE store_banners
+     SET    click_count = click_count + 1
+     WHERE  id = $1`,
+    [bannerId]
+  );
+}
+</file>
+
 <file path="src/modules/customers/customers.queries.ts">
 // =============================================================================
 // src/modules/customers/customers.queries.ts
@@ -10867,176 +10628,6 @@ export async function getFullDashboard(orgId: string): Promise<FullDashboard> {
 }
 </file>
 
-<file path="src/modules/orders/orders.controller.ts">
-// =============================================================================
-// src/modules/orders/orders.controller.ts
-// =============================================================================
-
-import { Request, Response, NextFunction } from 'express';
-import { success } from '../../utils/response';
-import { AppError } from '../../utils/error';
-import * as ordersQueries from './orders.queries';
-import * as ordersService from './orders.service';
-
-function requireOrgId(req: Request): string {
-  if (!req.orgId) {
-    throw new AppError('Unauthorized', 401);
-  }
-  return req.orgId;
-}
-
-export async function getOrdersSummaryHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const summary = await ordersQueries.getOrdersSummary(orgId);
-    success(res, summary);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function listOrdersHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const page = Number(req.query.page ?? 1);
-    const limit = Number(req.query.limit ?? 20);
-
-    const result = await ordersQueries.listOrders(orgId, { page, limit });
-
-    success(res, result.orders, {
-      page,
-      limit,
-      totalItems: result.total,
-      totalPages: Math.ceil(result.total / limit),
-    });
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function getOrderHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const order = await ordersQueries.getOrderById(orgId, req.params.id);
-    if (!order) {
-      throw new AppError('Order not found', 404);
-    }
-    success(res, order);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function updateOrderStatusHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const order = await ordersQueries.updateOrderStatus(orgId, req.params.id, req.body.status);
-    if (!order) {
-      throw new AppError('Order not found', 404);
-    }
-    success(res, order);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function updateOrderPaymentStatusHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const order = await ordersQueries.updateOrderPaymentStatus(
-      orgId,
-      req.params.id,
-      req.body.payment_status
-    );
-    if (!order) {
-      throw new AppError('Order not found', 404);
-    }
-    success(res, order);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function getNearbyOrdersHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const nearby = await ordersService.getNearbyOrders(orgId, req.params.id);
-    success(res, nearby);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function assignRiderHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const result = await ordersService.assignRider(orgId, req.body);
-    success(res, result);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function completeDeliveryHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const result = await ordersService.completeDelivery(orgId, req.params.id, req.body);
-    success(res, result);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function getCashReconciliationHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const summary = await ordersService.getCashReconciliation(orgId, {
-      startDate: typeof req.query.startDate === 'string' ? req.query.startDate : undefined,
-      endDate: typeof req.query.endDate === 'string' ? req.query.endDate : undefined,
-    });
-    success(res, summary);
-  } catch (err) {
-    next(err);
-  }
-}
-</file>
-
 <file path="src/modules/orders/orders.routes.ts">
 // =============================================================================
 // src/modules/orders/orders.routes.ts
@@ -11405,6 +10996,7 @@ export default router;
 <file path="src/modules/public/public.controller.ts">
 // =============================================================================
 // soko-api/src/modules/public/public.controller.ts
+// Public HTTP controller handling catalog, orders, and payment recovery.
 // =============================================================================
 
 import { Request, Response, NextFunction } from 'express';
@@ -11489,6 +11081,23 @@ export async function getPublicOrderDetailsHandler(
       verifyingPhone
     );
     success(res, orderDetails);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function retryOrderPaymentHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const result = await publicService.retryOrderPayment(
+      req.params.storeSlug,
+      req.params.orderId,
+      req.body
+    );
+    success(res, result);
   } catch (err) {
     next(err);
   }
@@ -11923,6 +11532,145 @@ router.post('/',                 recordHandler);
 router.get('/:customerId',       ledgerHandler);
 
 export default router;
+</file>
+
+<file path="src/scripts/backfill-covers.ts">
+// =============================================================================
+// soko-api/src/scripts/backfill-covers.ts
+// Re-syncs catalog books with Ultra-High-Resolution (800px+) cover art safely.
+// Run via: npx tsx src/scripts/backfill-covers.ts [--force]
+// =============================================================================
+
+import { pool } from '../config/db';
+import {
+  findBestBookCover,
+  cleanAuthorString,
+  extractValidIsbn,
+} from '../services/bookCover.service';
+
+interface BookRow {
+  id: string;
+  name: string;
+  sku: string | null;
+  description: string | null;
+  existing_cover: string | null;
+}
+
+function extractAuthorFromDescription(description?: string | null): string | undefined {
+  if (!description) return undefined;
+  const stripped = description.replace(/<[^>]*>/g, ' ').trim();
+
+  const match =
+    stripped.match(/(?:^|\n|\.\s+)(?:By|Author|Written by)[:\s]+([A-Z][a-zA-Z\s.'-]+?)(?:\.|\n|<|$|,|\()/i) ||
+    stripped.match(/^By\s+([^<\n\r]+)/i) ||
+    stripped.match(/Author:\s*([^<\n\r]+)/i);
+
+  if (match && match[1]) {
+    const cleaned = cleanAuthorString(match[1]);
+    return cleaned.length >= 2 && cleaned.length <= 60 ? cleaned : undefined;
+  }
+
+  return undefined;
+}
+
+async function backfill(): Promise<void> {
+  const isForceMode = process.argv.includes('--force');
+
+  console.log('================================================================');
+  console.log('   FLEMELA: HIGH-DEFINITION (800px+) COVER UPGRADE ENGINE       ');
+  console.log(`   Mode: ${isForceMode ? 'Force Refresh (All Books)' : 'Upgrade Low-Res & Missing Only'}`);
+  console.log('================================================================\n');
+
+  const client = await pool.connect();
+
+  try {
+    const booksRes = await client.query<BookRow>(
+      `SELECT p.id, p.name, p.sku, p.description,
+              (SELECT pi.image_url 
+               FROM product_images pi 
+               WHERE pi.product_id = p.id 
+               ORDER BY pi.sort_order ASC LIMIT 1) AS existing_cover
+       FROM products p
+       WHERE p.deleted_at IS NULL
+       ORDER BY p.created_at DESC`
+    );
+
+    const books = booksRes.rows;
+    console.log(`Found ${books.length} catalog title(s) to inspect.\n`);
+
+    let upgradedCount = 0;
+    let skippedCount = 0;
+    let failedCount = 0;
+
+    for (let i = 0; i < books.length; i++) {
+      const book = books[i];
+      const progress = `[${i + 1}/${books.length}]`;
+
+      const hasExistingCloudinary =
+        book.existing_cover &&
+        book.existing_cover.includes('cloudinary.com') &&
+        !book.existing_cover.includes('placeholder');
+
+      const isLowResZoom = book.existing_cover && book.existing_cover.includes('zoom=1');
+
+      if (hasExistingCloudinary && !isLowResZoom && !isForceMode) {
+        console.log(`${progress} ⏩ Skipping: "${book.name}" (Already has high-res Cloudinary cover)`);
+        skippedCount++;
+        continue;
+      }
+
+      const author = extractAuthorFromDescription(book.description);
+      const isbn = extractValidIsbn(book.sku) || extractValidIsbn(book.description);
+
+      console.log(`${progress} 🔍 Resolving HD cover for: "${book.name}"${author ? ` (Author: ${author})` : ''}...`);
+
+      const discovered = await findBestBookCover(book.name, author, isbn || undefined);
+
+      if (discovered.coverUrl) {
+        await client.query('BEGIN');
+        try {
+          await client.query('DELETE FROM product_images WHERE product_id = $1', [book.id]);
+
+          await client.query(
+            `INSERT INTO product_images (product_id, image_url, image_public_id, sort_order)
+             VALUES ($1, $2, $3, 0)`,
+            [book.id, discovered.coverUrl, `auto_${discovered.source || 'web'}`]
+          );
+
+          await client.query('COMMIT');
+          console.log(`     ✓ Saved HD (${discovered.source?.toUpperCase()}): ${discovered.coverUrl}`);
+          upgradedCount++;
+        } catch (dbErr) {
+          await client.query('ROLLBACK');
+          console.error(`     ✗ DB Error saving image for "${book.name}":`, dbErr);
+          failedCount++;
+        }
+      } else {
+        console.log(`     ✗ No cover located for: "${book.name}"`);
+        failedCount++;
+      }
+
+      // 400ms delay between items to stay well within rate limits
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    console.log('\n================================================================');
+    console.log('                    COVER BACKFILL COMPLETE                     ');
+    console.log('================================================================');
+    console.log(`  ✓ Total Inspected:       ${books.length}`);
+    console.log(`  ✓ Successfully Upgraded: ${upgradedCount}`);
+    console.log(`  ⏩ Skipped (Already HD):  ${skippedCount}`);
+    console.log(`  ✗ Not Found / Failed:    ${failedCount}`);
+    console.log('================================================================\n');
+  } catch (err) {
+    console.error('Fatal backfill error:', err);
+  } finally {
+    client.release();
+    await pool.end();
+  }
+}
+
+backfill();
 </file>
 
 <file path="src/services/daraja.service.ts">
@@ -12516,6 +12264,533 @@ export async function getJobStatus(
     throw new AppError('Import job not found', 404);
   }
   return record;
+}
+</file>
+
+<file path="src/modules/banners/banners.service.ts">
+// =============================================================================
+// soko-api/src/modules/banners/banners.service.ts
+// Business logic for customizable promotional hero banners.
+// =============================================================================
+
+import { z } from 'zod';
+import { AppError } from '../../utils/error';
+import * as bannersQueries from './banners.queries';
+import type { StoreBannerRow } from './banners.queries';
+
+function cleanUrl(val: unknown): string | null {
+  if (typeof val !== 'string') return null;
+  const trimmed = val.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('/')) {
+    return trimmed;
+  }
+  return `https://${trimmed}`;
+}
+
+export const CreateBannerSchema = z
+  .object({
+    title: z
+      .string()
+      .max(200)
+      .trim()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v && v.trim() ? v.trim() : null)),
+    subtitle: z
+      .string()
+      .max(500)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v && v.trim() ? v.trim() : null)),
+    badge: z
+      .string()
+      .max(50)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v && v.trim() ? v.trim().toUpperCase() : null)),
+    image_url: z
+      .string()
+      .trim()
+      .min(1, 'Desktop banner image is required')
+      .transform(cleanUrl)
+      .refine((v): v is string => Boolean(v && v.length > 3), {
+        message: 'A valid desktop image URL is required',
+      }),
+    mobile_image_url: z
+      .string()
+      .trim()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform(cleanUrl),
+    cta_label: z
+      .string()
+      .max(50)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v && v.trim() ? v.trim() : null)),
+    cta_link: z
+      .string()
+      .max(500)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v && v.trim() ? v.trim() : null)),
+    bg_color: z
+      .string()
+      .trim()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(v) ? v : '#052219')),
+    sort_order: z.number().int().optional(),
+    is_active: z.boolean().default(true),
+    starts_at: z
+      .string()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => {
+        if (!v || !v.trim()) return null;
+        const d = new Date(v.trim());
+        return isNaN(d.getTime()) ? null : d.toISOString();
+      }),
+    ends_at: z
+      .string()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => {
+        if (!v || !v.trim()) return null;
+        const d = new Date(v.trim());
+        return isNaN(d.getTime()) ? null : d.toISOString();
+      }),
+  })
+  .refine(
+    (data) => {
+      if (data.starts_at && data.ends_at) {
+        return new Date(data.ends_at).getTime() > new Date(data.starts_at).getTime();
+      }
+      return true;
+    },
+    {
+      message: 'Expiration date must be strictly after the start date',
+      path: ['ends_at'],
+    }
+  );
+
+export const UpdateBannerSchema = z
+  .object({
+    title: z
+      .string()
+      .max(200)
+      .trim()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v && v.trim() ? v.trim() : null)),
+    subtitle: z
+      .string()
+      .max(500)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v && v.trim() ? v.trim() : null)),
+    badge: z
+      .string()
+      .max(50)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v && v.trim() ? v.trim().toUpperCase() : null)),
+    image_url: z
+      .string()
+      .trim()
+      .optional()
+      .or(z.literal(''))
+      .transform((v): string | undefined => (v && v.trim() ? cleanUrl(v) ?? undefined : undefined))
+      .refine((v): v is string | undefined => v === undefined || (typeof v === 'string' && v.length > 3), {
+        message: 'A valid desktop image URL is required',
+      }),
+    mobile_image_url: z
+      .string()
+      .trim()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform(cleanUrl),
+    cta_label: z
+      .string()
+      .max(50)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v && v.trim() ? v.trim() : null)),
+    cta_link: z
+      .string()
+      .max(500)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v && v.trim() ? v.trim() : null)),
+    bg_color: z
+      .string()
+      .trim()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(v) ? v : '#052219')),
+    sort_order: z.number().int().optional(),
+    is_active: z.boolean().optional(),
+    starts_at: z
+      .string()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => {
+        if (!v || !v.trim()) return null;
+        const d = new Date(v.trim());
+        return isNaN(d.getTime()) ? null : d.toISOString();
+      }),
+    ends_at: z
+      .string()
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => {
+        if (!v || !v.trim()) return null;
+        const d = new Date(v.trim());
+        return isNaN(d.getTime()) ? null : d.toISOString();
+      }),
+  })
+  .refine(
+    (data) => {
+      if (data.starts_at && data.ends_at) {
+        return new Date(data.ends_at).getTime() > new Date(data.starts_at).getTime();
+      }
+      return true;
+    },
+    {
+      message: 'Expiration date must be strictly after the start date',
+      path: ['ends_at'],
+    }
+  );
+
+export const ReorderBannersSchema = z.object({
+  bannerIds: z.array(z.string().uuid()).min(1, 'At least one banner ID is required to reorder'),
+});
+
+export interface StoreBannerDto {
+  id: string;
+  org_id: string;
+  title: string | null;
+  subtitle: string | null;
+  badge: string | null;
+  image_url: string;
+  mobile_image_url: string | null;
+  cta_label: string | null;
+  cta_link: string | null;
+  bg_color: string;
+  sort_order: number;
+  is_active: boolean;
+  starts_at: string | null;
+  ends_at: string | null;
+  click_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export function toBannerDto(row: StoreBannerRow): StoreBannerDto {
+  return {
+    id: row.id,
+    org_id: row.org_id,
+    title: row.title || null,
+    subtitle: row.subtitle,
+    badge: row.badge,
+    image_url: row.image_url,
+    mobile_image_url: row.mobile_image_url,
+    cta_label: row.cta_label || null,
+    cta_link: row.cta_link || null,
+    bg_color: row.bg_color,
+    sort_order: row.sort_order,
+    is_active: row.is_active,
+    starts_at: row.starts_at ? new Date(row.starts_at).toISOString() : null,
+    ends_at: row.ends_at ? new Date(row.ends_at).toISOString() : null,
+    click_count: row.click_count,
+    created_at: new Date(row.created_at).toISOString(),
+    updated_at: new Date(row.updated_at).toISOString(),
+  };
+}
+
+export async function getAdminBanners(orgId: string): Promise<StoreBannerDto[]> {
+  const rows = await bannersQueries.listBannersAdmin(orgId);
+  return rows.map(toBannerDto);
+}
+
+export async function getPublicActiveBanners(orgId: string): Promise<StoreBannerDto[]> {
+  const rows = await bannersQueries.listActiveBannersPublic(orgId);
+  return rows.map(toBannerDto);
+}
+
+export async function createBanner(orgId: string, rawBody: unknown): Promise<StoreBannerDto> {
+  const parsed = CreateBannerSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid banner payload', 400);
+  }
+
+  const row = await bannersQueries.createBanner(orgId, {
+    ...parsed.data,
+    title: parsed.data.title || null,
+    starts_at: parsed.data.starts_at ? new Date(parsed.data.starts_at) : null,
+    ends_at: parsed.data.ends_at ? new Date(parsed.data.ends_at) : null,
+  });
+
+  return toBannerDto(row);
+}
+
+export async function updateBanner(
+  orgId: string,
+  bannerId: string,
+  rawBody: unknown
+): Promise<StoreBannerDto> {
+  const existing = await bannersQueries.getBannerById(orgId, bannerId);
+  if (!existing) {
+    throw new AppError('Banner not found', 404);
+  }
+
+  const parsed = UpdateBannerSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid banner update payload', 400);
+  }
+
+  const row = await bannersQueries.updateBanner(orgId, bannerId, {
+    ...parsed.data,
+    image_url: parsed.data.image_url ?? undefined,
+    starts_at:
+      parsed.data.starts_at !== undefined
+        ? parsed.data.starts_at
+          ? new Date(parsed.data.starts_at)
+          : null
+        : undefined,
+    ends_at:
+      parsed.data.ends_at !== undefined
+        ? parsed.data.ends_at
+          ? new Date(parsed.data.ends_at)
+          : null
+        : undefined,
+  });
+
+  if (!row) {
+    throw new AppError('Banner not found', 404);
+  }
+
+  return toBannerDto(row);
+}
+
+export async function deleteBanner(orgId: string, bannerId: string): Promise<void> {
+  const deleted = await bannersQueries.deleteBanner(orgId, bannerId);
+  if (!deleted) {
+    throw new AppError('Banner not found', 404);
+  }
+}
+
+export async function reorderBanners(orgId: string, rawBody: unknown): Promise<void> {
+  const parsed = ReorderBannersSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid reordering payload', 400);
+  }
+
+  await bannersQueries.reorderBannersTransactional(orgId, parsed.data.bannerIds);
+}
+
+export async function recordClick(bannerId: string): Promise<void> {
+  await bannersQueries.trackBannerClick(bannerId);
+}
+</file>
+
+<file path="src/modules/orders/orders.controller.ts">
+// =============================================================================
+// src/modules/orders/orders.controller.ts
+// =============================================================================
+
+import { Request, Response, NextFunction } from 'express';
+import { success } from '../../utils/response';
+import { AppError } from '../../utils/error';
+import * as ordersQueries from './orders.queries';
+import * as ordersService from './orders.service';
+
+function requireOrgId(req: Request): string {
+  if (!req.orgId) {
+    throw new AppError('Unauthorized', 401);
+  }
+  return req.orgId;
+}
+
+export async function getOrdersSummaryHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const summary = await ordersQueries.getOrdersSummary(orgId);
+    success(res, summary);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function listOrdersHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const page = Number(req.query.page ?? 1);
+    const limit = Number(req.query.limit ?? 20);
+    const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+    const paymentStatus = typeof req.query.payment_status === 'string' ? req.query.payment_status : undefined;
+    const paymentMethod = typeof req.query.payment_method === 'string' ? req.query.payment_method : undefined;
+    const q = typeof req.query.q === 'string' ? req.query.q : undefined;
+
+    const result = await ordersQueries.listOrders(orgId, {
+      page,
+      limit,
+      status,
+      paymentStatus,
+      paymentMethod,
+      q,
+    });
+
+    success(res, result.orders, {
+      page,
+      limit,
+      totalItems: result.total,
+      totalPages: Math.ceil(result.total / limit),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getOrderHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const order = await ordersQueries.getOrderById(orgId, req.params.id);
+    if (!order) {
+      throw new AppError('Order not found', 404);
+    }
+    success(res, order);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateOrderStatusHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const order = await ordersQueries.updateOrderStatus(orgId, req.params.id, req.body.status);
+    if (!order) {
+      throw new AppError('Order not found', 404);
+    }
+    success(res, order);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateOrderPaymentStatusHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const order = await ordersQueries.updateOrderPaymentStatus(
+      orgId,
+      req.params.id,
+      req.body.payment_status
+    );
+    if (!order) {
+      throw new AppError('Order not found', 404);
+    }
+    success(res, order);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getNearbyOrdersHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const nearby = await ordersService.getNearbyOrders(orgId, req.params.id);
+    success(res, nearby);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function assignRiderHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const result = await ordersService.assignRider(orgId, req.body);
+    success(res, result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function completeDeliveryHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const result = await ordersService.completeDelivery(orgId, req.params.id, req.body);
+    success(res, result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getCashReconciliationHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const summary = await ordersService.getCashReconciliation(orgId, {
+      startDate: typeof req.query.startDate === 'string' ? req.query.startDate : undefined,
+      endDate: typeof req.query.endDate === 'string' ? req.query.endDate : undefined,
+    });
+    success(res, summary);
+  } catch (err) {
+    next(err);
+  }
 }
 </file>
 
@@ -13218,133 +13493,6 @@ export async function ledger(
 
 export async function dashboardSummary(orgId: string): Promise<DashboardSummary> {
   return getDashboardSummary(orgId);
-}
-</file>
-
-<file path="src/services/bookCover.service.ts">
-// =============================================================================
-// soko-api/src/services/bookCover.service.ts
-// Multi-Source High-Resolution Book Cover Discovery Engine
-// =============================================================================
-
-import axios from 'axios';
-
-export interface CoverSearchResult {
-  coverUrl: string | null;
-  title: string;
-  author?: string;
-  source: 'googlebooks' | 'openlibrary' | null;
-}
-
-function cleanTitleString(input: string): string {
-  return (input || '')
-    .replace(/^by\s+/i, '')
-    .replace(/\s*[\(\[\{][^\)\]\}]*[\)\]\}]/g, ' ') // Strip (Anniversary Edition), [Paperback], etc.
-    .replace(/[:–—\-]\s*.*$/, '')                   // Strip subtitles after colon or hyphen
-    .replace(/[^\w\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function cleanAuthorString(input: string): string {
-  return (input || '')
-    .replace(/^by\s+/i, '')
-    .replace(/\s+(and|with|&)\s+.*$/i, '')          // Keep primary author only
-    .replace(/\s*[\(\[\{][^\)\]\}]*[\)\]\}]/g, ' ')
-    .replace(/[^\w\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function cleanGoogleBooksUrl(rawUrl: string, volumeId?: string): string {
-  if (volumeId) {
-    return `https://books.google.com/books/content?id=${volumeId}&printsec=frontcover&img=1&zoom=1`;
-  }
-  return rawUrl.replace(/^http:\/\//i, 'https://').replace(/&edge=curl/g, '');
-}
-
-export async function findBestBookCover(
-  rawTitle: string,
-  rawAuthor?: string,
-  rawIsbn?: string
-): Promise<CoverSearchResult> {
-  const title = cleanTitleString(rawTitle);
-  const author = rawAuthor ? cleanAuthorString(rawAuthor) : '';
-  const cleanIsbn = (rawIsbn || '').replace(/[^0-9X]/gi, '');
-  const hasValidIsbn = cleanIsbn.length === 10 || cleanIsbn.length === 13;
-
-  if (!title && !hasValidIsbn) {
-    return { coverUrl: null, title: rawTitle, source: null };
-  }
-
-  // 1. Google Books API with 2.5s timeout
-  try {
-    const query = hasValidIsbn
-      ? `isbn:${cleanIsbn}`
-      : author
-        ? `intitle:${title} inauthor:${author}`
-        : `intitle:${title}`;
-
-    const gbooksUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(
-      query
-    )}&maxResults=1&printType=books`;
-    const res = await axios.get(gbooksUrl, { timeout: 2500 });
-
-    const items = res.data?.items || [];
-    if (items.length > 0) {
-      const item = items[0];
-      const volumeId = item.id;
-      const volumeInfo = item.volumeInfo || {};
-      const imageLinks = volumeInfo.imageLinks;
-
-      if (imageLinks) {
-        const rawCover =
-          imageLinks.extraLarge ||
-          imageLinks.large ||
-          imageLinks.medium ||
-          imageLinks.thumbnail ||
-          imageLinks.smallThumbnail;
-
-        if (rawCover && typeof rawCover === 'string' && rawCover.length > 10) {
-          return {
-            coverUrl: cleanGoogleBooksUrl(rawCover, volumeId),
-            title: volumeInfo.title || rawTitle,
-            author: volumeInfo.authors?.[0] || rawAuthor,
-            source: 'googlebooks',
-          };
-        }
-      }
-    }
-  } catch {
-    // Cascade immediately to Open Library
-  }
-
-  // 2. Open Library Work Search (Zero rate limits, returns stable Cover ID)
-  try {
-    const olUrl = `https://openlibrary.org/search.json?title=${encodeURIComponent(title)}${
-      author ? `&author=${encodeURIComponent(author)}` : ''
-    }&limit=3`;
-    const olRes = await axios.get(olUrl, {
-      timeout: 2500,
-      headers: { 'User-Agent': 'FlemelaBookstore/2.0 (contact@flemela.co.ke)' },
-    });
-
-    const docs = olRes.data?.docs || [];
-    for (const doc of docs) {
-      if (doc.cover_i) {
-        return {
-          coverUrl: `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`,
-          title: doc.title || rawTitle,
-          author: doc.author_name?.[0] || rawAuthor,
-          source: 'openlibrary',
-        };
-      }
-    }
-  } catch {
-    // Non-blocking fallback
-  }
-
-  return { coverUrl: null, title: rawTitle, source: null };
 }
 </file>
 
@@ -14077,6 +14225,403 @@ export async function saveMerchantLocation(orgId: string, rawBody: unknown) {
 }
 </file>
 
+<file path="src/services/bookCover.service.ts">
+// =============================================================================
+// soko-api/src/services/bookCover.service.ts
+// Multi-Source HD (800px+) Book Cover Engine with Rate-Limit Circuit Breakers
+// =============================================================================
+
+import axios from 'axios';
+import { env } from '../config/env';
+
+export interface CoverSearchResult {
+  coverUrl: string | null;
+  title: string;
+  author?: string;
+  source: 'applebooks' | 'openlibrary' | 'googlebooks' | 'goodreads' | null;
+}
+
+// In-memory cache across searches
+const searchCache = new Map<string, { result: CoverSearchResult; timestamp: number }>();
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 Hours
+
+// Circuit breaker: pauses Google Books on HTTP 429 to avoid spamming a locked IP
+let googleBooksBlockedUntil = 0;
+
+// -----------------------------------------------------------------------------
+// 1. String Sanitizers & ISBN Validation
+// -----------------------------------------------------------------------------
+
+export function cleanTitleString(input: string): { full: string; primary: string; searchTerms: string[] } {
+  if (!input) return { full: '', primary: '', searchTerms: [] };
+
+  const sanitized = input
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/^by\s+/i, '')
+    .replace(/^(?:author|title):\s*/i, '')
+    // Strip ONLY technical edition/format brackets, keeping creative subtitles
+    .replace(/\s*[\(\[][^\)\]]*(?:edition|paperback|hardcover|anniversary|reprint|series|vol\.|volume|copy)[^\)\]]*[\)\]]/gi, ' ')
+    .replace(/\.(?:pdf|epub|mobi|azw3?)$/i, '')
+    .replace(/[“”"]/g, '')
+    .replace(/[\u2018\u2019']/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Primary title (before colon or spaced dash)
+  const parts = sanitized.split(/\s*[:–—]\s*|\s+-\s+/);
+  const primary = (parts[0] || sanitized).trim();
+
+  // Strip parentheses for providers that struggle with punctuation
+  const noParens = sanitized.replace(/[\(\)\[\]\{\}]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  const searchTerms = Array.from(new Set([sanitized, primary, noParens])).filter((t) => t.length > 0);
+
+  return { full: sanitized, primary, searchTerms };
+}
+
+export function cleanAuthorString(input?: string | null): string {
+  if (!input) return '';
+  return input
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/^by\s+/i, '')
+    .replace(/^(?:author|written by):\s*/i, '')
+    .replace(/\s+(?:and|with|&|\+)\s+.*$/i, '')
+    .replace(/,\s*.*$/, '')
+    .replace(/\b(?:Ph\.?D\.?|M\.?D\.?|Dr\.?|Prof\.?|Esq\.?)\b/gi, '')
+    .replace(/[\(\[\{][^\)\]\}]*[\)\]\}]/g, ' ')
+    .replace(/[^\w\s'.]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function isValidIsbn10(isbn: string): boolean {
+  if (!/^[0-9]{9}[0-9X]$/i.test(isbn)) return false;
+  let sum = 0;
+  for (let i = 0; i < 9; i++) {
+    sum += parseInt(isbn[i], 10) * (10 - i);
+  }
+  const checkChar = isbn[9].toUpperCase();
+  sum += checkChar === 'X' ? 10 : parseInt(checkChar, 10);
+  return sum % 11 === 0;
+}
+
+export function isValidIsbn13(isbn: string): boolean {
+  if (!/^97[89][0-9]{10}$/.test(isbn)) return false;
+  let sum = 0;
+  for (let i = 0; i < 13; i++) {
+    const digit = parseInt(isbn[i], 10);
+    sum += i % 2 === 0 ? digit : digit * 3;
+  }
+  return sum % 10 === 0;
+}
+
+export function extractValidIsbn(raw?: string | null): string | null {
+  if (!raw) return null;
+  const digits = raw.replace(/[^0-9X]/gi, '').toUpperCase();
+  if (digits.length === 10 && isValidIsbn10(digits)) return digits;
+  if (digits.length === 13 && isValidIsbn13(digits)) return digits;
+  return null;
+}
+
+// -----------------------------------------------------------------------------
+// 2. Provider 1: Apple Books / iTunes Storefront (No Rate Limits, High Res)
+// -----------------------------------------------------------------------------
+
+async function queryAppleBooks(
+  searchTerm: string,
+  author?: string
+): Promise<{ url: string; title: string; author?: string } | null> {
+  const query = author ? `${searchTerm} ${author}` : searchTerm;
+  const url = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=ibook&limit=3`;
+
+  try {
+    const res = await axios.get<{
+      resultCount: number;
+      results: Array<{ trackCensoredName: string; artistName: string; artworkUrl100?: string }>;
+    }>(url, {
+      timeout: 4500,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; FlemelaCoverEngine/2.0)' },
+    });
+
+    if (res.data?.resultCount > 0) {
+      for (const item of res.data.results) {
+        if (item.artworkUrl100) {
+          // Uncap Apple's 100x100 thumbnail to full-quality 800x800+ publisher artwork
+          const hdUrl = item.artworkUrl100
+            .replace('100x100bb', '800x800bb')
+            .replace('100x100', '800x800');
+
+          return {
+            url: hdUrl,
+            title: item.trackCensoredName,
+            author: item.artistName,
+          };
+        }
+      }
+    }
+  } catch {
+    // Non-blocking cascade
+  }
+
+  return null;
+}
+
+// -----------------------------------------------------------------------------
+// 3. Provider 2: Open Library (Direct Cover IDs & ISBNs)
+// -----------------------------------------------------------------------------
+
+async function queryOpenLibrary(
+  searchTerms: string[],
+  cleanAuthor?: string,
+  validIsbn?: string | null
+): Promise<{ url: string; title: string; author?: string } | null> {
+  // Direct ISBN cover
+  if (validIsbn) {
+    return {
+      url: `https://covers.openlibrary.org/b/isbn/${validIsbn}-L.jpg`,
+      title: searchTerms[0] || 'Book',
+      author: cleanAuthor,
+    };
+  }
+
+  // Open Library Search
+  for (const term of searchTerms) {
+    try {
+      const q = cleanAuthor ? `${term} ${cleanAuthor}` : term;
+      const olUrl = `https://openlibrary.org/search.json?q=${encodeURIComponent(q)}&fields=key,title,author_name,cover_i,isbn&limit=5`;
+
+      const res = await axios.get<{
+        docs: Array<{ title: string; author_name?: string[]; cover_i?: number; isbn?: string[] }>;
+      }>(olUrl, {
+        timeout: 6000,
+        headers: { 'User-Agent': 'FlemelaBookstore/2.0 (concierge@flemela.co.ke)' },
+      });
+
+      const docs = res.data?.docs || [];
+      for (const doc of docs) {
+        if (doc.cover_i && typeof doc.cover_i === 'number' && doc.cover_i > 0) {
+          return {
+            url: `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`,
+            title: doc.title || term,
+            author: doc.author_name?.[0] || cleanAuthor,
+          };
+        }
+        if (doc.isbn && doc.isbn.length > 0) {
+          return {
+            url: `https://covers.openlibrary.org/b/isbn/${doc.isbn[0]}-L.jpg`,
+            title: doc.title || term,
+            author: doc.author_name?.[0] || cleanAuthor,
+          };
+        }
+      }
+    } catch {
+      // Continue to next search term
+    }
+  }
+
+  return null;
+}
+
+// -----------------------------------------------------------------------------
+// 4. Provider 3: Google Books (Protected by Circuit Breaker)
+// -----------------------------------------------------------------------------
+
+function transformGoogleBooksToHd(volumeId: string, rawUrl?: string): string {
+  if (volumeId) {
+    return `https://books.google.com/books/publisher/content/images/frontcover/${volumeId}?fife=w800&source=gbs_api`;
+  }
+  if (rawUrl) {
+    return rawUrl
+      .replace(/^http:\/\//i, 'https://')
+      .replace(/&edge=curl/gi, '')
+      .replace(/&zoom=[1-9]/gi, '&zoom=0')
+      .concat(rawUrl.includes('fife=') ? '' : '&fife=w800');
+  }
+  return '';
+}
+
+async function queryGoogleBooks(
+  queryParam: string,
+  apiKey?: string
+): Promise<{ url: string; volumeId: string; title: string; author?: string } | null> {
+  // If IP is locked in a 429 cooldown, skip Google Books entirely
+  if (Date.now() < googleBooksBlockedUntil) {
+    return null;
+  }
+
+  const url = new URL('https://www.googleapis.com/books/v1/volumes');
+  url.searchParams.set('q', queryParam);
+  url.searchParams.set('maxResults', '3');
+  url.searchParams.set('printType', 'books');
+  if (apiKey) url.searchParams.set('key', apiKey);
+
+  try {
+    const res = await axios.get(url.toString(), {
+      timeout: 5000,
+      headers: { 'User-Agent': 'Flemela-GoogleBooks-Resolver/2.0' },
+    });
+
+    const items = res.data?.items || [];
+    for (const item of items) {
+      const volumeId = item.id;
+      const volumeInfo = item.volumeInfo || {};
+      const imageLinks = volumeInfo.imageLinks;
+
+      if (imageLinks) {
+        const candidateUrl =
+          imageLinks.extraLarge ||
+          imageLinks.large ||
+          imageLinks.medium ||
+          imageLinks.thumbnail ||
+          imageLinks.smallThumbnail;
+
+        if (candidateUrl) {
+          const hdUrl = transformGoogleBooksToHd(volumeId, candidateUrl);
+          return {
+            url: hdUrl,
+            volumeId,
+            title: volumeInfo.title || '',
+            author: volumeInfo.authors?.[0],
+          };
+        }
+      }
+    }
+  } catch (err: any) {
+    if (err.response?.status === 429) {
+      googleBooksBlockedUntil = Date.now() + 10 * 60 * 1000; // 10-minute circuit breaker
+      console.warn('⚠️ Google Books IP rate-limit active. Pausing Google Books for 10 minutes and shifting to Apple Books & Open Library.');
+    }
+  }
+
+  return null;
+}
+
+// -----------------------------------------------------------------------------
+// 5. Provider 4: Goodreads / Public BookCover API
+// -----------------------------------------------------------------------------
+
+async function queryGoodreads(
+  title: string,
+  author?: string,
+  isbn?: string | null
+): Promise<string | null> {
+  try {
+    let url = `https://bookcover.longitood.com/bookcover?book_title=${encodeURIComponent(title)}`;
+    if (author) url += `&author_name=${encodeURIComponent(author)}`;
+    if (isbn) url = `https://bookcover.longitood.com/bookcover?isbn=${isbn}`;
+
+    const res = await axios.get<{ url?: string }>(url, { timeout: 4500 });
+    let coverUrl = res.data?.url;
+
+    if (coverUrl && coverUrl.startsWith('http')) {
+      coverUrl = coverUrl.replace(/\._S[XY]\d+_\./i, '.');
+      return coverUrl;
+    }
+  } catch {
+    // Non-blocking
+  }
+  return null;
+}
+
+// -----------------------------------------------------------------------------
+// 6. Master Resolution Engine
+// -----------------------------------------------------------------------------
+
+export async function findBestBookCover(
+  rawTitle: string,
+  rawAuthor?: string,
+  rawIsbnOrSku?: string
+): Promise<CoverSearchResult> {
+  const { full: titleFull, primary: titlePrimary, searchTerms } = cleanTitleString(rawTitle);
+  const author = cleanAuthorString(rawAuthor);
+  const validIsbn = extractValidIsbn(rawIsbnOrSku);
+
+  if (!titleFull && !validIsbn) {
+    return { coverUrl: null, title: rawTitle, source: null };
+  }
+
+  // Check cache
+  const cacheKey = `${validIsbn || ''}_${titleFull.toLowerCase()}_${author.toLowerCase()}`;
+  const cached = searchCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    return cached.result;
+  }
+
+  // ---------------------------------------------------------------------------
+  // STEP 1: Apple Books Storefront (Fast, Studio-Grade HD, No 429 Blocks)
+  // ---------------------------------------------------------------------------
+  for (const term of searchTerms) {
+    const appleResult = await queryAppleBooks(term, author);
+    if (appleResult?.url) {
+      const finalResult: CoverSearchResult = {
+        coverUrl: appleResult.url,
+        title: appleResult.title || rawTitle,
+        author: appleResult.author || rawAuthor,
+        source: 'applebooks',
+      };
+      searchCache.set(cacheKey, { result: finalResult, timestamp: Date.now() });
+      return finalResult;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // STEP 2: Open Library (By ISBN or High-Speed Works Search)
+  // ---------------------------------------------------------------------------
+  const olResult = await queryOpenLibrary(searchTerms, author, validIsbn);
+  if (olResult?.url) {
+    const finalResult: CoverSearchResult = {
+      coverUrl: olResult.url,
+      title: olResult.title || rawTitle,
+      author: olResult.author || rawAuthor,
+      source: 'openlibrary',
+    };
+    searchCache.set(cacheKey, { result: finalResult, timestamp: Date.now() });
+    return finalResult;
+  }
+
+  // ---------------------------------------------------------------------------
+  // STEP 3: Google Books (If not in a 429 lockout window)
+  // ---------------------------------------------------------------------------
+  const apiKey = (env as any).GOOGLE_BOOKS_API_KEY || process.env.GOOGLE_BOOKS_API_KEY || undefined;
+  if (Date.now() >= googleBooksBlockedUntil) {
+    const gbooksQuery = validIsbn
+      ? `isbn:${validIsbn}`
+      : author
+      ? `intitle:"${titlePrimary}" inauthor:"${author}"`
+      : `intitle:"${titlePrimary}"`;
+
+    const gbooksResult = await queryGoogleBooks(gbooksQuery, apiKey);
+    if (gbooksResult?.url) {
+      const finalResult: CoverSearchResult = {
+        coverUrl: gbooksResult.url,
+        title: gbooksResult.title || rawTitle,
+        author: gbooksResult.author || rawAuthor,
+        source: 'googlebooks',
+      };
+      searchCache.set(cacheKey, { result: finalResult, timestamp: Date.now() });
+      return finalResult;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // STEP 4: Goodreads / Public BookCover Fallback
+  // ---------------------------------------------------------------------------
+  const goodreadsUrl = await queryGoodreads(titlePrimary, author, validIsbn);
+  if (goodreadsUrl) {
+    const finalResult: CoverSearchResult = {
+      coverUrl: goodreadsUrl,
+      title: rawTitle,
+      author: rawAuthor,
+      source: 'goodreads',
+    };
+    searchCache.set(cacheKey, { result: finalResult, timestamp: Date.now() });
+    return finalResult;
+  }
+
+  return { coverUrl: null, title: rawTitle, source: null };
+}
+</file>
+
 <file path="src/config/env.ts">
 // =============================================================================
 // soko-api/src/config/env.ts
@@ -14131,865 +14676,6 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
-</file>
-
-<file path="src/modules/orders/orders.queries.ts">
-// =============================================================================
-// soko-api/src/modules/orders/orders.queries.ts
-// =============================================================================
-
-import { PoolClient } from "pg";
-import { query, pool } from "../../config/db";
-import { recordTransaction } from "../transactions/transactions.queries";
-import { computeHaversineDistanceKm } from "../../utils/geo";
-import { normalizeDeliveryConfirmationCode } from "../../utils/crypto";
-import { AppError } from "../../utils/error";
-import { fulfillDigitalItems } from "../../verticals/books/delivery.service";
-
-export interface Order {
-    id: string;
-    org_id: string;
-    store_id: string;
-    customer_name: string;
-    customer_phone: string;
-    customer_email: string | null;
-    delivery_location: string;
-    notes: string | null;
-    status: "pending" | "confirmed" | "assigned" | "out_for_delivery" | "delivered" | "cancelled";
-    payment_method: string;
-    payment_status: "pending" | "paid" | "failed";
-    total: string;
-    delivery_type: "delivery" | "pickup";
-    customer_lat: string | null;
-    customer_lng: string | null;
-    location_source: string | null;
-    location_accuracy_m: string | null;
-    location_captured_at: Date | null;
-    rider_name: string | null;
-    rider_phone: string | null;
-    delivery_fee: string;
-    delivery_fee_status: "known" | "needs_merchant_confirmation";
-    delivery_confirmation_code: string | null;
-    amount_collected: string | null;
-    collected_by: string | null;
-    delivered_at: Date | null;
-    created_at: Date;
-    updated_at: Date;
-}
-
-export interface OrderItem {
-    id: string;
-    order_id: string;
-    product_id: string | null;
-    variant_id: string | null;
-    variant_title: string | null;
-    product_name: string;
-    unit_price: string;
-    cost_price: string;
-    quantity: number;
-    subtotal: string;
-}
-
-export interface OrderWithItems extends Order {
-    items: OrderItem[];
-}
-
-export interface ListOrdersOptions {
-    page: number;
-    limit: number;
-}
-
-export interface OrdersSummary {
-    today_count: number;
-    today_revenue: string;
-    month_revenue: string;
-    pending_count: number;
-}
-
-export interface MerchantLocationRow {
-    id: string;
-    org_id: string;
-    name: string;
-    lat: string;
-    lng: string;
-    address_text: string | null;
-    max_delivery_radius_km: string;
-    base_delivery_fee: string;
-    fee_per_km: string;
-}
-
-export interface NearbyOrderRow {
-    id: string;
-    customer_name: string;
-    customer_phone: string;
-    delivery_location: string;
-    total: string;
-    customer_lat: number;
-    customer_lng: number;
-    distance_km: number;
-}
-
-export interface CashReconciliationSummary {
-    total_cod_orders: number;
-    delivered_cod_orders: number;
-    expected_total: string;
-    collected_total: string;
-    variance: string;
-    unreconciled_count: number;
-}
-
-const UUID_REGEX =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export async function getOrdersSummary(orgId: string): Promise<OrdersSummary> {
-    const result = await query<{
-        today_count: string;
-        today_revenue: string;
-        month_revenue: string;
-        pending_count: string;
-    }>(
-        `SELECT 
-       COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)::text AS today_count,
-       COALESCE(SUM(total) FILTER (
-         WHERE created_at >= CURRENT_DATE 
-         AND status != 'cancelled' 
-         AND payment_status = 'paid'
-       ), 0)::text AS today_revenue,
-       COALESCE(SUM(total) FILTER (
-         WHERE created_at >= date_trunc('month', CURRENT_DATE) 
-         AND status != 'cancelled' 
-         AND payment_status = 'paid'
-       ), 0)::text AS month_revenue,
-       COUNT(*) FILTER (WHERE status = 'pending')::text AS pending_count
-     FROM orders
-     WHERE org_id = $1`,
-        [orgId]
-    );
-
-    const row = result.rows[0];
-    return {
-        today_count: parseInt(row?.today_count ?? "0", 10),
-        today_revenue: row?.today_revenue ?? "0",
-        month_revenue: row?.month_revenue ?? "0",
-        pending_count: parseInt(row?.pending_count ?? "0", 10)
-    };
-}
-
-export async function getMerchantLocationTransactional(
-    client: PoolClient,
-    orgId: string
-): Promise<MerchantLocationRow | null> {
-    const result = await client.query<MerchantLocationRow>(
-        `SELECT id, org_id, name, lat::text AS lat, lng::text AS lng, address_text,
-            max_delivery_radius_km::text AS max_delivery_radius_km,
-            base_delivery_fee::text AS base_delivery_fee,
-            fee_per_km::text AS fee_per_km
-     FROM   merchant_locations
-     WHERE  org_id = $1`,
-        [orgId]
-    );
-    return result.rows[0] ?? null;
-}
-
-export async function insertOrderTransactional(
-    client: PoolClient,
-    data: {
-        orgId: string;
-        storeId: string;
-        customerName: string;
-        customerPhone: string;
-        customerEmail?: string | null;
-        deliveryLocation: string;
-        notes?: string | null;
-        paymentMethod: string;
-        total: number;
-        deliveryType?: "delivery" | "pickup";
-        customerLat?: number | null;
-        customerLng?: number | null;
-        locationSource?: string | null;
-        locationAccuracyM?: number | null;
-        deliveryFee?: number;
-        deliveryFeeStatus?: "known" | "needs_merchant_confirmation";
-        deliveryConfirmationCode?: string | null;
-    }
-): Promise<string> {
-    const locationCapturedAt =
-        data.customerLat !== null && data.customerLat !== undefined
-            ? new Date()
-            : null;
-
-    const result = await client.query<{ id: string }>(
-        `INSERT INTO orders (
-       org_id, store_id, customer_name, customer_phone, customer_email,
-       delivery_location, notes, payment_method, total,
-       delivery_type, customer_lat, customer_lng, location_source,
-       location_accuracy_m, location_captured_at, delivery_fee,
-       delivery_fee_status, delivery_confirmation_code
-     )
-     VALUES (
-       $1, $2, $3, $4, $5,
-       $6, $7, $8, $9,
-       $10, $11, $12, $13,
-       $14, $15, $16,
-       $17, $18
-     )
-     RETURNING id`,
-        [
-            data.orgId,
-            data.storeId,
-            data.customerName,
-            data.customerPhone,
-            data.customerEmail ?? null,
-            data.deliveryLocation,
-            data.notes ?? null,
-            data.paymentMethod,
-            data.total,
-            data.deliveryType ?? "delivery",
-            data.customerLat ?? null,
-            data.customerLng ?? null,
-            data.locationSource ?? null,
-            data.locationAccuracyM ?? null,
-            locationCapturedAt,
-            data.deliveryFee ?? 0,
-            data.deliveryFeeStatus ?? "known",
-            data.deliveryConfirmationCode ?? null
-        ]
-    );
-    return result.rows[0].id;
-}
-
-export async function insertOrderStatusHistoryTransactional(
-    client: PoolClient,
-    orderId: string,
-    status: string,
-    changedBy: string = "system"
-): Promise<void> {
-    await client.query(
-        `INSERT INTO order_status_history (order_id, status, changed_by)
-     VALUES ($1, $2, $3)`,
-        [orderId, status, changedBy]
-    );
-}
-
-export async function insertOrderItemTransactional(
-    client: PoolClient,
-    orderId: string,
-    item: {
-        productId: string;
-        productName: string;
-        unitPrice: number;
-        costPrice?: number;
-        quantity: number;
-        subtotal: number;
-        variantId?: string | null;
-        variantTitle?: string | null;
-        formatId?: string | null;
-        deliveryMethod?: string | null;
-    }
-): Promise<void> {
-    await client.query(
-        `INSERT INTO order_items (
-           order_id, product_id, product_name, unit_price, cost_price,
-           quantity, subtotal, variant_id, variant_title, format_id, delivery_method
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-        [
-            orderId,
-            item.productId,
-            item.productName,
-            item.unitPrice,
-            item.costPrice ?? 0,
-            item.quantity,
-            item.subtotal,
-            item.variantId ?? null,
-            item.variantTitle ?? null,
-            item.formatId ?? null,
-            item.deliveryMethod ?? (item.formatId ? 'digital' : 'delivery')
-        ]
-    );
-}
-
-export async function decrementStockTransactional(
-    client: PoolClient,
-    productId: string,
-    quantity: number
-): Promise<boolean> {
-    const result = await client.query(
-        `UPDATE inventory
-     SET    stock      = stock - $1
-     WHERE  product_id = $2
-       AND  stock      >= $1`,
-        [quantity, productId]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function findOrderForWebhook(
-    client: PoolClient,
-    orderId: string
-): Promise<Order | null> {
-    if (!UUID_REGEX.test(orderId.trim())) {
-        return null;
-    }
-
-    const result = await client.query<Order>(
-        `SELECT id, org_id, store_id, customer_name, customer_phone, customer_email,
-            delivery_location, notes, status, payment_method, payment_status,
-            total::text AS total, delivery_type, customer_lat::text AS customer_lat,
-            customer_lng::text AS customer_lng, location_source,
-            location_accuracy_m::text AS location_accuracy_m, location_captured_at,
-            rider_name, rider_phone, delivery_fee::text AS delivery_fee,
-            delivery_fee_status, delivery_confirmation_code,
-            amount_collected::text AS amount_collected, collected_by, delivered_at,
-            created_at, updated_at
-     FROM   orders
-     WHERE  id = $1`,
-        [orderId.trim()]
-    );
-
-    return result.rows[0] ?? null;
-}
-
-export async function markOrderAsPaidTransactional(
-    client: PoolClient,
-    orderId: string
-): Promise<Order | null> {
-    if (!UUID_REGEX.test(orderId.trim())) {
-        return null;
-    }
-
-    const result = await client.query<Order>(
-        `UPDATE orders
-     SET    payment_status = 'paid',
-            status = (CASE WHEN status = 'pending' THEN 'confirmed' ELSE status END),
-            updated_at = NOW()
-     WHERE  id = $1
-     RETURNING id, org_id, store_id, customer_name, customer_phone, customer_email,
-               delivery_location, notes, status, payment_method, payment_status,
-               total::text AS total, delivery_type, customer_lat::text AS customer_lat,
-               customer_lng::text AS customer_lng, location_source,
-               location_accuracy_m::text AS location_accuracy_m, location_captured_at,
-               rider_name, rider_phone, delivery_fee::text AS delivery_fee,
-               delivery_fee_status, delivery_confirmation_code,
-               amount_collected::text AS amount_collected, collected_by, delivered_at,
-               created_at, updated_at`,
-        [orderId.trim()]
-    );
-
-    return result.rows[0] ?? null;
-}
-
-export async function markOrderPaymentFailedTransactional(
-    client: PoolClient,
-    orderId: string
-): Promise<Order | null> {
-    if (!UUID_REGEX.test(orderId.trim())) {
-        return null;
-    }
-
-    const result = await client.query<Order>(
-        `UPDATE orders
-     SET    payment_status = 'failed',
-            updated_at = NOW()
-     WHERE  id = $1
-     RETURNING id, org_id, store_id, customer_name, customer_phone, customer_email,
-               delivery_location, notes, status, payment_method, payment_status,
-               total::text AS total, delivery_type, customer_lat::text AS customer_lat,
-               customer_lng::text AS customer_lng, location_source,
-               location_accuracy_m::text AS location_accuracy_m, location_captured_at,
-               rider_name, rider_phone, delivery_fee::text AS delivery_fee,
-               delivery_fee_status, delivery_confirmation_code,
-               amount_collected::text AS amount_collected, collected_by, delivered_at,
-               created_at, updated_at`,
-        [orderId.trim()]
-    );
-
-    return result.rows[0] ?? null;
-}
-
-export async function listOrders(
-    orgId: string,
-    options: ListOrdersOptions
-): Promise<{ orders: Order[]; total: number }> {
-    const limit =
-        isNaN(options.limit) || options.limit <= 0 ? 20 : options.limit;
-    const offset = (options.page - 1) * limit;
-
-    const countResult = await query<{ count: string }>(
-        `SELECT COUNT(*) AS count FROM orders WHERE org_id = $1`,
-        [orgId]
-    );
-    const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
-
-    if (total === 0) {
-        return { orders: [], total: 0 };
-    }
-
-    const dataResult = await query<Order>(
-        `SELECT id, org_id, store_id, customer_name, customer_phone, customer_email,
-            delivery_location, notes, status, payment_method, payment_status,
-            total::text AS total, delivery_type, customer_lat::text AS customer_lat,
-            customer_lng::text AS customer_lng, location_source,
-            location_accuracy_m::text AS location_accuracy_m, location_captured_at,
-            rider_name, rider_phone, delivery_fee::text AS delivery_fee,
-            delivery_fee_status, delivery_confirmation_code,
-            amount_collected::text AS amount_collected, collected_by, delivered_at,
-            created_at, updated_at
-     FROM   orders
-     WHERE  org_id = $1
-     ORDER  BY created_at DESC
-     LIMIT  $2 OFFSET $3`,
-        [orgId, limit, offset]
-    );
-
-    return { orders: dataResult.rows, total };
-}
-
-export async function getOrderById(
-    orgId: string,
-    orderId: string
-): Promise<OrderWithItems | null> {
-    if (!UUID_REGEX.test(orderId.trim())) {
-        return null;
-    }
-
-    const orderResult = await query<Order>(
-        `SELECT id, org_id, store_id, customer_name, customer_phone, customer_email,
-            delivery_location, notes, status, payment_method, payment_status,
-            total::text AS total, delivery_type, customer_lat::text AS customer_lat,
-            customer_lng::text AS customer_lng, location_source,
-            location_accuracy_m::text AS location_accuracy_m, location_captured_at,
-            rider_name, rider_phone, delivery_fee::text AS delivery_fee,
-            delivery_fee_status, delivery_confirmation_code,
-            amount_collected::text AS amount_collected, collected_by, delivered_at,
-            created_at, updated_at
-     FROM   orders
-     WHERE  org_id = $1 AND id = $2`,
-        [orgId, orderId.trim()]
-    );
-
-    const order = orderResult.rows[0];
-    if (!order) return null;
-
-    const itemsResult = await query<OrderItem>(
-        `SELECT id, order_id, product_id, variant_id, variant_title, product_name, unit_price::text AS unit_price,
-            cost_price::text AS cost_price, quantity, subtotal::text AS subtotal
-     FROM   order_items
-     WHERE  order_id = $1`,
-        [orderId.trim()]
-    );
-
-    return {
-        ...order,
-        items: itemsResult.rows
-    };
-}
-
-export async function updateOrderStatus(
-    orgId: string,
-    orderId: string,
-    status: Order["status"]
-): Promise<OrderWithItems | null> {
-    if (!UUID_REGEX.test(orderId.trim())) {
-        return null;
-    }
-
-    const client = await pool.connect();
-    try {
-        await client.query("BEGIN");
-
-        await client.query(
-            `UPDATE orders 
-       SET status = $3, updated_at = NOW() 
-       WHERE org_id = $1 AND id = $2`,
-            [orgId, orderId.trim(), status]
-        );
-
-        await insertOrderStatusHistoryTransactional(client, orderId.trim(), status, "merchant");
-
-        await client.query("COMMIT");
-        return getOrderById(orgId, orderId);
-    } catch (err) {
-        await client.query("ROLLBACK");
-        throw err;
-    } finally {
-        client.release();
-    }
-}
-
-export async function updateOrderPaymentStatus(
-    orgId: string,
-    orderId: string,
-    paymentStatus: "pending" | "paid" | "failed"
-): Promise<OrderWithItems | null> {
-    if (!UUID_REGEX.test(orderId.trim())) {
-        return null;
-    }
-
-    const client = await pool.connect();
-    try {
-        await client.query("BEGIN");
-
-        const orderRes = await client.query<Order>(
-            `UPDATE orders
-             SET    payment_status = $3,
-                    status = (CASE WHEN $3 = 'paid' AND status = 'pending' THEN 'confirmed' ELSE status END),
-                    updated_at = NOW()
-             WHERE  org_id = $1 AND id = $2
-             RETURNING id, org_id, store_id, customer_name, customer_phone, customer_email,
-                       delivery_location, notes, status, payment_method, payment_status,
-                       total::text AS total, delivery_type, customer_lat::text AS customer_lat,
-                       customer_lng::text AS customer_lng, location_source,
-                       location_accuracy_m::text AS location_accuracy_m, location_captured_at,
-                       rider_name, rider_phone, delivery_fee::text AS delivery_fee,
-                       delivery_fee_status, delivery_confirmation_code,
-                       amount_collected::text AS amount_collected, collected_by, delivered_at,
-                       created_at, updated_at`,
-            [orgId, orderId.trim(), paymentStatus]
-        );
-
-        const order = orderRes.rows[0];
-        if (!order) {
-            await client.query("ROLLBACK");
-            return null;
-        }
-
-        if (paymentStatus === "paid") {
-            await fulfillDigitalItems(order.id, client);
-        }
-
-        if (paymentStatus === "paid" && order.customer_phone) {
-            const custRes = await client.query<{ id: string }>(
-                `SELECT id FROM customers WHERE org_id = $1 AND phone = $2 AND deleted_at IS NULL LIMIT 1`,
-                [orgId, order.customer_phone]
-            );
-
-            let customerId = custRes.rows[0]?.id;
-            if (!customerId) {
-                const newCustRes = await client.query<{ id: string }>(
-                    `INSERT INTO customers (org_id, name, phone, address)
-                     VALUES ($1, $2, $3, $4)
-                     RETURNING id`,
-                    [
-                        orgId,
-                        order.customer_name,
-                        order.customer_phone,
-                        order.delivery_location
-                    ]
-                );
-                customerId = newCustRes.rows[0]?.id;
-            }
-
-            if (customerId) {
-                const amount = parseFloat(order.total);
-                await recordTransaction(client, {
-                    orgId,
-                    customerId,
-                    type: "sale",
-                    amount,
-                    description: `Storefront Order #${order.id.slice(0, 8)}`,
-                    createdBy: null
-                });
-
-                await recordTransaction(client, {
-                    orgId,
-                    customerId,
-                    type: "payment",
-                    amount,
-                    description: `Payment Approved by Admin (${order.payment_method})`,
-                    createdBy: null
-                });
-            }
-        }
-
-        await client.query("COMMIT");
-        return getOrderById(orgId, orderId);
-    } catch (err) {
-        await client.query("ROLLBACK");
-        throw err;
-    } finally {
-        client.release();
-    }
-}
-
-export async function findNearbyConfirmedOrders(
-    orgId: string,
-    targetOrderId: string,
-    radiusKm = 2.0
-): Promise<NearbyOrderRow[]> {
-    const target = await getOrderById(orgId, targetOrderId);
-    if (!target || !target.customer_lat || !target.customer_lng) {
-        return [];
-    }
-
-    const targetLat = parseFloat(target.customer_lat);
-    const targetLng = parseFloat(target.customer_lng);
-
-    const result = await query<{
-        id: string;
-        customer_name: string;
-        customer_phone: string;
-        delivery_location: string;
-        total: string;
-        customer_lat: string;
-        customer_lng: string;
-    }>(
-        `SELECT id, customer_name, customer_phone, delivery_location, total::text AS total,
-            customer_lat::text AS customer_lat, customer_lng::text AS customer_lng
-     FROM   orders
-     WHERE  org_id = $1
-       AND  id != $2
-       AND  status = 'confirmed'
-       AND  delivery_type = 'delivery'
-       AND  customer_lat IS NOT NULL
-       AND  customer_lng IS NOT NULL`,
-        [orgId, targetOrderId]
-    );
-
-    const nearby: NearbyOrderRow[] = [];
-
-    for (const row of result.rows) {
-        const lat = parseFloat(row.customer_lat);
-        const lng = parseFloat(row.customer_lng);
-        const dist = computeHaversineDistanceKm(targetLat, targetLng, lat, lng);
-        if (dist <= radiusKm) {
-            nearby.push({
-                id: row.id,
-                customer_name: row.customer_name,
-                customer_phone: row.customer_phone,
-                delivery_location: row.delivery_location,
-                total: row.total,
-                customer_lat: lat,
-                customer_lng: lng,
-                distance_km: dist
-            });
-        }
-    }
-
-    nearby.sort((a, b) => a.distance_km - b.distance_km);
-    return nearby;
-}
-
-export async function assignRiderToOrders(
-    orgId: string,
-    orderIds: string[],
-    riderName: string,
-    riderPhone: string
-): Promise<Order[]> {
-    const client = await pool.connect();
-    try {
-        await client.query("BEGIN");
-
-        const result = await client.query<Order>(
-            `UPDATE orders
-       SET    status = 'assigned',
-              rider_name = $3,
-              rider_phone = $4,
-              updated_at = NOW()
-       WHERE  org_id = $1
-         AND  id = ANY($2::uuid[])
-         AND  status = 'confirmed'
-       RETURNING id, org_id, store_id, customer_name, customer_phone, customer_email,
-                 delivery_location, notes, status, payment_method, payment_status,
-                 total::text AS total, delivery_type, customer_lat::text AS customer_lat,
-                 customer_lng::text AS customer_lng, location_source,
-                 location_accuracy_m::text AS location_accuracy_m, location_captured_at,
-                 rider_name, rider_phone, delivery_fee::text AS delivery_fee,
-                 delivery_fee_status, delivery_confirmation_code,
-                 amount_collected::text AS amount_collected, collected_by, delivered_at,
-                 created_at, updated_at`,
-            [orgId, orderIds, riderName.trim(), riderPhone.trim()]
-        );
-
-        for (const order of result.rows) {
-            await insertOrderStatusHistoryTransactional(client, order.id, "assigned", "merchant");
-        }
-
-        await client.query("COMMIT");
-        return result.rows;
-    } catch (err) {
-        await client.query("ROLLBACK");
-        throw err;
-    } finally {
-        client.release();
-    }
-}
-
-export async function completeOrderDeliveryTransactional(
-    orgId: string,
-    orderId: string,
-    input: {
-        confirmationCode?: string;
-        amountCollected?: number;
-        collectedBy?: string;
-    }
-): Promise<OrderWithItems> {
-    if (!UUID_REGEX.test(orderId.trim())) {
-        throw new AppError("Invalid order ID format", 400);
-    }
-
-    const client = await pool.connect();
-    try {
-        await client.query("BEGIN");
-
-        const order = await getOrderById(orgId, orderId.trim());
-        if (!order) {
-            throw new AppError("Order not found", 404);
-        }
-
-        if (order.status === "delivered") {
-            await client.query("COMMIT");
-            return order;
-        }
-
-        if (order.delivery_type === "delivery" && order.delivery_confirmation_code) {
-            const expected = normalizeDeliveryConfirmationCode(order.delivery_confirmation_code);
-            const provided = normalizeDeliveryConfirmationCode(input.confirmationCode || "");
-
-            if (!provided || provided !== expected) {
-                throw new AppError(
-                    "Invalid delivery confirmation code. Please check the 4-digit code provided by the customer.",
-                    400
-                );
-            }
-        }
-
-        const isCOD = order.payment_method === "mpesa_cash";
-        const orderTotalNum = parseFloat(order.total);
-        const collectedAmount = input.amountCollected !== undefined ? input.amountCollected : orderTotalNum;
-        const collector = input.collectedBy?.trim() || order.rider_name || "merchant";
-
-        await client.query(
-            `UPDATE orders
-       SET    status           = 'delivered',
-              delivered_at     = NOW(),
-              amount_collected = $3,
-              collected_by     = $4,
-              payment_status   = (CASE WHEN $5 = TRUE THEN 'paid' ELSE payment_status END),
-              updated_at       = NOW()
-       WHERE  org_id = $1 AND id = $2`,
-            [
-                orgId,
-                orderId.trim(),
-                collectedAmount,
-                collector,
-                isCOD && collectedAmount >= orderTotalNum
-            ]
-        );
-
-        await insertOrderStatusHistoryTransactional(client, orderId.trim(), "delivered", collector);
-
-        if (isCOD && collectedAmount > 0 && order.customer_phone) {
-            const custRes = await client.query<{ id: string }>(
-                `SELECT id FROM customers WHERE org_id = $1 AND phone = $2 AND deleted_at IS NULL LIMIT 1`,
-                [orgId, order.customer_phone]
-            );
-
-            let customerId = custRes.rows[0]?.id;
-            if (!customerId) {
-                const newCustRes = await client.query<{ id: string }>(
-                    `INSERT INTO customers (org_id, name, phone, address)
-           VALUES ($1, $2, $3, $4)
-           RETURNING id`,
-                    [
-                        orgId,
-                        order.customer_name,
-                        order.customer_phone,
-                        order.delivery_location
-                    ]
-                );
-                customerId = newCustRes.rows[0]?.id;
-            }
-
-            if (customerId) {
-                await recordTransaction(client, {
-                    orgId,
-                    customerId,
-                    type: "sale",
-                    amount: orderTotalNum,
-                    description: `Delivered Order #${order.id.slice(0, 8)}`,
-                    createdBy: null
-                });
-
-                await recordTransaction(client, {
-                    orgId,
-                    customerId,
-                    type: "payment",
-                    amount: collectedAmount,
-                    description: `Cash Collected on Delivery (${collector})`,
-                    createdBy: null
-                });
-            }
-        }
-
-        await client.query("COMMIT");
-        const fullOrder = await getOrderById(orgId, orderId);
-        return fullOrder!;
-    } catch (err) {
-        await client.query("ROLLBACK");
-        throw err;
-    } finally {
-        client.release();
-    }
-}
-export async function getCashReconciliationSummary(
-    orgId: string,
-    startDate?: string,
-    endDate?: string
-): Promise<CashReconciliationSummary> {
-    const conditions: string[] = [
-        "org_id = $1",
-        "payment_method = 'mpesa_cash'"
-    ];
-    const params: unknown[] = [orgId];
-    let paramIdx = 2;
-
-    if (startDate) {
-        conditions.push(`created_at >= $${paramIdx}`);
-        params.push(startDate);
-        paramIdx++;
-    }
-
-    if (endDate) {
-        conditions.push(`created_at <= $${paramIdx}`);
-        params.push(endDate);
-        paramIdx++;
-    }
-
-    const whereClause = conditions.join(" AND ");
-
-    const result = await query<{
-        total_cod_orders: string;
-        delivered_cod_orders: string;
-        expected_total: string;
-        collected_total: string;
-        unreconciled_count: string;
-    }>(
-        `SELECT
-       COUNT(*)::text AS total_cod_orders,
-       COUNT(*) FILTER (WHERE status = 'delivered')::text AS delivered_cod_orders,
-       COALESCE(SUM(total), 0)::text AS expected_total,
-       COALESCE(SUM(amount_collected) FILTER (WHERE status = 'delivered'), 0)::text AS collected_total,
-       COUNT(*) FILTER (WHERE status = 'delivered' AND (amount_collected IS NULL OR amount_collected < total))::text AS unreconciled_count
-     FROM orders
-     WHERE ${whereClause}`,
-        params
-    );
-
-    const row = result.rows[0];
-    const expected = parseFloat(row?.expected_total || "0");
-    const collected = parseFloat(row?.collected_total || "0");
-    const variance = (expected - collected).toFixed(2);
-
-    return {
-        total_cod_orders: parseInt(row?.total_cod_orders || "0", 10),
-        delivered_cod_orders: parseInt(row?.delivered_cod_orders || "0", 10),
-        expected_total: row?.expected_total || "0.00",
-        collected_total: row?.collected_total || "0.00",
-        variance,
-        unreconciled_count: parseInt(row?.unreconciled_count || "0", 10)
-    };
-}
 </file>
 
 <file path="src/modules/products/products.queries.ts">
@@ -16173,6 +15859,1035 @@ export async function createProductsBulk(orgId: string, rawBody: unknown) {
 }
 </file>
 
+<file path="package.json">
+{
+  "name": "kauntaos-api",
+  "version": "1.0.0",
+  "description": "Production-grade multi-tenant SaaS API",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "type-check": "tsc --noEmit",
+    "migrate": "tsx src/migrations/run.ts",
+    "test": "tsx src/tests/run-all-tests.ts",
+    "test:unit": "tsx src/tests/unit-math-crypto.test.ts",
+    "test:e2e": "tsx src/tests/e2e-delivery-flow.test.ts",
+    "heal": "tsx src/scripts/heal-system.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.750.0",
+    "@aws-sdk/lib-storage": "^3.750.0",
+    "@aws-sdk/s3-request-presigner": "^3.750.0",
+    "axios": "^1.18.1",
+    "bcryptjs": "^3.0.3",
+    "bullmq": "^6.2.2",
+    "cloudinary": "^2.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.2.0",
+    "googleapis": "^176.0.0",
+    "helmet": "^7.1.0",
+    "ioredis": "^6.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.2.0",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^9.1.1",
+    "pg": "^8.11.5",
+    "pino": "^8.21.0",
+    "pino-http": "^9.0.0",
+    "uuid": "^9.0.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^20.12.12",
+    "@types/node-cron": "^3.0.11",
+    "@types/nodemailer": "^8.0.1",
+    "@types/pg": "^8.11.6",
+    "@types/uuid": "^9.0.8",
+    "@typescript-eslint/eslint-plugin": "^7.10.0",
+    "@typescript-eslint/parser": "^7.10.0",
+    "eslint": "^8.57.0",
+    "tsx": "^4.11.0",
+    "typescript": "^5.4.5"
+  }
+}
+</file>
+
+<file path="src/modules/orders/orders.queries.ts">
+// =============================================================================
+// soko-api/src/modules/orders/orders.queries.ts
+// =============================================================================
+
+import { PoolClient } from "pg";
+import { query, pool } from "../../config/db";
+import { recordTransaction } from "../transactions/transactions.queries";
+import { computeHaversineDistanceKm } from "../../utils/geo";
+import { normalizeDeliveryConfirmationCode } from "../../utils/crypto";
+import { AppError } from "../../utils/error";
+import { fulfillDigitalItems } from "../../verticals/books/delivery.service";
+
+export interface Order {
+    id: string;
+    org_id: string;
+    store_id: string;
+    customer_name: string;
+    customer_phone: string;
+    customer_email: string | null;
+    delivery_location: string;
+    notes: string | null;
+    status: "pending" | "confirmed" | "assigned" | "out_for_delivery" | "delivered" | "cancelled";
+    payment_method: string;
+    payment_status: "pending" | "paid" | "failed";
+    payment_reference: string | null;
+    total: string;
+    delivery_type: "delivery" | "pickup";
+    customer_lat: string | null;
+    customer_lng: string | null;
+    location_source: string | null;
+    location_accuracy_m: string | null;
+    location_captured_at: Date | null;
+    rider_name: string | null;
+    rider_phone: string | null;
+    delivery_fee: string;
+    delivery_fee_status: "known" | "needs_merchant_confirmation";
+    delivery_confirmation_code: string | null;
+    amount_collected: string | null;
+    collected_by: string | null;
+    delivered_at: Date | null;
+    created_at: Date;
+    updated_at: Date;
+}
+
+export interface OrderItem {
+    id: string;
+    order_id: string;
+    product_id: string | null;
+    variant_id: string | null;
+    variant_title: string | null;
+    product_name: string;
+    unit_price: string;
+    cost_price: string;
+    quantity: number;
+    subtotal: string;
+}
+
+export interface OrderWithItems extends Order {
+    items: OrderItem[];
+}
+
+export interface ListOrdersOptions {
+    page: number;
+    limit: number;
+    status?: string;
+    paymentStatus?: string;
+    paymentMethod?: string;
+    q?: string;
+}
+
+export interface OrdersSummary {
+    today_count: number;
+    today_revenue: string;
+    month_revenue: string;
+    pending_count: number;
+}
+
+export interface MerchantLocationRow {
+    id: string;
+    org_id: string;
+    name: string;
+    lat: string;
+    lng: string;
+    address_text: string | null;
+    max_delivery_radius_km: string;
+    base_delivery_fee: string;
+    fee_per_km: string;
+}
+
+export interface NearbyOrderRow {
+    id: string;
+    customer_name: string;
+    customer_phone: string;
+    delivery_location: string;
+    total: string;
+    customer_lat: number;
+    customer_lng: number;
+    distance_km: number;
+}
+
+export interface CashReconciliationSummary {
+    total_cod_orders: number;
+    delivered_cod_orders: number;
+    expected_total: string;
+    collected_total: string;
+    variance: string;
+    unreconciled_count: number;
+}
+
+const UUID_REGEX =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Self-healing guard: ensures payment_reference column and index exist in PostgreSQL.
+ */
+let orderSchemaChecked = false;
+export async function ensureOrderSchema(client?: PoolClient): Promise<void> {
+    if (orderSchemaChecked) return;
+    const runner = client || pool;
+    try {
+        await runner.query(`
+            ALTER TABLE orders
+              ADD COLUMN IF NOT EXISTS payment_reference TEXT DEFAULT NULL;
+            
+            CREATE INDEX IF NOT EXISTS idx_orders_org_payment_ref
+              ON orders(org_id, UPPER(TRIM(payment_reference)))
+              WHERE payment_reference IS NOT NULL;
+
+            CREATE INDEX IF NOT EXISTS idx_orders_org_payment_method
+              ON orders(org_id, payment_method);
+        `);
+        orderSchemaChecked = true;
+    } catch {
+        orderSchemaChecked = true;
+    }
+}
+
+export async function getOrdersSummary(orgId: string): Promise<OrdersSummary> {
+    const result = await query<{
+        today_count: string;
+        today_revenue: string;
+        month_revenue: string;
+        pending_count: string;
+    }>(
+        `SELECT 
+       COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)::text AS today_count,
+       COALESCE(SUM(total) FILTER (
+         WHERE created_at >= CURRENT_DATE 
+         AND status != 'cancelled' 
+         AND payment_status = 'paid'
+       ), 0)::text AS today_revenue,
+       COALESCE(SUM(total) FILTER (
+         WHERE created_at >= date_trunc('month', CURRENT_DATE) 
+         AND status != 'cancelled' 
+         AND payment_status = 'paid'
+       ), 0)::text AS month_revenue,
+       COUNT(*) FILTER (WHERE status = 'pending')::text AS pending_count
+     FROM orders
+     WHERE org_id = $1`,
+        [orgId]
+    );
+
+    const row = result.rows[0];
+    return {
+        today_count: parseInt(row?.today_count ?? "0", 10),
+        today_revenue: row?.today_revenue ?? "0",
+        month_revenue: row?.month_revenue ?? "0",
+        pending_count: parseInt(row?.pending_count ?? "0", 10)
+    };
+}
+
+export async function getMerchantLocationTransactional(
+    client: PoolClient,
+    orgId: string
+): Promise<MerchantLocationRow | null> {
+    const result = await client.query<MerchantLocationRow>(
+        `SELECT id, org_id, name, lat::text AS lat, lng::text AS lng, address_text,
+            max_delivery_radius_km::text AS max_delivery_radius_km,
+            base_delivery_fee::text AS base_delivery_fee,
+            fee_per_km::text AS fee_per_km
+     FROM   merchant_locations
+     WHERE  org_id = $1`,
+        [orgId]
+    );
+    return result.rows[0] ?? null;
+}
+
+export async function insertOrderTransactional(
+    client: PoolClient,
+    data: {
+        orgId: string;
+        storeId: string;
+        customerName: string;
+        customerPhone: string;
+        customerEmail?: string | null;
+        deliveryLocation: string;
+        notes?: string | null;
+        paymentMethod: string;
+        paymentReference?: string | null;
+        total: number;
+        status?: "pending" | "confirmed";
+        deliveryType?: "delivery" | "pickup";
+        customerLat?: number | null;
+        customerLng?: number | null;
+        locationSource?: string | null;
+        locationAccuracyM?: number | null;
+        deliveryFee?: number;
+        deliveryFeeStatus?: "known" | "needs_merchant_confirmation";
+        deliveryConfirmationCode?: string | null;
+    }
+): Promise<string> {
+    await ensureOrderSchema(client);
+
+    const locationCapturedAt =
+        data.customerLat !== null && data.customerLat !== undefined
+            ? new Date()
+            : null;
+
+    const initialStatus = data.status || (data.paymentMethod === 'mpesa_cash' ? 'confirmed' : 'pending');
+
+    const result = await client.query<{ id: string }>(
+        `INSERT INTO orders (
+       org_id, store_id, customer_name, customer_phone, customer_email,
+       delivery_location, notes, payment_method, payment_reference, total,
+       status, delivery_type, customer_lat, customer_lng, location_source,
+       location_accuracy_m, location_captured_at, delivery_fee,
+       delivery_fee_status, delivery_confirmation_code
+     )
+     VALUES (
+       $1, $2, $3, $4, $5,
+       $6, $7, $8, $9, $10,
+       $11, $12, $13, $14, $15,
+       $16, $17, $18, $19, $20
+     )
+     RETURNING id`,
+        [
+            data.orgId,
+            data.storeId,
+            data.customerName,
+            data.customerPhone,
+            data.customerEmail ?? null,
+            data.deliveryLocation,
+            data.notes ?? null,
+            data.paymentMethod,
+            data.paymentReference?.trim().toUpperCase() ?? null,
+            data.total,
+            initialStatus,
+            data.deliveryType ?? "delivery",
+            data.customerLat ?? null,
+            data.customerLng ?? null,
+            data.locationSource ?? null,
+            data.locationAccuracyM ?? null,
+            locationCapturedAt,
+            data.deliveryFee ?? 0,
+            data.deliveryFeeStatus ?? "known",
+            data.deliveryConfirmationCode ?? null
+        ]
+    );
+    return result.rows[0].id;
+}
+
+export async function insertOrderStatusHistoryTransactional(
+    client: PoolClient,
+    orderId: string,
+    status: string,
+    changedBy: string = "system"
+): Promise<void> {
+    await client.query(
+        `INSERT INTO order_status_history (order_id, status, changed_by)
+     VALUES ($1, $2, $3)`,
+        [orderId, status, changedBy]
+    );
+}
+
+export async function insertOrderItemTransactional(
+    client: PoolClient,
+    orderId: string,
+    item: {
+        productId: string;
+        productName: string;
+        unitPrice: number;
+        costPrice?: number;
+        quantity: number;
+        subtotal: number;
+        variantId?: string | null;
+        variantTitle?: string | null;
+        formatId?: string | null;
+        deliveryMethod?: string | null;
+    }
+): Promise<void> {
+    await client.query(
+        `INSERT INTO order_items (
+           order_id, product_id, product_name, unit_price, cost_price,
+           quantity, subtotal, variant_id, variant_title, format_id, delivery_method
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [
+            orderId,
+            item.productId,
+            item.productName,
+            item.unitPrice,
+            item.costPrice ?? 0,
+            item.quantity,
+            item.subtotal,
+            item.variantId ?? null,
+            item.variantTitle ?? null,
+            item.formatId ?? null,
+            item.deliveryMethod ?? (item.formatId ? 'digital' : 'delivery')
+        ]
+    );
+}
+
+export async function decrementStockTransactional(
+    client: PoolClient,
+    productId: string,
+    quantity: number
+): Promise<boolean> {
+    const result = await client.query(
+        `UPDATE inventory
+     SET    stock      = stock - $1
+     WHERE  product_id = $2
+       AND  stock      >= $1`,
+        [quantity, productId]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
+}
+
+export async function findOrderForWebhook(
+    client: PoolClient,
+    orderId: string
+): Promise<Order | null> {
+    if (!UUID_REGEX.test(orderId.trim())) {
+        return null;
+    }
+
+    await ensureOrderSchema(client);
+
+    const result = await client.query<Order>(
+        `SELECT id, org_id, store_id, customer_name, customer_phone, customer_email,
+            delivery_location, notes, status, payment_method, payment_status,
+            payment_reference, total::text AS total, delivery_type, customer_lat::text AS customer_lat,
+            customer_lng::text AS customer_lng, location_source,
+            location_accuracy_m::text AS location_accuracy_m, location_captured_at,
+            rider_name, rider_phone, delivery_fee::text AS delivery_fee,
+            delivery_fee_status, delivery_confirmation_code,
+            amount_collected::text AS amount_collected, collected_by, delivered_at,
+            created_at, updated_at
+     FROM   orders
+     WHERE  id = $1`,
+        [orderId.trim()]
+    );
+
+    return result.rows[0] ?? null;
+}
+
+export async function markOrderAsPaidTransactional(
+    client: PoolClient,
+    orderId: string
+): Promise<Order | null> {
+    if (!UUID_REGEX.test(orderId.trim())) {
+        return null;
+    }
+
+    await ensureOrderSchema(client);
+
+    const result = await client.query<Order>(
+        `UPDATE orders
+     SET    payment_status = 'paid',
+            status = (CASE WHEN status = 'pending' THEN 'confirmed' ELSE status END),
+            updated_at = NOW()
+     WHERE  id = $1
+     RETURNING id, org_id, store_id, customer_name, customer_phone, customer_email,
+               delivery_location, notes, status, payment_method, payment_status,
+               payment_reference, total::text AS total, delivery_type, customer_lat::text AS customer_lat,
+               customer_lng::text AS customer_lng, location_source,
+               location_accuracy_m::text AS location_accuracy_m, location_captured_at,
+               rider_name, rider_phone, delivery_fee::text AS delivery_fee,
+               delivery_fee_status, delivery_confirmation_code,
+               amount_collected::text AS amount_collected, collected_by, delivered_at,
+               created_at, updated_at`,
+        [orderId.trim()]
+    );
+
+    return result.rows[0] ?? null;
+}
+
+export async function markOrderPaymentFailedTransactional(
+    client: PoolClient,
+    orderId: string
+): Promise<Order | null> {
+    if (!UUID_REGEX.test(orderId.trim())) {
+        return null;
+    }
+
+    await ensureOrderSchema(client);
+
+    const result = await client.query<Order>(
+        `UPDATE orders
+     SET    payment_status = 'failed',
+            updated_at = NOW()
+     WHERE  id = $1
+     RETURNING id, org_id, store_id, customer_name, customer_phone, customer_email,
+               delivery_location, notes, status, payment_method, payment_status,
+               payment_reference, total::text AS total, delivery_type, customer_lat::text AS customer_lat,
+               customer_lng::text AS customer_lng, location_source,
+               location_accuracy_m::text AS location_accuracy_m, location_captured_at,
+               rider_name, rider_phone, delivery_fee::text AS delivery_fee,
+               delivery_fee_status, delivery_confirmation_code,
+               amount_collected::text AS amount_collected, collected_by, delivered_at,
+               created_at, updated_at`,
+        [orderId.trim()]
+    );
+
+    return result.rows[0] ?? null;
+}
+
+export async function listOrders(
+    orgId: string,
+    options: ListOrdersOptions
+): Promise<{ orders: OrderWithItems[]; total: number }> {
+    await ensureOrderSchema();
+
+    const limit = isNaN(options.limit) || options.limit <= 0 ? 20 : options.limit;
+    const offset = (options.page - 1) * limit;
+
+    const conditions: string[] = ["o.org_id = $1"];
+    const params: unknown[] = [orgId];
+    let paramIdx = 2;
+
+    if (options.status && options.status !== 'all') {
+        conditions.push(`o.status = $${paramIdx}`);
+        params.push(options.status.trim().toLowerCase());
+        paramIdx++;
+    }
+
+    if (options.paymentStatus && options.paymentStatus !== 'all') {
+        conditions.push(`o.payment_status = $${paramIdx}`);
+        params.push(options.paymentStatus.trim().toLowerCase());
+        paramIdx++;
+    }
+
+    if (options.paymentMethod && options.paymentMethod !== 'all') {
+        conditions.push(`o.payment_method = $${paramIdx}`);
+        params.push(options.paymentMethod.trim());
+        paramIdx++;
+    }
+
+    if (options.q && options.q.trim()) {
+        const searchTerm = `%${options.q.trim()}%`;
+        conditions.push(`(
+            o.customer_name ILIKE $${paramIdx} OR
+            o.customer_phone ILIKE $${paramIdx} OR
+            o.payment_reference ILIKE $${paramIdx} OR
+            o.id::text ILIKE $${paramIdx}
+        )`);
+        params.push(searchTerm);
+        paramIdx++;
+    }
+
+    const whereClause = conditions.join(" AND ");
+
+    const countResult = await query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM orders o WHERE ${whereClause}`,
+        params
+    );
+    const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
+
+    if (total === 0) {
+        return { orders: [], total: 0 };
+    }
+
+    const dataParams = [...params, limit, offset];
+    const dataResult = await query<Order>(
+        `SELECT o.id, o.org_id, o.store_id, o.customer_name, o.customer_phone, o.customer_email,
+            o.delivery_location, o.notes, o.status, o.payment_method, o.payment_status,
+            o.payment_reference, o.total::text AS total, o.delivery_type,
+            o.customer_lat::text AS customer_lat, o.customer_lng::text AS customer_lng,
+            o.location_source, o.location_accuracy_m::text AS location_accuracy_m,
+            o.location_captured_at, o.rider_name, o.rider_phone,
+            o.delivery_fee::text AS delivery_fee, o.delivery_fee_status,
+            o.delivery_confirmation_code, o.amount_collected::text AS amount_collected,
+            o.collected_by, o.delivered_at, o.created_at, o.updated_at
+     FROM   orders o
+     WHERE  ${whereClause}
+     ORDER  BY o.created_at DESC
+     LIMIT  $${paramIdx} OFFSET $${paramIdx + 1}`,
+        dataParams
+    );
+
+    const orderIds = dataResult.rows.map((o) => o.id);
+    const itemsResult = await query<OrderItem>(
+        `SELECT id, order_id, product_id, variant_id, variant_title, product_name,
+                unit_price::text AS unit_price, cost_price::text AS cost_price,
+                quantity, subtotal::text AS subtotal
+         FROM order_items
+         WHERE order_id = ANY($1::uuid[])`,
+        [orderIds]
+    );
+
+    const itemsByOrder = new Map<string, OrderItem[]>();
+    for (const item of itemsResult.rows) {
+        if (!itemsByOrder.has(item.order_id)) {
+            itemsByOrder.set(item.order_id, []);
+        }
+        itemsByOrder.get(item.order_id)!.push(item);
+    }
+
+    const ordersWithItems = dataResult.rows.map((o) => ({
+        ...o,
+        items: itemsByOrder.get(o.id) || [],
+    }));
+
+    return { orders: ordersWithItems, total };
+}
+
+export async function getOrderById(
+    orgId: string,
+    orderId: string
+): Promise<OrderWithItems | null> {
+    if (!UUID_REGEX.test(orderId.trim())) {
+        return null;
+    }
+
+    await ensureOrderSchema();
+
+    const orderResult = await query<Order>(
+        `SELECT id, org_id, store_id, customer_name, customer_phone, customer_email,
+            delivery_location, notes, status, payment_method, payment_status,
+            payment_reference, total::text AS total, delivery_type,
+            customer_lat::text AS customer_lat, customer_lng::text AS customer_lng,
+            location_source, location_accuracy_m::text AS location_accuracy_m,
+            location_captured_at, rider_name, rider_phone,
+            delivery_fee::text AS delivery_fee, delivery_fee_status,
+            delivery_confirmation_code, amount_collected::text AS amount_collected,
+            collected_by, delivered_at, created_at, updated_at
+     FROM   orders
+     WHERE  org_id = $1 AND id = $2`,
+        [orgId, orderId.trim()]
+    );
+
+    const order = orderResult.rows[0];
+    if (!order) return null;
+
+    const itemsResult = await query<OrderItem>(
+        `SELECT id, order_id, product_id, variant_id, variant_title, product_name, unit_price::text AS unit_price,
+            cost_price::text AS cost_price, quantity, subtotal::text AS subtotal
+     FROM   order_items
+     WHERE  order_id = $1`,
+        [orderId.trim()]
+    );
+
+    return {
+        ...order,
+        items: itemsResult.rows
+    };
+}
+
+export async function updateOrderStatus(
+    orgId: string,
+    orderId: string,
+    status: Order["status"]
+): Promise<OrderWithItems | null> {
+    if (!UUID_REGEX.test(orderId.trim())) {
+        return null;
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+
+        await client.query(
+            `UPDATE orders 
+       SET status = $3, updated_at = NOW() 
+       WHERE org_id = $1 AND id = $2`,
+            [orgId, orderId.trim(), status]
+        );
+
+        await insertOrderStatusHistoryTransactional(client, orderId.trim(), status, "merchant");
+
+        await client.query("COMMIT");
+        return getOrderById(orgId, orderId);
+    } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+    } finally {
+        client.release();
+    }
+}
+
+export async function updateOrderPaymentStatus(
+    orgId: string,
+    orderId: string,
+    paymentStatus: "pending" | "paid" | "failed"
+): Promise<OrderWithItems | null> {
+    if (!UUID_REGEX.test(orderId.trim())) {
+        return null;
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        await ensureOrderSchema(client);
+
+        const orderRes = await client.query<Order>(
+            `UPDATE orders
+             SET    payment_status = $3,
+                    status = (CASE WHEN $3 = 'paid' AND status = 'pending' THEN 'confirmed' ELSE status END),
+                    updated_at = NOW()
+             WHERE  org_id = $1 AND id = $2
+             RETURNING id, org_id, store_id, customer_name, customer_phone, customer_email,
+                       delivery_location, notes, status, payment_method, payment_status,
+                       payment_reference, total::text AS total, delivery_type,
+                       customer_lat::text AS customer_lat, customer_lng::text AS customer_lng,
+                       location_source, location_accuracy_m::text AS location_accuracy_m,
+                       location_captured_at, rider_name, rider_phone,
+                       delivery_fee::text AS delivery_fee, delivery_fee_status,
+                       delivery_confirmation_code, amount_collected::text AS amount_collected,
+                       collected_by, delivered_at, created_at, updated_at`,
+            [orgId, orderId.trim(), paymentStatus]
+        );
+
+        const order = orderRes.rows[0];
+        if (!order) {
+            await client.query("ROLLBACK");
+            return null;
+        }
+
+        if (paymentStatus === "paid") {
+            await fulfillDigitalItems(order.id, client);
+        }
+
+        if (paymentStatus === "paid" && order.customer_phone) {
+            const custRes = await client.query<{ id: string }>(
+                `SELECT id FROM customers WHERE org_id = $1 AND phone = $2 AND deleted_at IS NULL LIMIT 1`,
+                [orgId, order.customer_phone]
+            );
+
+            let customerId = custRes.rows[0]?.id;
+            if (!customerId) {
+                const newCustRes = await client.query<{ id: string }>(
+                    `INSERT INTO customers (org_id, name, phone, address)
+                     VALUES ($1, $2, $3, $4)
+                     RETURNING id`,
+                    [
+                        orgId,
+                        order.customer_name,
+                        order.customer_phone,
+                        order.delivery_location
+                    ]
+                );
+                customerId = newCustRes.rows[0]?.id;
+            }
+
+            if (customerId) {
+                const amount = parseFloat(order.total);
+                await recordTransaction(client, {
+                    orgId,
+                    customerId,
+                    type: "sale",
+                    amount,
+                    description: `Storefront Order #${order.id.slice(0, 8)}`,
+                    createdBy: null
+                });
+
+                await recordTransaction(client, {
+                    orgId,
+                    customerId,
+                    type: "payment",
+                    amount,
+                    description: `Payment Approved by Admin (${order.payment_method})`,
+                    createdBy: null
+                });
+            }
+        }
+
+        await client.query("COMMIT");
+        return getOrderById(orgId, orderId);
+    } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+    } finally {
+        client.release();
+    }
+}
+
+export async function findNearbyConfirmedOrders(
+    orgId: string,
+    targetOrderId: string,
+    radiusKm = 2.0
+): Promise<NearbyOrderRow[]> {
+    const target = await getOrderById(orgId, targetOrderId);
+    if (!target || !target.customer_lat || !target.customer_lng) {
+        return [];
+    }
+
+    const targetLat = parseFloat(target.customer_lat);
+    const targetLng = parseFloat(target.customer_lng);
+
+    const result = await query<{
+        id: string;
+        customer_name: string;
+        customer_phone: string;
+        delivery_location: string;
+        total: string;
+        customer_lat: string;
+        customer_lng: string;
+    }>(
+        `SELECT id, customer_name, customer_phone, delivery_location, total::text AS total,
+            customer_lat::text AS customer_lat, customer_lng::text AS customer_lng
+     FROM   orders
+     WHERE  org_id = $1
+       AND  id != $2
+       AND  status = 'confirmed'
+       AND  delivery_type = 'delivery'
+       AND  customer_lat IS NOT NULL
+       AND  customer_lng IS NOT NULL`,
+        [orgId, targetOrderId]
+    );
+
+    const nearby: NearbyOrderRow[] = [];
+
+    for (const row of result.rows) {
+        const lat = parseFloat(row.customer_lat);
+        const lng = parseFloat(row.customer_lng);
+        const dist = computeHaversineDistanceKm(targetLat, targetLng, lat, lng);
+        if (dist <= radiusKm) {
+            nearby.push({
+                id: row.id,
+                customer_name: row.customer_name,
+                customer_phone: row.customer_phone,
+                delivery_location: row.delivery_location,
+                total: row.total,
+                customer_lat: lat,
+                customer_lng: lng,
+                distance_km: dist
+            });
+        }
+    }
+
+    nearby.sort((a, b) => a.distance_km - b.distance_km);
+    return nearby;
+}
+export async function assignRiderToOrders(
+    orgId: string,
+    orderIds: string[],
+    riderName: string,
+    riderPhone: string
+): Promise<Order[]> {
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        await ensureOrderSchema(client);
+
+        const result = await client.query<Order>(
+            `UPDATE orders
+       SET    status = 'assigned',
+              rider_name = $3,
+              rider_phone = $4,
+              updated_at = NOW()
+       WHERE  org_id = $1
+         AND  id = ANY($2::uuid[])
+         AND  status = 'confirmed'
+       RETURNING id, org_id, store_id, customer_name, customer_phone, customer_email,
+                 delivery_location, notes, status, payment_method, payment_status,
+                 payment_reference, total::text AS total, delivery_type,
+                 customer_lat::text AS customer_lat, customer_lng::text AS customer_lng,
+                 location_source, location_accuracy_m::text AS location_accuracy_m,
+                 location_captured_at, rider_name, rider_phone,
+                 delivery_fee::text AS delivery_fee, delivery_fee_status,
+                 delivery_confirmation_code, amount_collected::text AS amount_collected,
+                 collected_by, delivered_at, created_at, updated_at`,
+            [orgId, orderIds, riderName.trim(), riderPhone.trim()]
+        );
+
+        for (const order of result.rows) {
+            await insertOrderStatusHistoryTransactional(client, order.id, "assigned", "merchant");
+        }
+
+        await client.query("COMMIT");
+        return result.rows;
+    } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+    } finally {
+        client.release();
+    }
+}
+
+export async function completeOrderDeliveryTransactional(
+    orgId: string,
+    orderId: string,
+    input: {
+        confirmationCode?: string;
+        amountCollected?: number;
+        collectedBy?: string;
+    }
+): Promise<OrderWithItems> {
+    if (!UUID_REGEX.test(orderId.trim())) {
+        throw new AppError("Invalid order ID format", 400);
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        await ensureOrderSchema(client);
+
+        const order = await getOrderById(orgId, orderId.trim());
+        if (!order) {
+            throw new AppError("Order not found", 404);
+        }
+
+        if (order.status === "delivered") {
+            await client.query("COMMIT");
+            return order;
+        }
+
+        if (order.delivery_type === "delivery" && order.delivery_confirmation_code) {
+            const expected = normalizeDeliveryConfirmationCode(order.delivery_confirmation_code);
+            const provided = normalizeDeliveryConfirmationCode(input.confirmationCode || "");
+
+            if (!provided || provided !== expected) {
+                throw new AppError(
+                    "Invalid delivery confirmation code. Please check the 4-digit code provided by the customer.",
+                    400
+                );
+            }
+        }
+
+        const isCOD = order.payment_method === "mpesa_cash";
+        const orderTotalNum = parseFloat(order.total);
+        const collectedAmount = input.amountCollected !== undefined ? input.amountCollected : orderTotalNum;
+        const collector = input.collectedBy?.trim() || order.rider_name || "merchant";
+
+        await client.query(
+            `UPDATE orders
+       SET    status           = 'delivered',
+              delivered_at     = NOW(),
+              amount_collected = $3,
+              collected_by     = $4,
+              payment_status   = (CASE WHEN $5 = TRUE THEN 'paid' ELSE payment_status END),
+              updated_at       = NOW()
+       WHERE  org_id = $1 AND id = $2`,
+            [
+                orgId,
+                orderId.trim(),
+                collectedAmount,
+                collector,
+                isCOD && collectedAmount >= orderTotalNum
+            ]
+        );
+
+        await insertOrderStatusHistoryTransactional(client, orderId.trim(), "delivered", collector);
+
+        if (isCOD && collectedAmount > 0 && order.customer_phone) {
+            const custRes = await client.query<{ id: string }>(
+                `SELECT id FROM customers WHERE org_id = $1 AND phone = $2 AND deleted_at IS NULL LIMIT 1`,
+                [orgId, order.customer_phone]
+            );
+
+            let customerId = custRes.rows[0]?.id;
+            if (!customerId) {
+                const newCustRes = await client.query<{ id: string }>(
+                    `INSERT INTO customers (org_id, name, phone, address)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id`,
+                    [
+                        orgId,
+                        order.customer_name,
+                        order.customer_phone,
+                        order.delivery_location
+                    ]
+                );
+                customerId = newCustRes.rows[0]?.id;
+            }
+
+            if (customerId) {
+                await recordTransaction(client, {
+                    orgId,
+                    customerId,
+                    type: "sale",
+                    amount: orderTotalNum,
+                    description: `Delivered Order #${order.id.slice(0, 8)}`,
+                    createdBy: null
+                });
+
+                await recordTransaction(client, {
+                    orgId,
+                    customerId,
+                    type: "payment",
+                    amount: collectedAmount,
+                    description: `Cash Collected on Delivery (${collector})`,
+                    createdBy: null
+                });
+            }
+        }
+
+        await client.query("COMMIT");
+        const fullOrder = await getOrderById(orgId, orderId);
+        return fullOrder!;
+    } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+    } finally {
+        client.release();
+    }
+}
+
+export async function getCashReconciliationSummary(
+    orgId: string,
+    startDate?: string,
+    endDate?: string
+): Promise<CashReconciliationSummary> {
+    const conditions: string[] = [
+        "org_id = $1",
+        "payment_method = 'mpesa_cash'"
+    ];
+    const params: unknown[] = [orgId];
+    let paramIdx = 2;
+
+    if (startDate) {
+        conditions.push(`created_at >= $${paramIdx}`);
+        params.push(startDate);
+        paramIdx++;
+    }
+
+    if (endDate) {
+        conditions.push(`created_at <= $${paramIdx}`);
+        params.push(endDate);
+        paramIdx++;
+    }
+
+    const whereClause = conditions.join(" AND ");
+
+    const result = await query<{
+        total_cod_orders: string;
+        delivered_cod_orders: string;
+        expected_total: string;
+        collected_total: string;
+        unreconciled_count: string;
+    }>(
+        `SELECT
+       COUNT(*)::text AS total_cod_orders,
+       COUNT(*) FILTER (WHERE status = 'delivered')::text AS delivered_cod_orders,
+       COALESCE(SUM(total), 0)::text AS expected_total,
+       COALESCE(SUM(amount_collected) FILTER (WHERE status = 'delivered'), 0)::text AS collected_total,
+       COUNT(*) FILTER (WHERE status = 'delivered' AND (amount_collected IS NULL OR amount_collected < total))::text AS unreconciled_count
+     FROM orders
+     WHERE ${whereClause}`,
+        params
+    );
+
+    const row = result.rows[0];
+    const expected = parseFloat(row?.expected_total || "0");
+    const collected = parseFloat(row?.collected_total || "0");
+    const variance = (expected - collected).toFixed(2);
+
+    return {
+        total_cod_orders: parseInt(row?.total_cod_orders || "0", 10),
+        delivered_cod_orders: parseInt(row?.delivered_cod_orders || "0", 10),
+        expected_total: row?.expected_total || "0.00",
+        collected_total: row?.collected_total || "0.00",
+        variance,
+        unreconciled_count: parseInt(row?.unreconciled_count || "0", 10)
+    };}
+</file>
+
 <file path="src/modules/public/public.queries.ts">
 // =============================================================================
 // soko-api/src/modules/public/public.queries.ts
@@ -16247,6 +16962,7 @@ export interface PublicOrderDetailsRow {
   status: 'pending' | 'confirmed' | 'assigned' | 'out_for_delivery' | 'delivered' | 'cancelled';
   payment_method: string;
   payment_status: 'pending' | 'paid' | 'failed';
+  payment_reference: string | null;
   mpesa_receipt_number: string | null;
   checkout_request_id: string | null;
   delivery_type: 'delivery' | 'pickup';
@@ -16447,7 +17163,7 @@ export async function getPublicOrderDetailsRow(
 ): Promise<PublicOrderDetailsRow | null> {
   const result = await query<PublicOrderDetailsRow>(
     `SELECT o.id, o.customer_name, o.customer_phone, o.total::text AS total, o.status,
-            o.payment_method, o.payment_status,
+            o.payment_method, o.payment_status, o.payment_reference,
             o.delivery_type, o.delivery_fee::text AS delivery_fee,
             o.delivery_fee_status, o.delivery_confirmation_code,
             o.delivery_location,
@@ -16475,288 +17191,11 @@ export async function getPublicOrderItems(orderId: string): Promise<PublicOrderI
 }
 </file>
 
-<file path="src/verticals/books/import/import.worker.ts">
-async function upsertBookFromImport(
-  orgId: string,
-  row: ParsedBookRow
-): Promise<'inserted' | 'updated' | 'skipped'> {
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN');
-
-    // 1. Safe Category Resolution
-    const categoryName = row.category || 'General';
-    const categoryId = await findOrCreateCategoryByName(client, orgId, categoryName);
-
-    // 2. Pre-Flight Duplicate Check (SKU first, fallback to Title)
-    let existingProductId: string | null = null;
-
-    if (row.sku && row.sku.trim()) {
-      const skuCheck = await client.query<{ id: string }>(
-        `SELECT id FROM products 
-         WHERE org_id = $1 AND LOWER(TRIM(sku)) = LOWER(TRIM($2)) AND deleted_at IS NULL 
-         LIMIT 1`,
-        [orgId, row.sku.trim()]
-      );
-      if (skuCheck.rows.length > 0) {
-        existingProductId = skuCheck.rows[0].id;
-      }
-    }
-
-    if (!existingProductId) {
-      const titleCheck = await client.query<{ id: string }>(
-        `SELECT id FROM products 
-         WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) AND deleted_at IS NULL 
-         LIMIT 1`,
-        [orgId, row.title.trim()]
-      );
-      if (titleCheck.rows.length > 0) {
-        existingProductId = titleCheck.rows[0].id;
-      }
-    }
-
-    // 3. Price & Discount Normalization (Strict chk_products_compare_at_price constraint protection)
-    let sellingPrice = row.salePrice || row.regularPrice || row.pdfPrice || row.epubPrice || 999;
-    let compareAtPrice: number | null = null;
-
-    if (row.regularPrice && row.salePrice && row.regularPrice > row.salePrice) {
-      sellingPrice = row.salePrice;
-      compareAtPrice = row.regularPrice;
-    }
-
-    // 4. Auto-discover cover art if no image link was provided in the sheet
-    let targetImageUrl: string | null = row.coverImageUrl || null;
-
-    if (!targetImageUrl) {
-      try {
-        const discovered = await findBestBookCover(row.title, row.author, row.sku);
-        if (discovered?.coverUrl) {
-          targetImageUrl = discovered.coverUrl;
-        }
-      } catch {
-        // Non-blocking fallback
-      }
-    }
-
-    let productId = existingProductId;
-    let outcome: 'inserted' | 'updated' = 'inserted';
-
-    if (existingProductId) {
-      outcome = 'updated';
-      await client.query(
-        `UPDATE products
-         SET category_id      = $2,
-             price            = $3,
-             compare_at_price = COALESCE($4, compare_at_price),
-             sku              = COALESCE(products.sku, $5),
-             description      = COALESCE($6, products.description),
-             badge            = (CASE WHEN $4 IS NOT NULL THEN 'FLASH_SALE' ELSE products.badge END),
-             updated_at       = NOW()
-         WHERE id = $1 AND org_id = $7`,
-        [
-          existingProductId,
-          categoryId,
-          sellingPrice,
-          compareAtPrice,
-          row.sku || null,
-          row.description || (row.author ? `By ${row.author}` : null),
-          orgId,
-        ]
-      );
-
-      if (row.hardcopyStock !== undefined) {
-        await client.query(
-          `UPDATE inventory 
-           SET stock = $2, updated_at = NOW() 
-           WHERE product_id = $1`,
-          [existingProductId, row.hardcopyStock]
-        );
-      }
-
-      // Attach discovered cover if existing book has no image
-      if (targetImageUrl) {
-        const hasImg = await client.query(
-          `SELECT 1 FROM product_images WHERE product_id = $1 LIMIT 1`,
-          [existingProductId]
-        );
-        if (hasImg.rows.length === 0) {
-          await insertProductImageTransactional(
-            client,
-            existingProductId,
-            targetImageUrl,
-            'auto_cover',
-            0
-          );
-        }
-      }
-    } else {
-      outcome = 'inserted';
-      const cleanSlugTitle = row.title
-        .toLowerCase()
-        .trim()
-        .replace(/[^a-z0-9]/g, '-')
-        .replace(/-+/g, '-')
-        .slice(0, 40);
-      const slugSuffix = crypto.randomBytes(3).toString('hex');
-      const slug = `${cleanSlugTitle}-${slugSuffix}`;
-
-      productId = await insertProductTransactional(client, orgId, {
-        category_id: categoryId,
-        name: row.title,
-        slug,
-        sku: row.sku || null,
-        description: row.description || (row.author ? `By ${row.author}` : null),
-        cost_price: null,
-        price: sellingPrice,
-        compare_at_price: compareAtPrice,
-        badge: compareAtPrice ? 'FLASH_SALE' : null,
-        status: 'published',
-      });
-
-      await insertInventoryTransactional(client, productId, row.hardcopyStock || 10);
-
-      // Attach cover if found or provided
-      if (targetImageUrl) {
-        await insertProductImageTransactional(
-          client,
-          productId,
-          targetImageUrl,
-          'auto_cover',
-          0
-        );
-      }
-    }
-
-    // 5. Hardcopy Format
-    if (productId && sellingPrice) {
-      await client.query(
-        `INSERT INTO product_formats (
-           product_id, format, price, compare_at_price, stock
-         )
-         VALUES ($1, 'hardcopy', $2, $3, $4)
-         ON CONFLICT (product_id, format) DO UPDATE SET
-           price            = EXCLUDED.price,
-           compare_at_price = EXCLUDED.compare_at_price,
-           stock            = EXCLUDED.stock,
-           updated_at       = NOW()`,
-        [productId, sellingPrice, compareAtPrice, row.hardcopyStock ?? 10]
-      );
-    }
-
-    // 6. Digital PDF Format
-    if (productId && (row.pdfFileUrl || row.pdfPrice)) {
-      const formatPrice = row.pdfPrice && row.pdfPrice > 0 ? row.pdfPrice : sellingPrice;
-
-      await client.query(
-        `INSERT INTO product_formats (
-           product_id, format, price, compare_at_price, file_url, file_public_id
-         )
-         VALUES ($1, 'pdf', $2, NULL, $3, $3)
-         ON CONFLICT (product_id, format) DO UPDATE SET
-           price            = EXCLUDED.price,
-           file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
-           file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
-           updated_at       = NOW()`,
-        [productId, formatPrice, row.pdfFileUrl || null]
-      );
-    }
-
-    // 7. Digital EPUB Format
-    if (productId && (row.epubFileUrl || row.epubPrice)) {
-      const formatPrice = row.epubPrice && row.epubPrice > 0 ? row.epubPrice : sellingPrice;
-
-      await client.query(
-        `INSERT INTO product_formats (
-           product_id, format, price, compare_at_price, file_url, file_public_id
-         )
-         VALUES ($1, 'epub', $2, NULL, $3, $3)
-         ON CONFLICT (product_id, format) DO UPDATE SET
-           price            = EXCLUDED.price,
-           file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
-           file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
-           updated_at       = NOW()`,
-        [productId, formatPrice, row.epubFileUrl || null]
-      );
-    }
-
-    await client.query('COMMIT');
-    return outcome;
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-</file>
-
-<file path="package.json">
-{
-  "name": "kauntaos-api",
-  "version": "1.0.0",
-  "description": "Production-grade multi-tenant SaaS API",
-  "main": "dist/server.js",
-  "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "tsc",
-    "start": "node dist/server.js",
-    "type-check": "tsc --noEmit",
-    "migrate": "tsx src/migrations/run.ts",
-    "test": "tsx src/tests/run-all-tests.ts",
-    "test:unit": "tsx src/tests/unit-math-crypto.test.ts",
-    "test:e2e": "tsx src/tests/e2e-delivery-flow.test.ts",
-    "heal": "tsx src/scripts/heal-system.ts"
-  },
-  "dependencies": {
-    "@aws-sdk/client-s3": "^3.750.0",
-    "@aws-sdk/lib-storage": "^3.750.0",
-    "@aws-sdk/s3-request-presigner": "^3.750.0",
-    "axios": "^1.18.1",
-    "bcryptjs": "^3.0.3",
-    "bullmq": "^6.2.2",
-    "cloudinary": "^2.0.0",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "exceljs": "^4.4.0",
-    "express": "^4.19.2",
-    "express-rate-limit": "^7.2.0",
-    "googleapis": "^176.0.0",
-    "helmet": "^7.1.0",
-    "ioredis": "^6.0.0",
-    "jsonwebtoken": "^9.0.2",
-    "multer": "^2.2.0",
-    "node-cron": "^3.0.3",
-    "nodemailer": "^9.1.1",
-    "pg": "^8.11.5",
-    "pino": "^8.21.0",
-    "pino-http": "^9.0.0",
-    "uuid": "^9.0.1",
-    "zod": "^3.23.8"
-  },
-  "devDependencies": {
-    "@types/cors": "^2.8.17",
-    "@types/express": "^4.17.21",
-    "@types/jsonwebtoken": "^9.0.6",
-    "@types/multer": "^2.2.0",
-    "@types/node": "^20.12.12",
-    "@types/node-cron": "^3.0.11",
-    "@types/nodemailer": "^8.0.1",
-    "@types/pg": "^8.11.6",
-    "@types/uuid": "^9.0.8",
-    "@typescript-eslint/eslint-plugin": "^7.10.0",
-    "@typescript-eslint/parser": "^7.10.0",
-    "eslint": "^8.57.0",
-    "tsx": "^4.11.0",
-    "typescript": "^5.4.5"
-  }
-}
-</file>
-
 <file path="src/modules/public/public.service.ts">
 // =============================================================================
 // soko-api/src/modules/public/public.service.ts
-// Storefront API with phone-gated downloads, email capture, and promo expiration.
+// Storefront API with phone-gated downloads, email capture, promo expiration,
+// and in-place payment recovery retries.
 // =============================================================================
 
 import axios from 'axios';
@@ -16961,6 +17400,7 @@ export interface PublicOrderConfirmation {
   status: 'pending' | 'confirmed' | 'assigned' | 'out_for_delivery' | 'delivered' | 'cancelled';
   paymentMethod: string;
   paymentStatus: 'pending' | 'paid' | 'failed';
+  paymentReference: string | null;
   mpesaReceiptNumber: string | null;
   checkoutRequestId?: string | null;
   deliveryType: 'delivery' | 'pickup';
@@ -17278,12 +17718,6 @@ export async function placeOrder(
 
     const finalOrderTotal = Math.round((calculatedProductsSubtotal + deliveryFee) * 100) / 100;
 
-    let finalNotes = customerData.notes?.trim() || '';
-    if (mpesaCode && mpesaCode.trim()) {
-      const codeNote = `[M-Pesa Reference: ${mpesaCode.trim().toUpperCase()}]`;
-      finalNotes = finalNotes ? `${codeNote} ${finalNotes}` : codeNote;
-    }
-
     const orderId = await ordersQueries.insertOrderTransactional(client, {
       orgId: store.org_id,
       storeId: store.id,
@@ -17291,9 +17725,11 @@ export async function placeOrder(
       customerPhone: cleanPhone,
       customerEmail: customerData.customerEmail?.trim() || null,
       deliveryLocation: customerData.deliveryLocation,
-      notes: finalNotes || null,
+      notes: customerData.notes?.trim() || null,
       paymentMethod: customerData.paymentMethod,
+      paymentReference: mpesaCode?.trim().toUpperCase() || null,
       total: finalOrderTotal,
+      status: customerData.paymentMethod === 'mpesa_cash' ? 'confirmed' : 'pending',
       deliveryType: hasPhysicalItem ? customerData.deliveryType : 'delivery',
       customerLat: customerData.customerLat,
       customerLng: customerData.customerLng,
@@ -17304,7 +17740,12 @@ export async function placeOrder(
       deliveryConfirmationCode: confirmationCode,
     });
 
-    await ordersQueries.insertOrderStatusHistoryTransactional(client, orderId, 'pending', 'system');
+    await ordersQueries.insertOrderStatusHistoryTransactional(
+      client,
+      orderId,
+      customerData.paymentMethod === 'mpesa_cash' ? 'confirmed' : 'pending',
+      'system'
+    );
 
     for (const item of itemsToInsert) {
       await ordersQueries.insertOrderItemTransactional(client, orderId, {
@@ -17322,59 +17763,389 @@ export async function placeOrder(
 
       if (item.isPhysical) {
         if (item.formatId) {
-          const decFormatRes = await client.query(
-            `UPDATE product_formats
-             SET stock = stock - $1, updated_at = NOW()
-             WHERE id = $2 AND format = 'hardcopy' AND (stock IS NULL OR stock >= $1)`,
-            [item.quantity, item.formatId]
-          );
-          if (decFormatRes.rowCount === 0) {
-            throw new AppError(`The hardcopy edition of "${item.productName}" was just sold out.`, 409);
-          }
-          await ordersQueries.decrementStockTransactional(client, item.productId, item.quantity);
-        } else {
-          await ordersQueries.decrementStockTransactional(client, item.productId, item.quantity);
-        }
+            const store = await publicQueries.getStoreBySlugPublic(storeSlug);
+  if (!store) throw new AppError('Store not found', 404);
+
+  const orderRes = await pool.query<{ id: string; total: string; customer_phone: string }>(
+    `SELECT id, total::text AS total, customer_phone FROM orders WHERE id = $1 AND org_id = $2`,
+    [orderId, store.org_id]
+  );
+  const order = orderRes.rows[0];
+  if (!order) throw new AppError('Order not found', 404);
+
+  const cleanPhone = parsed.data.phone ? normalizeCustomerPhone(parsed.data.phone) : order.customer_phone;
+  const paymentRef = parsed.data.mpesaCode ? parsed.data.mpesaCode.trim().toUpperCase() : null;
+
+  await pool.query(
+    `UPDATE orders 
+     SET payment_method = $3,
+         payment_reference = COALESCE($4, payment_reference),
+         payment_status = 'pending',
+         updated_at = NOW()
+     WHERE id = $1 AND org_id = $2`,
+    [orderId, store.org_id, parsed.data.paymentMethod, paymentRef]
+  );
+
+  let checkoutRequestId: string | undefined;
+
+  if (parsed.data.paymentMethod === 'mpesa') {
+    const creds = await getDecryptedCredentials(store.org_id);
+    if (creds) {
+      const callbackUrl = `${env.API_PUBLIC_URL.replace(/\/$/, '')}/api/v1/payments/mpesa/callback`;
+      const stkResult = await darajaService.stkPush({
+        credentials: creds,
+        phone: cleanPhone,
+        amount: parseFloat(order.total),
+        accountReference: orderId,
+        transactionDesc: `Order ${orderId.slice(0, 8)}`,
+        callbackUrl,
+      });
+
+      checkoutRequestId = stkResult.checkoutRequestId;
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await createPendingMpesaTransaction(client, {
+          orgId: store.org_id,
+          checkoutRequestId: stkResult.checkoutRequestId,
+          merchantRequestId: stkResult.merchantRequestId,
+          phone: cleanPhone,
+          amount: parseFloat(order.total),
+          accountReference: orderId,
+          transactionDesc: `Order ${orderId.slice(0, 8)}`,
+        });
+        await client.query('COMMIT');
+      } finally {
+        client.release();
+      }
+    }
+  }
+
+  return { success: true, checkoutRequestId };
+		}
+
+
+
+
+		  }}}
+</file>
+
+<file path="src/verticals/books/import/import.worker.ts">
+// =============================================================================
+// soko-api/src/verticals/books/import/import.worker.ts
+// In-process Spreadsheet & Google Sheet ingestion worker with deduplication
+// =============================================================================
+
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import axios from 'axios';
+import ExcelJS from 'exceljs';
+import { pool } from '../../../config/db';
+import {
+  findOrCreateCategoryByName,
+  insertProductTransactional,
+  insertInventoryTransactional,
+  insertProductImageTransactional,
+} from '../../../modules/products/products.queries';
+import { findBestBookCover } from '../../../services/bookCover.service';
+import * as importQueries from './import.queries';
+
+// -----------------------------------------------------------------------------
+// Types
+// -----------------------------------------------------------------------------
+
+export interface ParsedBookRow {
+  title: string;
+  author?: string | null;
+  sku?: string | null;
+  category?: string | null;
+  description?: string | null;
+  regularPrice?: number | null;
+  salePrice?: number | null;
+  pdfPrice?: number | null;
+  epubPrice?: number | null;
+  hardcopyStock?: number | null;
+  coverImageUrl?: string | null;
+  pdfFileUrl?: string | null;
+  epubFileUrl?: string | null;
+}
+
+// -----------------------------------------------------------------------------
+// Excel Cell Parsing Helpers
+// -----------------------------------------------------------------------------
+
+function normalizeHeader(h: string): string {
+  return h.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+}
+
+function getCellValueAsString(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+
+  if (typeof value === 'object') {
+    const val = value as Record<string, unknown>;
+    if (Array.isArray(val.richText)) {
+      return val.richText.map((t: any) => t?.text || '').join('').trim();
+    }
+    if ('text' in val && typeof val.text === 'string') {
+      return val.text.trim();
+    }
+    if ('hyperlink' in val && typeof val.hyperlink === 'string') {
+      return val.hyperlink.trim();
+    }
+    if ('result' in val) {
+      return String(val.result ?? '').trim();
+    }
+  }
+
+  return String(value).trim();
+}
+
+function getCellValueAsNumber(value: unknown): number | null {
+  const str = getCellValueAsString(value).replace(/[^0-9.-]/g, '');
+  if (!str) return null;
+  const num = parseFloat(str);
+  return isNaN(num) ? null : num;
+}
+
+// -----------------------------------------------------------------------------
+// Database Ingestion & Deduplication
+// -----------------------------------------------------------------------------
+
+async function upsertBookFromImport(
+  orgId: string,
+  row: ParsedBookRow
+): Promise<'inserted' | 'updated' | 'skipped'> {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // 1. Safe Category Resolution
+    const categoryName = row.category || 'General';
+    const categoryId = await findOrCreateCategoryByName(client, orgId, categoryName);
+
+    // 2. Pre-Flight Duplicate Check (SKU first, fallback to Title)
+    let existingProductId: string | null = null;
+
+    if (row.sku && row.sku.trim()) {
+      const skuCheck = await client.query<{ id: string }>(
+        `SELECT id FROM products 
+         WHERE org_id = $1 AND LOWER(TRIM(sku)) = LOWER(TRIM($2)) AND deleted_at IS NULL 
+         LIMIT 1`,
+        [orgId, row.sku.trim()]
+      );
+      if (skuCheck.rows.length > 0) {
+        existingProductId = skuCheck.rows[0].id;
       }
     }
 
-    let checkoutRequestId: string | undefined;
+    if (!existingProductId) {
+      const titleCheck = await client.query<{ id: string }>(
+        `SELECT id FROM products 
+         WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) AND deleted_at IS NULL 
+         LIMIT 1`,
+        [orgId, row.title.trim()]
+      );
+      if (titleCheck.rows.length > 0) {
+        existingProductId = titleCheck.rows[0].id;
+      }
+    }
 
-    if (isAutomatedDaraja) {
-      const recentPending = await findRecentPendingMpesaTransaction(orderId, 60);
+    // 3. Price & Discount Normalization (Respects chk_products_compare_at_price constraint)
+    let sellingPrice = 999;
+    let compareAtPrice: number | null = null;
 
-      if (recentPending) {
-        checkoutRequestId = recentPending.checkout_request_id;
+    if (row.regularPrice && row.salePrice) {
+      const minP = Math.min(row.regularPrice, row.salePrice);
+      const maxP = Math.max(row.regularPrice, row.salePrice);
+      if (maxP > minP) {
+        sellingPrice = minP;
+        compareAtPrice = maxP;
       } else {
-        const decryptedCreds = await getDecryptedCredentials(store.org_id);
-        if (decryptedCreds) {
-          const callbackUrl = `${env.API_PUBLIC_URL.replace(/\/$/, '')}/api/v1/payments/mpesa/callback`;
-          const stkResult = await darajaService.stkPush({
-            credentials: decryptedCreds,
-            phone: cleanPhone,
-            amount: finalOrderTotal,
-            accountReference: orderId,
-            transactionDesc: `Order ${orderId.slice(0, 8)}`,
-            callbackUrl,
-          });
+        sellingPrice = minP;
+      }
+    } else {
+      sellingPrice = row.salePrice || row.regularPrice || 999;
+    }
 
-          checkoutRequestId = stkResult.checkoutRequestId;
+    // 4. Synchronize PDF & EPUB eBook prices to be identical
+    const digitalPrice = row.pdfPrice && row.pdfPrice > 0
+      ? row.pdfPrice
+      : (row.epubPrice && row.epubPrice > 0 ? row.epubPrice : 149);
 
-          await createPendingMpesaTransaction(client, {
-            orgId: store.org_id,
-            checkoutRequestId: stkResult.checkoutRequestId,
-            merchantRequestId: stkResult.merchantRequestId,
-            phone: cleanPhone,
-            amount: finalOrderTotal,
-            accountReference: orderId,
-            transactionDesc: `Order ${orderId.slice(0, 8)}`,
-          });
+    // Compute matching digital strike-through price if book is on sale
+    let digitalCompareAt: number | null = null;
+    if (compareAtPrice && compareAtPrice > sellingPrice) {
+      const discountRatio = (compareAtPrice - sellingPrice) / compareAtPrice;
+      if (discountRatio > 0 && discountRatio < 1) {
+        digitalCompareAt = Math.round(digitalPrice / (1 - discountRatio));
+      }
+    }
+
+    // 5. Auto-discover cover art if no image link was provided
+    let targetImageUrl: string | null = row.coverImageUrl || null;
+
+    if (!targetImageUrl) {
+      try {
+        const discovered = await findBestBookCover(
+          row.title,
+          row.author || undefined,
+          row.sku || undefined
+        );
+        if (discovered?.coverUrl) {
+          targetImageUrl = discovered.coverUrl;
+        }
+      } catch {
+        // Non-blocking fallback
+      }
+    }
+
+    let productId = existingProductId;
+    let outcome: 'inserted' | 'updated' = 'inserted';
+
+    if (existingProductId) {
+      outcome = 'updated';
+      await client.query(
+        `UPDATE products
+         SET category_id      = $2,
+             price            = $3,
+             compare_at_price = COALESCE($4, compare_at_price),
+             sku              = COALESCE(products.sku, $5),
+             description      = COALESCE($6, products.description),
+             badge            = (CASE WHEN $4 IS NOT NULL THEN 'FLASH_SALE' ELSE products.badge END),
+             updated_at       = NOW()
+         WHERE id = $1 AND org_id = $7`,
+        [
+          existingProductId,
+          categoryId,
+          sellingPrice,
+          compareAtPrice,
+          row.sku || null,
+          row.description || (row.author ? `By ${row.author}` : null),
+          orgId,
+        ]
+      );
+
+      if (row.hardcopyStock !== undefined && row.hardcopyStock !== null) {
+        await client.query(
+          `UPDATE inventory 
+           SET stock = $2, updated_at = NOW() 
+           WHERE product_id = $1`,
+          [existingProductId, row.hardcopyStock]
+        );
+      }
+
+      // Attach discovered cover if existing book has no image
+      if (targetImageUrl) {
+        const hasImg = await client.query(
+          `SELECT 1 FROM product_images WHERE product_id = $1 LIMIT 1`,
+          [existingProductId]
+        );
+        if (hasImg.rows.length === 0) {
+          await insertProductImageTransactional(
+            client,
+            existingProductId,
+            targetImageUrl,
+            'auto_cover',
+            0
+          );
         }
       }
+    } else {
+      outcome = 'inserted';
+      const cleanSlugTitle = row.title
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]/g, '-')
+        .replace(/-+/g, '-')
+        .slice(0, 40);
+      const slugSuffix = crypto.randomBytes(3).toString('hex');
+      const slug = `${cleanSlugTitle}-${slugSuffix}`;
+
+      productId = await insertProductTransactional(client, orgId, {
+        category_id: categoryId,
+        name: row.title,
+        slug,
+        sku: row.sku || null,
+        description: row.description || (row.author ? `By ${row.author}` : null),
+        cost_price: null,
+        price: sellingPrice,
+        compare_at_price: compareAtPrice,
+        badge: compareAtPrice ? 'FLASH_SALE' : null,
+        status: 'published',
+      });
+
+      await insertInventoryTransactional(client, productId, row.hardcopyStock || 10);
+
+      // Attach cover if found or provided
+      if (targetImageUrl) {
+        await insertProductImageTransactional(
+          client,
+          productId,
+          targetImageUrl,
+          'auto_cover',
+          0
+        );
+      }
+    }
+
+    // 5. Hardcopy Format
+    if (productId && sellingPrice) {
+      await client.query(
+        `INSERT INTO product_formats (
+           product_id, format, price, compare_at_price, stock
+         )
+         VALUES ($1, 'hardcopy', $2, $3, $4)
+         ON CONFLICT (product_id, format) DO UPDATE SET
+           price            = EXCLUDED.price,
+           compare_at_price = EXCLUDED.compare_at_price,
+           stock            = EXCLUDED.stock,
+           updated_at       = NOW()`,
+        [productId, sellingPrice, compareAtPrice, row.hardcopyStock ?? 10]
+      );
+    }
+
+    // 6. Digital PDF Format (uses digitalPrice & digitalCompareAt)
+    if (productId) {
+      await client.query(
+        `INSERT INTO product_formats (
+           product_id, format, price, compare_at_price, file_url, file_public_id
+         )
+         VALUES ($1, 'pdf', $2, $3, $4, $4)
+         ON CONFLICT (product_id, format) DO UPDATE SET
+           price            = EXCLUDED.price,
+           compare_at_price = EXCLUDED.compare_at_price,
+           file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
+           file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
+           updated_at       = NOW()`,
+        [productId, digitalPrice, digitalCompareAt, row.pdfFileUrl || null]
+      );
+    }
+
+    // 7. Digital EPUB Format (uses identical digitalPrice & digitalCompareAt)
+    if (productId) {
+      await client.query(
+        `INSERT INTO product_formats (
+           product_id, format, price, compare_at_price, file_url, file_public_id
+         )
+         VALUES ($1, 'epub', $2, $3, $4, $4)
+         ON CONFLICT (product_id, format) DO UPDATE SET
+           price            = EXCLUDED.price,
+           compare_at_price = EXCLUDED.compare_at_price,
+           file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
+           file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
+           updated_at       = NOW()`,
+        [productId, digitalPrice, digitalCompareAt, row.epubFileUrl || null]
+      );
     }
 
     await client.query('COMMIT');
-    return { orderId, checkoutRequestId };
+    return outcome;
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -17383,116 +18154,234 @@ export async function placeOrder(
   }
 }
 
-export async function getPublicOrderDetails(
-  storeSlug: string,
-  orderId: string,
-  verifyingPhone?: string
-): Promise<
-  PublicOrderConfirmation & {
-    downloads: any[];
-    isVerifiedCustomer: boolean;
-    notes: string | null;
-  }
-> {
-  const normalizedSlug = (storeSlug || '').trim().toLowerCase();
-  const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
-  if (!store) {
-    throw new AppError('Store not found', 404);
-  }
+// -----------------------------------------------------------------------------
+// Excel File Processor
+// -----------------------------------------------------------------------------
 
-  const orderRes = await pool.query<publicQueries.PublicOrderDetailsRow & { notes: string | null }>(
-    `SELECT o.id, o.customer_name, o.customer_phone, o.total::text AS total, o.status,
-            o.payment_method, o.payment_status, o.notes,
-            o.delivery_type, o.delivery_fee::text AS delivery_fee,
-            o.delivery_fee_status, o.delivery_confirmation_code,
-            o.delivery_location,
-            mt.mpesa_receipt_number, mt.checkout_request_id
-     FROM   orders o
-     LEFT JOIN mpesa_transactions mt 
-            ON mt.account_reference = o.id::text 
-           AND mt.status = 'completed'
-     WHERE  o.id = $1 AND o.org_id = $2
-     ORDER BY mt.created_at DESC
-     LIMIT 1`,
-    [orderId, store.org_id]
-  );
+export async function processExcelFile(
+  jobId: string,
+  orgId: string,
+  filePath: string
+): Promise<void> {
+  let totalRows = 0;
+  let processedRows = 0;
+  let insertedRows = 0;
+  let updatedRows = 0;
+  let skippedRows = 0;
 
-  const order = orderRes.rows[0];
-  if (!order) {
-    throw new AppError('Order confirmation details not found', 404);
-  }
+  try {
+    const workbook = new ExcelJS.Workbook();
+    const isCsv = filePath.toLowerCase().endsWith('.csv');
 
-  const items = await publicQueries.getPublicOrderItems(order.id);
+    if (isCsv) {
+      await workbook.csv.readFile(filePath);
+    } else {
+      await workbook.xlsx.readFile(filePath);
+    }
 
-  const cleanVerifying = verifyingPhone ? normalizeCustomerPhone(verifyingPhone) : null;
-  const isVerifiedCustomer = Boolean(
-    cleanVerifying && cleanVerifying === normalizeCustomerPhone(order.customer_phone)
-  );
+    const worksheet = workbook.worksheets[0];
+    if (!worksheet) {
+      throw new Error('Worksheet is empty or corrupted');
+    }
 
-  let downloads: any[] = [];
+    const headerRow = worksheet.getRow(1);
+    const headerMap = new Map<string, number>();
 
-  // ===========================================================================
-  // SECURITY SHIELD GATE: Download tokens strictly gated behind phone match
-  // ===========================================================================
-  if (order.payment_status === 'paid' && isVerifiedCustomer) {
-    const downloadsRes = await pool.query<{
-      token: string;
-      max_downloads: number;
-      download_count: number;
-      expires_at: Date;
-      format: string;
-      book_title: string;
-    }>(
-      `SELECT dd.download_token AS token,
-              dd.max_downloads,
-              dd.download_count,
-              dd.expires_at,
-              COALESCE(dd.format, pf.format, 'pdf') AS format,
-              COALESCE(dd.book_title, p.name, 'Book') AS book_title
-       FROM digital_downloads dd
-       LEFT JOIN product_formats pf ON pf.id = dd.format_id
-       LEFT JOIN products p ON p.id = pf.product_id
-       INNER JOIN order_items oi ON oi.id = dd.order_item_id
-       WHERE oi.order_id = $1`,
-      [order.id]
+    headerRow.eachCell((cell, colNumber) => {
+      const headerStr = getCellValueAsString(cell.value);
+      if (headerStr) {
+        headerMap.set(normalizeHeader(headerStr), colNumber);
+      }
+    });
+
+    const rowsCount = worksheet.rowCount;
+    totalRows = Math.max(0, rowsCount - 1);
+
+    await importQueries.updateJobProgress(
+      jobId,
+      { processedRows: 0, totalRows },
+      'processing'
     );
 
-    downloads = downloadsRes.rows.map((d) => ({
-      bookTitle: d.book_title,
-      format: d.format,
-      token: d.token,
-      downloadUrl: `/api/v1/books/download/${d.token}?redirect=true`,
-      expiresAt: d.expires_at.toISOString(),
-      maxDownloads: d.max_downloads,
-      downloadCount: d.download_count,
-    }));
+    for (let rowNumber = 2; rowNumber <= rowsCount; rowNumber++) {
+      const row = worksheet.getRow(rowNumber);
+
+      let hasData = false;
+      row.eachCell(() => {
+        hasData = true;
+      });
+
+      if (!hasData) {
+        skippedRows++;
+        processedRows++;
+        continue;
+      }
+
+      const getVal = (possibleKeys: string[]): unknown => {
+        for (const key of possibleKeys) {
+          const col = headerMap.get(key);
+          if (col) {
+            return row.getCell(col).value;
+          }
+        }
+        return undefined;
+      };
+
+      const title = getCellValueAsString(getVal(['name', 'title', 'booktitle']));
+
+      if (!title) {
+        skippedRows++;
+        processedRows++;
+        continue;
+      }
+
+      const description = getCellValueAsString(getVal(['description', 'synopsis', 'details'])) || null;
+      const sku = getCellValueAsString(getVal(['sellersku', 'sku', 'isbn', 'barcode'])) || null;
+      const category = getCellValueAsString(getVal(['primarycategory', 'category', 'categories'])) || 'General';
+      const author = getCellValueAsString(getVal(['author', 'authors', 'writtenby'])) || null;
+
+      const regularPrice = getCellValueAsNumber(getVal(['pricekes', 'price', 'regularprice', 'regularpricekes']));
+      const salePrice = getCellValueAsNumber(getVal(['salepricekes', 'saleprice', 'discountprice']));
+      const pdfPrice = getCellValueAsNumber(getVal(['pdfsprice', 'pdfprice', 'ebookprice']));
+      const epubPrice = getCellValueAsNumber(getVal(['epubprice']));
+      const hardcopyStock = getCellValueAsNumber(getVal(['stock', 'quantity', 'hardcopystock', 'inventory']));
+
+      const coverImageUrl = getCellValueAsString(getVal(['image1', 'image', 'cover', 'coverimage', 'coverimageurl', 'imageurl'])) || null;
+      const pdfFileUrl = getCellValueAsString(getVal(['pdffile', 'pdfurl', 'pdffileurl', 'pdf'])) || null;
+      const epubFileUrl = getCellValueAsString(getVal(['epubfile', 'epuburl', 'epubfileurl', 'epub'])) || null;
+
+      const parsedRow: ParsedBookRow = {
+        title,
+        author,
+        sku,
+        category,
+        description,
+        regularPrice,
+        salePrice,
+        pdfPrice,
+        epubPrice,
+        hardcopyStock: hardcopyStock !== null ? Math.max(0, Math.floor(hardcopyStock)) : null,
+        coverImageUrl,
+        pdfFileUrl,
+        epubFileUrl,
+      };
+
+      try {
+        const outcome = await upsertBookFromImport(orgId, parsedRow);
+        if (outcome === 'inserted') insertedRows++;
+        else if (outcome === 'updated') updatedRows++;
+        else skippedRows++;
+      } catch (rowErr: any) {
+        skippedRows++;
+        await importQueries.appendJobError(jobId, {
+          row: rowNumber,
+          title,
+          error: rowErr.message || 'Row processing failed',
+        });
+      }
+
+      processedRows++;
+
+      if (processedRows % 10 === 0 || processedRows === totalRows) {
+        await importQueries.updateJobProgress(
+          jobId,
+          {
+            processedRows,
+            insertedRows,
+            updatedRows,
+            skippedRows,
+            totalRows,
+          },
+          'processing'
+        );
+      }
+    }
+
+    await importQueries.finalizeImportJob(jobId, 'done', {
+      processedRows,
+      insertedRows,
+      updatedRows,
+      skippedRows,
+    });
+  } catch (err: any) {
+    console.error(`[Process Excel File Error] Job ${jobId}:`, err);
+    await importQueries.finalizeImportJob(
+      jobId,
+      'failed',
+      undefined,
+      err.message || 'Workbook processing error'
+    );
+    throw err;
+  } finally {
+    if (filePath && fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch {
+        // Ignore file cleanup error
+      }
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Google Sheet Processor
+// -----------------------------------------------------------------------------
+
+export async function processGoogleSheet(
+  jobId: string,
+  orgId: string,
+  sheetUrl: string
+): Promise<void> {
+  const match = sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (!match || !match[1]) {
+    throw new Error('Invalid Google Sheet URL. Could not extract spreadsheet ID.');
   }
 
-  return {
-    orderId: order.id,
-    customerName: order.customer_name,
-    total: parseFloat(order.total),
-    status: order.status,
-    paymentMethod: order.payment_method,
-    paymentStatus: order.payment_status,
-    mpesaReceiptNumber: order.mpesa_receipt_number,
-    checkoutRequestId: order.checkout_request_id,
-    deliveryType: order.delivery_type,
-    deliveryFee: parseFloat(order.delivery_fee || '0'),
-    deliveryFeeStatus: order.delivery_fee_status,
-    deliveryConfirmationCode: order.delivery_confirmation_code,
-    deliveryLocation: order.delivery_location,
-    notes: order.notes,
-    items: items.map((row: publicQueries.PublicOrderItemRow) => ({
-      productName: row.product_name,
-      variantTitle: row.variant_title || null,
-      unitPrice: parseFloat(row.unit_price),
-      quantity: row.quantity,
-      subtotal: parseFloat(row.subtotal),
-    })),
-    downloads,
-    isVerifiedCustomer,
-  };
+  const sheetId = match[1];
+  const csvExportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+
+  const tempFilePath = path.join(os.tmpdir(), `gsheet-${jobId}-${Date.now()}.csv`);
+
+  try {
+    const response = await axios.get<string>(csvExportUrl, {
+      responseType: 'text',
+      timeout: 30000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+    });
+
+    if (!response.data || typeof response.data !== 'string') {
+      throw new Error('Received empty response from Google Sheet');
+    }
+
+    if (response.data.includes('<!DOCTYPE html>') || response.data.includes('<html')) {
+      throw new Error(
+        'Google Sheet is private or requires authentication. Please set link sharing to "Anyone with the link can view".'
+      );
+    }
+
+    fs.writeFileSync(tempFilePath, response.data, 'utf8');
+
+    await processExcelFile(jobId, orgId, tempFilePath);
+  } catch (err: any) {
+    console.error(`[Process Google Sheet Error] Job ${jobId}:`, err);
+    await importQueries.finalizeImportJob(
+      jobId,
+      'failed',
+      undefined,
+      err.message || 'Google Sheet fetch failed'
+    );
+    throw err;
+  } finally {
+    if (fs.existsSync(tempFilePath)) {
+      try {
+        fs.unlinkSync(tempFilePath);
+      } catch {
+        // Ignore cleanup error
+      }
+    }
+  }
 }
 </file>
 
