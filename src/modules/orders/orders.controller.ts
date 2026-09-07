@@ -38,8 +38,19 @@ export async function listOrdersHandler(
     const orgId = requireOrgId(req);
     const page = Number(req.query.page ?? 1);
     const limit = Number(req.query.limit ?? 20);
+    const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+    const paymentStatus = typeof req.query.payment_status === 'string' ? req.query.payment_status : undefined;
+    const paymentMethod = typeof req.query.payment_method === 'string' ? req.query.payment_method : undefined;
+    const q = typeof req.query.q === 'string' ? req.query.q : undefined;
 
-    const result = await ordersQueries.listOrders(orgId, { page, limit });
+    const result = await ordersQueries.listOrders(orgId, {
+      page,
+      limit,
+      status,
+      paymentStatus,
+      paymentMethod,
+      q,
+    });
 
     success(res, result.orders, {
       page,

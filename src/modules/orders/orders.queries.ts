@@ -22,6 +22,7 @@ export interface Order {
     status: "pending" | "confirmed" | "assigned" | "out_for_delivery" | "delivered" | "cancelled";
     payment_method: string;
     payment_status: "pending" | "paid" | "failed";
+    payment_reference: string | null;
     total: string;
     delivery_type: "delivery" | "pickup";
     customer_lat: string | null;
@@ -61,6 +62,10 @@ export interface OrderWithItems extends Order {
 export interface ListOrdersOptions {
     page: number;
     limit: number;
+    status?: string;
+    paymentStatus?: string;
+    paymentMethod?: string;
+    q?: string;
 }
 
 export interface OrdersSummary {
@@ -166,7 +171,9 @@ export async function insertOrderTransactional(
         deliveryLocation: string;
         notes?: string | null;
         paymentMethod: string;
+        paymentReference?: string | null;
         total: number;
+        status?: "pending" | "confirmed";
         deliveryType?: "delivery" | "pickup";
         customerLat?: number | null;
         customerLng?: number | null;
@@ -182,20 +189,21 @@ export async function insertOrderTransactional(
             ? new Date()
             : null;
 
+    const initialStatus = data.status || (data.paymentMethod === 'mpesa_cash' ? 'confirmed' : 'pending');
+
     const result = await client.query<{ id: string }>(
         `INSERT INTO orders (
        org_id, store_id, customer_name, customer_phone, customer_email,
-       delivery_location, notes, payment_method, total,
-       delivery_type, customer_lat, customer_lng, location_source,
+       delivery_location, notes, payment_method, payment_reference, total,
+       status, delivery_type, customer_lat, customer_lng, location_source,
        location_accuracy_m, location_captured_at, delivery_fee,
        delivery_fee_status, delivery_confirmation_code
      )
      VALUES (
        $1, $2, $3, $4, $5,
-       $6, $7, $8, $9,
-       $10, $11, $12, $13,
-       $14, $15, $16,
-       $17, $18
+       $6, $7, $8, $9, $10,
+       $11, $12, $13, $14, $15,
+       $16, $17, $18, $19, $20
      )
      RETURNING id`,
         [
@@ -207,7 +215,9 @@ export async function insertOrderTransactional(
             data.deliveryLocation,
             data.notes ?? null,
             data.paymentMethod,
+            data.paymentReference?.trim().toUpperCase() ?? null,
             data.total,
+            initialStatus,
             data.deliveryType ?? "delivery",
             data.customerLat ?? null,
             data.customerLng ?? null,
@@ -299,7 +309,7 @@ export async function findOrderForWebhook(
     const result = await client.query<Order>(
         `SELECT id, org_id, store_id, customer_name, customer_phone, customer_email,
             delivery_location, notes, status, payment_method, payment_status,
-            total::text AS total, delivery_type, customer_lat::text AS customer_lat,
+            payment_reference, total::text AS total, delivery_type, customer_lat::text AS customer_lat,
             customer_lng::text AS customer_lng, location_source,
             location_accuracy_m::text AS location_accuracy_m, location_captured_at,
             rider_name, rider_phone, delivery_fee::text AS delivery_fee,
@@ -330,7 +340,7 @@ export async function markOrderAsPaidTransactional(
      WHERE  id = $1
      RETURNING id, org_id, store_id, customer_name, customer_phone, customer_email,
                delivery_location, notes, status, payment_method, payment_status,
-               total::text AS total, delivery_type, customer_lat::text AS customer_lat,
+               payment_reference, total::text AS total, delivery_type, customer_lat::text AS customer_lat,
                customer_lng::text AS customer_lng, location_source,
                location_accuracy_m::text AS location_accuracy_m, location_captured_at,
                rider_name, rider_phone, delivery_fee::text AS delivery_fee,
@@ -358,7 +368,7 @@ export async function markOrderPaymentFailedTransactional(
      WHERE  id = $1
      RETURNING id, org_id, store_id, customer_name, customer_phone, customer_email,
                delivery_location, notes, status, payment_method, payment_status,
-               total::text AS total, delivery_type, customer_lat::text AS customer_lat,
+               payment_reference, total::text AS total, delivery_type, customer_lat::text AS customer_lat,
                customer_lng::text AS customer_lng, location_source,
                location_accuracy_m::text AS location_accuracy_m, location_captured_at,
                rider_name, rider_phone, delivery_fee::text AS delivery_fee,
@@ -374,14 +384,49 @@ export async function markOrderPaymentFailedTransactional(
 export async function listOrders(
     orgId: string,
     options: ListOrdersOptions
-): Promise<{ orders: Order[]; total: number }> {
-    const limit =
-        isNaN(options.limit) || options.limit <= 0 ? 20 : options.limit;
+): Promise<{ orders: OrderWithItems[]; total: number }> {
+    const limit = isNaN(options.limit) || options.limit <= 0 ? 20 : options.limit;
     const offset = (options.page - 1) * limit;
 
+    const conditions: string[] = ["o.org_id = $1"];
+    const params: unknown[] = [orgId];
+    let paramIdx = 2;
+
+    if (options.status && options.status !== 'all') {
+        conditions.push(`o.status = $${paramIdx}`);
+        params.push(options.status.trim().toLowerCase());
+        paramIdx++;
+    }
+
+    if (options.paymentStatus && options.paymentStatus !== 'all') {
+        conditions.push(`o.payment_status = $${paramIdx}`);
+        params.push(options.paymentStatus.trim().toLowerCase());
+        paramIdx++;
+    }
+
+    if (options.paymentMethod && options.paymentMethod !== 'all') {
+        conditions.push(`o.payment_method = $${paramIdx}`);
+        params.push(options.paymentMethod.trim());
+        paramIdx++;
+    }
+
+    if (options.q && options.q.trim()) {
+        const searchTerm = `%${options.q.trim()}%`;
+        conditions.push(`(
+            o.customer_name ILIKE $${paramIdx} OR
+            o.customer_phone ILIKE $${paramIdx} OR
+            o.payment_reference ILIKE $${paramIdx} OR
+            o.id::text ILIKE $${paramIdx}
+        )`);
+        params.push(searchTerm);
+        paramIdx++;
+    }
+
+    const whereClause = conditions.join(" AND ");
+
     const countResult = await query<{ count: string }>(
-        `SELECT COUNT(*) AS count FROM orders WHERE org_id = $1`,
-        [orgId]
+        `SELECT COUNT(*) AS count FROM orders o WHERE ${whereClause}`,
+        params
     );
     const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
 
@@ -389,24 +434,48 @@ export async function listOrders(
         return { orders: [], total: 0 };
     }
 
+    const dataParams = [...params, limit, offset];
     const dataResult = await query<Order>(
-        `SELECT id, org_id, store_id, customer_name, customer_phone, customer_email,
-            delivery_location, notes, status, payment_method, payment_status,
-            total::text AS total, delivery_type, customer_lat::text AS customer_lat,
-            customer_lng::text AS customer_lng, location_source,
-            location_accuracy_m::text AS location_accuracy_m, location_captured_at,
-            rider_name, rider_phone, delivery_fee::text AS delivery_fee,
-            delivery_fee_status, delivery_confirmation_code,
-            amount_collected::text AS amount_collected, collected_by, delivered_at,
-            created_at, updated_at
-     FROM   orders
-     WHERE  org_id = $1
-     ORDER  BY created_at DESC
-     LIMIT  $2 OFFSET $3`,
-        [orgId, limit, offset]
+        `SELECT o.id, o.org_id, o.store_id, o.customer_name, o.customer_phone, o.customer_email,
+            o.delivery_location, o.notes, o.status, o.payment_method, o.payment_status,
+            o.payment_reference, o.total::text AS total, o.delivery_type,
+            o.customer_lat::text AS customer_lat, o.customer_lng::text AS customer_lng,
+            o.location_source, o.location_accuracy_m::text AS location_accuracy_m,
+            o.location_captured_at, o.rider_name, o.rider_phone,
+            o.delivery_fee::text AS delivery_fee, o.delivery_fee_status,
+            o.delivery_confirmation_code, o.amount_collected::text AS amount_collected,
+            o.collected_by, o.delivered_at, o.created_at, o.updated_at
+     FROM   orders o
+     WHERE  ${whereClause}
+     ORDER  BY o.created_at DESC
+     LIMIT  $${paramIdx} OFFSET $${paramIdx + 1}`,
+        dataParams
     );
 
-    return { orders: dataResult.rows, total };
+    const orderIds = dataResult.rows.map((o) => o.id);
+    const itemsResult = await query<OrderItem>(
+        `SELECT id, order_id, product_id, variant_id, variant_title, product_name,
+                unit_price::text AS unit_price, cost_price::text AS cost_price,
+                quantity, subtotal::text AS subtotal
+         FROM order_items
+         WHERE order_id = ANY($1::uuid[])`,
+        [orderIds]
+    );
+
+    const itemsByOrder = new Map<string, OrderItem[]>();
+    for (const item of itemsResult.rows) {
+        if (!itemsByOrder.has(item.order_id)) {
+            itemsByOrder.set(item.order_id, []);
+        }
+        itemsByOrder.get(item.order_id)!.push(item);
+    }
+
+    const ordersWithItems = dataResult.rows.map((o) => ({
+        ...o,
+        items: itemsByOrder.get(o.id) || [],
+    }));
+
+    return { orders: ordersWithItems, total };
 }
 
 export async function getOrderById(
@@ -420,13 +489,13 @@ export async function getOrderById(
     const orderResult = await query<Order>(
         `SELECT id, org_id, store_id, customer_name, customer_phone, customer_email,
             delivery_location, notes, status, payment_method, payment_status,
-            total::text AS total, delivery_type, customer_lat::text AS customer_lat,
-            customer_lng::text AS customer_lng, location_source,
-            location_accuracy_m::text AS location_accuracy_m, location_captured_at,
-            rider_name, rider_phone, delivery_fee::text AS delivery_fee,
-            delivery_fee_status, delivery_confirmation_code,
-            amount_collected::text AS amount_collected, collected_by, delivered_at,
-            created_at, updated_at
+            payment_reference, total::text AS total, delivery_type,
+            customer_lat::text AS customer_lat, customer_lng::text AS customer_lng,
+            location_source, location_accuracy_m::text AS location_accuracy_m,
+            location_captured_at, rider_name, rider_phone,
+            delivery_fee::text AS delivery_fee, delivery_fee_status,
+            delivery_confirmation_code, amount_collected::text AS amount_collected,
+            collected_by, delivered_at, created_at, updated_at
      FROM   orders
      WHERE  org_id = $1 AND id = $2`,
         [orgId, orderId.trim()]
@@ -502,13 +571,13 @@ export async function updateOrderPaymentStatus(
              WHERE  org_id = $1 AND id = $2
              RETURNING id, org_id, store_id, customer_name, customer_phone, customer_email,
                        delivery_location, notes, status, payment_method, payment_status,
-                       total::text AS total, delivery_type, customer_lat::text AS customer_lat,
-                       customer_lng::text AS customer_lng, location_source,
-                       location_accuracy_m::text AS location_accuracy_m, location_captured_at,
-                       rider_name, rider_phone, delivery_fee::text AS delivery_fee,
-                       delivery_fee_status, delivery_confirmation_code,
-                       amount_collected::text AS amount_collected, collected_by, delivered_at,
-                       created_at, updated_at`,
+                       payment_reference, total::text AS total, delivery_type,
+                       customer_lat::text AS customer_lat, customer_lng::text AS customer_lng,
+                       location_source, location_accuracy_m::text AS location_accuracy_m,
+                       location_captured_at, rider_name, rider_phone,
+                       delivery_fee::text AS delivery_fee, delivery_fee_status,
+                       delivery_confirmation_code, amount_collected::text AS amount_collected,
+                       collected_by, delivered_at, created_at, updated_at`,
             [orgId, orderId.trim(), paymentStatus]
         );
 
@@ -655,13 +724,13 @@ export async function assignRiderToOrders(
          AND  status = 'confirmed'
        RETURNING id, org_id, store_id, customer_name, customer_phone, customer_email,
                  delivery_location, notes, status, payment_method, payment_status,
-                 total::text AS total, delivery_type, customer_lat::text AS customer_lat,
-                 customer_lng::text AS customer_lng, location_source,
-                 location_accuracy_m::text AS location_accuracy_m, location_captured_at,
-                 rider_name, rider_phone, delivery_fee::text AS delivery_fee,
-                 delivery_fee_status, delivery_confirmation_code,
-                 amount_collected::text AS amount_collected, collected_by, delivered_at,
-                 created_at, updated_at`,
+                 payment_reference, total::text AS total, delivery_type,
+                 customer_lat::text AS customer_lat, customer_lng::text AS customer_lng,
+                 location_source, location_accuracy_m::text AS location_accuracy_m,
+                 location_captured_at, rider_name, rider_phone,
+                 delivery_fee::text AS delivery_fee, delivery_fee_status,
+                 delivery_confirmation_code, amount_collected::text AS amount_collected,
+                 collected_by, delivered_at, created_at, updated_at`,
             [orgId, orderIds, riderName.trim(), riderPhone.trim()]
         );
 
@@ -678,7 +747,6 @@ export async function assignRiderToOrders(
         client.release();
     }
 }
-
 export async function completeOrderDeliveryTransactional(
     orgId: string,
     orderId: string,
@@ -796,6 +864,7 @@ export async function completeOrderDeliveryTransactional(
         client.release();
     }
 }
+
 export async function getCashReconciliationSummary(
     orgId: string,
     startDate?: string,

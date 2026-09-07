@@ -205,6 +205,7 @@ export interface PublicOrderConfirmation {
   status: 'pending' | 'confirmed' | 'assigned' | 'out_for_delivery' | 'delivered' | 'cancelled';
   paymentMethod: string;
   paymentStatus: 'pending' | 'paid' | 'failed';
+  paymentReference: string | null;
   mpesaReceiptNumber: string | null;
   checkoutRequestId?: string | null;
   deliveryType: 'delivery' | 'pickup';
@@ -522,12 +523,6 @@ export async function placeOrder(
 
     const finalOrderTotal = Math.round((calculatedProductsSubtotal + deliveryFee) * 100) / 100;
 
-    let finalNotes = customerData.notes?.trim() || '';
-    if (mpesaCode && mpesaCode.trim()) {
-      const codeNote = `[M-Pesa Reference: ${mpesaCode.trim().toUpperCase()}]`;
-      finalNotes = finalNotes ? `${codeNote} ${finalNotes}` : codeNote;
-    }
-
     const orderId = await ordersQueries.insertOrderTransactional(client, {
       orgId: store.org_id,
       storeId: store.id,
@@ -535,9 +530,11 @@ export async function placeOrder(
       customerPhone: cleanPhone,
       customerEmail: customerData.customerEmail?.trim() || null,
       deliveryLocation: customerData.deliveryLocation,
-      notes: finalNotes || null,
+      notes: customerData.notes?.trim() || null,
       paymentMethod: customerData.paymentMethod,
+      paymentReference: mpesaCode?.trim().toUpperCase() || null,
       total: finalOrderTotal,
+      status: customerData.paymentMethod === 'mpesa_cash' ? 'confirmed' : 'pending',
       deliveryType: hasPhysicalItem ? customerData.deliveryType : 'delivery',
       customerLat: customerData.customerLat,
       customerLng: customerData.customerLng,
@@ -548,7 +545,12 @@ export async function placeOrder(
       deliveryConfirmationCode: confirmationCode,
     });
 
-    await ordersQueries.insertOrderStatusHistoryTransactional(client, orderId, 'pending', 'system');
+    await ordersQueries.insertOrderStatusHistoryTransactional(
+      client,
+      orderId,
+      customerData.paymentMethod === 'mpesa_cash' ? 'confirmed' : 'pending',
+      'system'
+    );
 
     for (const item of itemsToInsert) {
       await ordersQueries.insertOrderItemTransactional(client, orderId, {
@@ -646,7 +648,7 @@ export async function getPublicOrderDetails(
 
   const orderRes = await pool.query<publicQueries.PublicOrderDetailsRow & { notes: string | null }>(
     `SELECT o.id, o.customer_name, o.customer_phone, o.total::text AS total, o.status,
-            o.payment_method, o.payment_status, o.notes,
+            o.payment_method, o.payment_status, o.payment_reference, o.notes,
             o.delivery_type, o.delivery_fee::text AS delivery_fee,
             o.delivery_fee_status, o.delivery_confirmation_code,
             o.delivery_location,
@@ -675,9 +677,6 @@ export async function getPublicOrderDetails(
 
   let downloads: any[] = [];
 
-  // ===========================================================================
-  // SECURITY SHIELD GATE: Download tokens strictly gated behind phone match
-  // ===========================================================================
   if (order.payment_status === 'paid' && isVerifiedCustomer) {
     const downloadsRes = await pool.query<{
       token: string;
@@ -719,6 +718,7 @@ export async function getPublicOrderDetails(
     status: order.status,
     paymentMethod: order.payment_method,
     paymentStatus: order.payment_status,
+    paymentReference: order.payment_reference || null,
     mpesaReceiptNumber: order.mpesa_receipt_number,
     checkoutRequestId: order.checkout_request_id,
     deliveryType: order.delivery_type,
@@ -737,4 +737,4 @@ export async function getPublicOrderDetails(
     downloads,
     isVerifiedCustomer,
   };
-}
+	}

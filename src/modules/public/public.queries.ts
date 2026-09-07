@@ -71,6 +71,7 @@ export interface PublicOrderDetailsRow {
   status: 'pending' | 'confirmed' | 'assigned' | 'out_for_delivery' | 'delivered' | 'cancelled';
   payment_method: string;
   payment_status: 'pending' | 'paid' | 'failed';
+  payment_reference: string | null;
   mpesa_receipt_number: string | null;
   checkout_request_id: string | null;
   delivery_type: 'delivery' | 'pickup';
@@ -271,7 +272,7 @@ export async function getPublicOrderDetailsRow(
 ): Promise<PublicOrderDetailsRow | null> {
   const result = await query<PublicOrderDetailsRow>(
     `SELECT o.id, o.customer_name, o.customer_phone, o.total::text AS total, o.status,
-            o.payment_method, o.payment_status,
+            o.payment_method, o.payment_status, o.payment_reference,
             o.delivery_type, o.delivery_fee::text AS delivery_fee,
             o.delivery_fee_status, o.delivery_confirmation_code,
             o.delivery_location,
