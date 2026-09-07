@@ -8,6 +8,16 @@ import { AppError } from '../../utils/error';
 import * as bannersQueries from './banners.queries';
 import type { StoreBannerRow } from './banners.queries';
 
+function cleanUrl(val: unknown): string | null {
+  if (typeof val !== 'string') return null;
+  const trimmed = val.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('/')) {
+    return trimmed;
+  }
+  return `https://${trimmed}`;
+}
+
 export const CreateBannerSchema = z
   .object({
     title: z
@@ -17,66 +27,79 @@ export const CreateBannerSchema = z
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
+      .transform((v) => (v && v.trim() ? v.trim() : null)),
     subtitle: z
       .string()
       .max(500)
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
+      .transform((v) => (v && v.trim() ? v.trim() : null)),
     badge: z
       .string()
       .max(50)
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    image_url: z.string().url('A valid desktop image URL is required'),
+      .transform((v) => (v && v.trim() ? v.trim().toUpperCase() : null)),
+    image_url: z
+      .string()
+      .trim()
+      .min(1, 'Desktop banner image is required')
+      .transform(cleanUrl)
+      .refine((v): v is string => Boolean(v && v.length > 3), {
+        message: 'A valid desktop image URL is required',
+      }),
     mobile_image_url: z
       .string()
-      .url('Invalid mobile image URL')
+      .trim()
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
+      .transform(cleanUrl),
     cta_label: z
       .string()
       .max(50)
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
+      .transform((v) => (v && v.trim() ? v.trim() : null)),
     cta_link: z
       .string()
       .max(500)
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
+      .transform((v) => (v && v.trim() ? v.trim() : null)),
     bg_color: z
       .string()
-      .regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, 'Invalid hex color code')
+      .trim()
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v && v.trim() ? v.trim() : '#052219')),
+      .transform((v) => (v && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(v) ? v : '#052219')),
     sort_order: z.number().int().optional(),
     is_active: z.boolean().default(true),
     starts_at: z
       .string()
-      .datetime()
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v ? v : null)),
+      .transform((v) => {
+        if (!v || !v.trim()) return null;
+        const d = new Date(v.trim());
+        return isNaN(d.getTime()) ? null : d.toISOString();
+      }),
     ends_at: z
       .string()
-      .datetime()
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v ? v : null)),
+      .transform((v) => {
+        if (!v || !v.trim()) return null;
+        const d = new Date(v.trim());
+        return isNaN(d.getTime()) ? null : d.toISOString();
+      }),
   })
   .refine(
     (data) => {
@@ -100,66 +123,80 @@ export const UpdateBannerSchema = z
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
+      .transform((v) => (v && v.trim() ? v.trim() : null)),
     subtitle: z
       .string()
       .max(500)
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
+      .transform((v) => (v && v.trim() ? v.trim() : null)),
     badge: z
       .string()
       .max(50)
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    image_url: z.string().url().optional(),
+      .transform((v) => (v && v.trim() ? v.trim().toUpperCase() : null)),
+    image_url: z
+      .string()
+      .trim()
+      .optional()
+      .or(z.literal(''))
+      .transform((v): string | undefined => (v && v.trim() ? cleanUrl(v) ?? undefined : undefined))
+      .refine((v): v is string | undefined => v === undefined || (typeof v === 'string' && v.length > 3), {
+        message: 'A valid desktop image URL is required',
+      }),
     mobile_image_url: z
       .string()
-      .url()
+      .trim()
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
+      .transform(cleanUrl),
     cta_label: z
       .string()
       .max(50)
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
+      .transform((v) => (v && v.trim() ? v.trim() : null)),
     cta_link: z
       .string()
       .max(500)
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
+      .transform((v) => (v && v.trim() ? v.trim() : null)),
     bg_color: z
       .string()
-      .regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/)
+      .trim()
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v && v.trim() ? v.trim() : '#052219')),
+      .transform((v) => (v && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(v) ? v : '#052219')),
     sort_order: z.number().int().optional(),
     is_active: z.boolean().optional(),
     starts_at: z
       .string()
-      .datetime()
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v ? v : null)),
+      .transform((v) => {
+        if (!v || !v.trim()) return null;
+        const d = new Date(v.trim());
+        return isNaN(d.getTime()) ? null : d.toISOString();
+      }),
     ends_at: z
       .string()
-      .datetime()
       .nullable()
       .optional()
       .or(z.literal(''))
-      .transform((v) => (v ? v : null)),
+      .transform((v) => {
+        if (!v || !v.trim()) return null;
+        const d = new Date(v.trim());
+        return isNaN(d.getTime()) ? null : d.toISOString();
+      }),
   })
   .refine(
     (data) => {
@@ -238,7 +275,7 @@ export async function createBanner(orgId: string, rawBody: unknown): Promise<Sto
 
   const row = await bannersQueries.createBanner(orgId, {
     ...parsed.data,
-    title: parsed.data.title || '',
+    title: parsed.data.title || null,
     starts_at: parsed.data.starts_at ? new Date(parsed.data.starts_at) : null,
     ends_at: parsed.data.ends_at ? new Date(parsed.data.ends_at) : null,
   });
@@ -263,7 +300,7 @@ export async function updateBanner(
 
   const row = await bannersQueries.updateBanner(orgId, bannerId, {
     ...parsed.data,
-    title: parsed.data.title !== undefined ? (parsed.data.title || '') : undefined,
+    image_url: parsed.data.image_url ?? undefined,
     starts_at:
       parsed.data.starts_at !== undefined
         ? parsed.data.starts_at

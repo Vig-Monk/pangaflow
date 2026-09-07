@@ -1,5 +1,5 @@
 // =============================================================================
-// soko-api/src/modules/banners/banner.queries.ts
+// soko-api/src/modules/banners/banners.queries.ts
 // Database access layer for store promotional hero banners.
 // =============================================================================
 
@@ -61,7 +61,23 @@ const BANNER_SELECT_FIELDS = `
   starts_at, ends_at, click_count, created_at, updated_at
 `;
 
+let schemaRelaxed = false;
+export async function ensureBannerSchema(): Promise<void> {
+  if (schemaRelaxed) return;
+  try {
+    await query(`
+      ALTER TABLE store_banners ALTER COLUMN title DROP NOT NULL;
+      ALTER TABLE store_banners ALTER COLUMN cta_label DROP NOT NULL;
+      ALTER TABLE store_banners ALTER COLUMN cta_link DROP NOT NULL;
+    `);
+    schemaRelaxed = true;
+  } catch {
+    schemaRelaxed = true;
+  }
+}
+
 export async function listBannersAdmin(orgId: string): Promise<StoreBannerRow[]> {
+  await ensureBannerSchema();
   const result = await query<StoreBannerRow>(
     `SELECT ${BANNER_SELECT_FIELDS}
      FROM   store_banners
@@ -73,6 +89,7 @@ export async function listBannersAdmin(orgId: string): Promise<StoreBannerRow[]>
 }
 
 export async function listActiveBannersPublic(orgId: string): Promise<StoreBannerRow[]> {
+  await ensureBannerSchema();
   const result = await query<StoreBannerRow>(
     `SELECT ${BANNER_SELECT_FIELDS}
      FROM   store_banners
@@ -87,6 +104,7 @@ export async function listActiveBannersPublic(orgId: string): Promise<StoreBanne
 }
 
 export async function getBannerById(orgId: string, bannerId: string): Promise<StoreBannerRow | null> {
+  await ensureBannerSchema();
   const result = await query<StoreBannerRow>(
     `SELECT ${BANNER_SELECT_FIELDS}
      FROM   store_banners
@@ -100,6 +118,8 @@ export async function createBanner(
   orgId: string,
   data: CreateBannerInput
 ): Promise<StoreBannerRow> {
+  await ensureBannerSchema();
+
   let nextSortOrder = data.sort_order;
   if (nextSortOrder === undefined) {
     const maxSortResult = await query<{ max_sort: number | null }>(
@@ -118,7 +138,7 @@ export async function createBanner(
      RETURNING ${BANNER_SELECT_FIELDS}`,
     [
       orgId,
-      data.title?.trim() || '',
+      data.title?.trim() || null,
       data.subtitle?.trim() || null,
       data.badge?.trim().toUpperCase() || null,
       data.image_url.trim(),
@@ -140,13 +160,15 @@ export async function updateBanner(
   bannerId: string,
   data: UpdateBannerInput
 ): Promise<StoreBannerRow | null> {
+  await ensureBannerSchema();
+
   const setClauses: string[] = [];
   const params: unknown[] = [orgId, bannerId];
   let paramIdx = 3;
 
   if (data.title !== undefined) {
     setClauses.push(`title = $${paramIdx}`);
-    params.push(data.title?.trim() || '');
+    params.push(data.title?.trim() || null);
     paramIdx++;
   }
   if (data.subtitle !== undefined) {
@@ -181,7 +203,7 @@ export async function updateBanner(
   }
   if (data.bg_color !== undefined) {
     setClauses.push(`bg_color = $${paramIdx}`);
-    params.push(data.bg_color.trim());
+    params.push(data.bg_color.trim() || '#052219');
     paramIdx++;
   }
   if (data.sort_order !== undefined) {

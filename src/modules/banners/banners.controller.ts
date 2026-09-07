@@ -4,6 +4,7 @@
 // =============================================================================
 
 import { Request, Response, NextFunction } from 'express';
+import { v2 as cloudinary } from 'cloudinary';
 import { success } from '../../utils/response';
 import { AppError } from '../../utils/error';
 import * as bannersService from './banners.service';
@@ -122,6 +123,41 @@ export async function reorderBannersHandler(
     const orgId = requireOrgId(req);
     await bannersService.reorderBanners(orgId, req.body);
     success(res, { reordered: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function uploadBannerImageHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const file = req.file;
+
+    if (!file) {
+      throw new AppError('No image file provided', 400);
+    }
+
+    const uploadResult = await new Promise<{ secure_url: string }>((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        {
+          folder: `soko/${orgId}/banners`,
+          resource_type: 'image',
+        },
+        (error, result) => {
+          if (error || !result) {
+            return reject(error || new Error('Upload to Cloudinary failed'));
+          }
+          resolve({ secure_url: result.secure_url });
+        }
+      );
+      stream.end(file.buffer);
+    });
+
+    success(res, { url: uploadResult.secure_url });
   } catch (err) {
     next(err);
   }
