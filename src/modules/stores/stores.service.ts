@@ -29,6 +29,18 @@ const RESERVED_SLUGS = [
     "support"
 ];
 
+export const PromoTickerItemSchema = z.object({
+    id: z.string().min(1),
+    text: z.string().min(3, "Message must be at least 3 characters").max(200, "Message cannot exceed 200 characters"),
+    link: z.string().max(300).nullable().optional(),
+    is_active: z.boolean().default(true),
+    sort_order: z.number().int().default(0)
+});
+
+export const SavePromoTickerSchema = z.object({
+    items: z.array(PromoTickerItemSchema).max(10, "Maximum of 10 promotional ticker messages allowed")
+});
+
 export const SaveStoreSchema = z.object({
     name: z.string().min(1, "Store name is required").max(200),
     slug: z
@@ -187,4 +199,20 @@ export async function saveMerchantLocation(orgId: string, rawBody: unknown) {
     }
 
     return storesQueries.upsertMerchantLocation(orgId, parsed.data);
+}
+
+export async function fetchPromoTicker(orgId: string) {
+    return storesQueries.getPromoTicker(orgId);
+}
+
+export async function savePromoTicker(orgId: string, rawBody: unknown) {
+    const body = Array.isArray(rawBody) ? { items: rawBody } : rawBody;
+    const parsed = SavePromoTickerSchema.safeParse(body);
+    if (!parsed.success) {
+        throw new AppError(
+            parsed.error.issues[0]?.message ?? "Invalid promotional ticker data",
+            400
+        );
+    }
+    return storesQueries.updatePromoTicker(orgId, parsed.data.items);
 }

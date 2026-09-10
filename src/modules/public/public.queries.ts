@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/public/public.queries.ts
-// Strict Tenant-Isolated Public Storefront Queries with Promotion Fields
+// Strict Tenant-Isolated Public Storefront Queries with Promotion & Ticker Fields
 // =============================================================================
 
 import { query } from '../../config/db';
@@ -21,6 +21,13 @@ export interface PublicStoreRow {
   hero_headline: string | null;
   hero_subheadline: string | null;
   hero_cta_label: string | null;
+  promo_ticker: Array<{
+    id: string;
+    text: string;
+    link?: string | null;
+    is_active: boolean;
+    sort_order: number;
+  }>;
 }
 
 export interface PublicFormatRow {
@@ -67,6 +74,7 @@ export interface PublicOrderDetailsRow {
   id: string;
   customer_name: string;
   customer_phone: string;
+  customer_email: string | null;
   total: string;
   status: 'pending' | 'confirmed' | 'assigned' | 'out_for_delivery' | 'delivered' | 'cancelled';
   payment_method: string;
@@ -110,7 +118,8 @@ export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow
   const result = await query<PublicStoreRow>(
     `SELECT s.id, s.org_id, s.slug, s.name, s.description, s.logo_url, s.cover_image_url,
             s.contact_phone, s.contact_email, s.location, s.delivery_info,
-            s.hero_layout, s.hero_headline, s.hero_subheadline, s.hero_cta_label
+            s.hero_layout, s.hero_headline, s.hero_subheadline, s.hero_cta_label,
+            COALESCE(s.promo_ticker, '[]'::jsonb) AS promo_ticker
      FROM   stores s
      INNER JOIN organizations o ON o.id = s.org_id
      WHERE  s.slug = $1
@@ -271,7 +280,8 @@ export async function getPublicOrderDetailsRow(
   orderId: string
 ): Promise<PublicOrderDetailsRow | null> {
   const result = await query<PublicOrderDetailsRow>(
-    `SELECT o.id, o.customer_name, o.customer_phone, o.total::text AS total, o.status,
+    `SELECT o.id, o.customer_name, o.customer_phone, o.customer_email,
+            o.total::text AS total, o.status,
             o.payment_method, o.payment_status, o.payment_reference,
             o.delivery_type, o.delivery_fee::text AS delivery_fee,
             o.delivery_fee_status, o.delivery_confirmation_code,

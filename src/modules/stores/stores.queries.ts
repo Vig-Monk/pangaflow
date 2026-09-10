@@ -4,6 +4,14 @@
 
 import { query } from '../../config/db';
 
+export interface PromoTickerItem {
+  id: string;
+  text: string;
+  link?: string | null;
+  is_active: boolean;
+  sort_order: number;
+}
+
 export interface Store {
   id: string;
   org_id: string;
@@ -21,6 +29,7 @@ export interface Store {
   hero_headline: string | null;
   hero_subheadline: string | null;
   hero_cta_label: string | null;
+  promo_ticker: PromoTickerItem[];
   created_at: Date;
   updated_at: Date;
 }
@@ -40,6 +49,7 @@ export interface UpsertStoreInput {
   hero_headline?: string | null;
   hero_subheadline?: string | null;
   hero_cta_label?: string | null;
+  promo_ticker?: PromoTickerItem[];
 }
 
 export interface MerchantLocation {
@@ -66,11 +76,27 @@ export interface UpsertMerchantLocationInput {
   fee_per_km?: number;
 }
 
+let tickerSchemaEnsured = false;
+export async function ensureTickerSchema(): Promise<void> {
+  if (tickerSchemaEnsured) return;
+  try {
+    await query(`
+      ALTER TABLE stores
+        ADD COLUMN IF NOT EXISTS promo_ticker JSONB NOT NULL DEFAULT '[]'::jsonb;
+    `);
+    tickerSchemaEnsured = true;
+  } catch {
+    tickerSchemaEnsured = true;
+  }
+}
+
 export async function getStoreByOrgId(orgId: string): Promise<Store | null> {
+  await ensureTickerSchema();
   const result = await query<Store>(
     `SELECT id, org_id, slug, name, description, logo_url, cover_image_url,
             contact_phone, contact_email, location, delivery_info, status,
             hero_layout, hero_headline, hero_subheadline, hero_cta_label,
+            COALESCE(promo_ticker, '[]'::jsonb) AS promo_ticker,
             created_at, updated_at
      FROM   stores
      WHERE  org_id = $1`,
@@ -89,13 +115,14 @@ export async function checkSlugConflict(orgId: string, slug: string): Promise<bo
 }
 
 export async function upsertStore(orgId: string, data: UpsertStoreInput): Promise<Store> {
+  await ensureTickerSchema();
   const result = await query<Store>(
     `INSERT INTO stores (
        org_id, slug, name, description, logo_url, cover_image_url,
        contact_phone, contact_email, location, delivery_info, status,
-       hero_layout, hero_headline, hero_subheadline, hero_cta_label
+       hero_layout, hero_headline, hero_subheadline, hero_cta_label, promo_ticker
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
      ON CONFLICT (org_id) DO UPDATE SET
        slug             = EXCLUDED.slug,
        name             = EXCLUDED.name,
@@ -111,11 +138,13 @@ export async function upsertStore(orgId: string, data: UpsertStoreInput): Promis
        hero_headline    = EXCLUDED.hero_headline,
        hero_subheadline = EXCLUDED.hero_subheadline,
        hero_cta_label   = EXCLUDED.hero_cta_label,
+       promo_ticker     = COALESCE(EXCLUDED.promo_ticker, stores.promo_ticker),
        updated_at       = NOW()
      RETURNING 
        id, org_id, slug, name, description, logo_url, cover_image_url,
        contact_phone, contact_email, location, delivery_info, status,
        hero_layout, hero_headline, hero_subheadline, hero_cta_label,
+       COALESCE(promo_ticker, '[]'::jsonb) AS promo_ticker,
        created_at, updated_at`,
     [
       orgId,
@@ -133,9 +162,31 @@ export async function upsertStore(orgId: string, data: UpsertStoreInput): Promis
       data.hero_headline ?? null,
       data.hero_subheadline ?? null,
       data.hero_cta_label ?? null,
+      JSON.stringify(data.promo_ticker ?? []),
     ]
   );
   return result.rows[0];
+}
+
+export async function getPromoTicker(orgId: string): Promise<PromoTickerItem[]> {
+  await ensureTickerSchema();
+  const result = await query<{ promo_ticker: PromoTickerItem[] }>(
+    `SELECT COALESCE(promo_ticker, '[]'::jsonb) AS promo_ticker FROM stores WHERE org_id = $1`,
+    [orgId]
+  );
+  return result.rows[0]?.promo_ticker || [];
+}
+
+export async function updatePromoTicker(orgId: string, items: PromoTickerItem[]): Promise<PromoTickerItem[]> {
+  await ensureTickerSchema();
+  const result = await query<{ promo_ticker: PromoTickerItem[] }>(
+    `UPDATE stores
+     SET promo_ticker = $2::jsonb, updated_at = NOW()
+     WHERE org_id = $1
+     RETURNING COALESCE(promo_ticker, '[]'::jsonb) AS promo_ticker`,
+    [orgId, JSON.stringify(items)]
+  );
+  return result.rows[0]?.promo_ticker || [];
 }
 
 // ---------------------------------------------------------------------------

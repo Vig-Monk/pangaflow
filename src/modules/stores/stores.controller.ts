@@ -72,3 +72,31 @@ export async function saveMerchantLocationHandler(
         next(err);
     }
 }
+
+export async function getPromoTickerHandler(
+    req: Request,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const orgId = requireOrgId(req);
+        const items = await storesService.fetchPromoTicker(orgId);
+        success(res, items);
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function savePromoTickerHandler(
+    req: Request,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const orgId = requireOrgId(req);
+        const items = await storesService.savePromoTicker(orgId, req.body);
+        success(res, items);
+    } catch (err) {
+        next(err);
+    }
+}

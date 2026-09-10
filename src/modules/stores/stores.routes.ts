@@ -9,11 +9,17 @@ import {
   saveStoreSettingsHandler,
   getMerchantLocationHandler,
   saveMerchantLocationHandler,
+  getPromoTickerHandler,
+  savePromoTickerHandler,
 } from './stores.controller';
 
 const router = Router();
 
 router.use(verifyToken);
+
+// Promotional Gold Ribbon Ticker Endpoints
+router.get('/ticker', getPromoTickerHandler);
+router.put('/ticker', savePromoTickerHandler);
 
 // Location Hub Endpoints
 router.get('/location', getMerchantLocationHandler);
