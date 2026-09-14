@@ -33,6 +33,7 @@ import mpesaCredentialsRoutes from "./modules/mpesa-credentials/mpesa-credential
 import analyticsRoutes from "./modules/analytics/analytics.routes";
 import booksRoutes from "./verticals/books/books.routes";
 import bannersRoutes from "./modules/banners/banners.routes";
+import smtpRoutes from "./modules/smtp/smtp.routes";
 
 const app = express();
 
@@ -139,6 +140,7 @@ apiRouter.use("/mpesa-credentials", mpesaCredentialsRoutes);
 apiRouter.use("/analytics", analyticsRoutes);
 apiRouter.use("/books", booksRoutes);
 apiRouter.use("/banners", bannersRoutes);
+apiRouter.use("/smtp", smtpRoutes);
 
 app.use("/api/v1", apiRouter);
 

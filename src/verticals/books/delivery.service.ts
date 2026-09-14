@@ -29,7 +29,7 @@ export function generateDownloadToken(): string {
  * Fulfills all digital items for an order:
  * 1. Snapshots book title, format, and R2 key into digital_downloads.
  * 2. Sets 90-day TTL and 15 download attempts.
- * 3. Triggers out-of-band email dispatch via Nodemailer asynchronously.
+ * 3. Resolves tenant org_id and dispatches email via tenant-specific SMTP.
  */
 export async function fulfillDigitalItems(
   orderId: string,
@@ -110,11 +110,12 @@ export async function fulfillDigitalItems(
       await runner.query('COMMIT');
     }
 
-    // 2. Asynchronously Dispatch Out-of-Band Email (Non-blocking)
+    // 2. Asynchronously Dispatch Out-of-Band Email with org_id binding
     setImmediate(async () => {
       try {
         const orderInfo = await pool.query<{
           id: string;
+          org_id: string;
           customer_name: string;
           customer_email: string | null;
           customer_phone: string;
@@ -123,7 +124,7 @@ export async function fulfillDigitalItems(
           delivery_confirmation_code: string | null;
           delivery_location: string;
         }>(
-          `SELECT id, customer_name, customer_email, customer_phone,
+          `SELECT id, org_id, customer_name, customer_email, customer_phone,
                   total::text AS total, delivery_type, delivery_confirmation_code, delivery_location
            FROM orders
            WHERE id = $1`,
@@ -133,6 +134,7 @@ export async function fulfillDigitalItems(
         const order = orderInfo.rows[0];
         if (order && order.customer_email && order.customer_email.includes('@')) {
           await sendOrderConfirmationEmail({
+            orgId: order.org_id, // Pass tenant org_id to resolve tenant-specific SMTP
             toEmail: order.customer_email,
             customerName: order.customer_name,
             customerPhone: order.customer_phone,
