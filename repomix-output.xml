@@ -85,6 +85,8 @@ src/
     027_relax_banner_not_null.sql
     028_order_payment_reference.sql
     029_store_promo_ticker.sql
+    030_seed_ebookreads.sql
+    031_org_smtp.sql
     run.ts
   modules/
     admin/
@@ -143,6 +145,11 @@ src/
       public.queries.ts
       public.routes.ts
       public.service.ts
+    smtp/
+      smtp.controller.ts
+      smtp.queries.ts
+      smtp.routes.ts
+      smtp.service.ts
     stores/
       stores.controller.ts
       stores.queries.ts
@@ -1530,6 +1537,226 @@ ALTER TABLE stores
   ]'::jsonb;
 </file>
 
+<file path="src/migrations/030_seed_ebookreads.sql">
+-- =============================================================================
+-- Migration: 030_seed_ebookreads.sql
+-- Soko Platform — Idempotent Seed for EbookReads Flagship Storefront
+-- =============================================================================
+-- Guaranteed multi-tenant isolation:
+-- 1. All records strictly bind to deterministic ID: a0000000-0000-0000-0000-000000000002.
+-- 2. ZERO unbound UPDATE statements (protects Flemela and all other tenants).
+-- 3. Idempotent: safe to run multiple times without duplicating rows.
+-- =============================================================================
+
+-- ---------------------------------------------------------------------------
+-- 1. Deterministic Organization Record
+-- ---------------------------------------------------------------------------
+INSERT INTO organizations (
+  id,
+  name,
+  slug,
+  business_type,
+  plan,
+  plan_expires_at,
+  settings
+)
+VALUES (
+  'a0000000-0000-0000-0000-000000000002',
+  'EbookReads',
+  'ebookreads',
+  'books',
+  'lifetime',
+  NULL,
+  '{"currency": "KES", "primary_color": "#E50914", "dark_color": "#111315"}'::jsonb
+)
+ON CONFLICT (slug) DO UPDATE SET
+  name          = 'EbookReads',
+  business_type = 'books',
+  plan          = 'lifetime',
+  settings      = '{"currency": "KES", "primary_color": "#E50914", "dark_color": "#111315"}'::jsonb,
+  deleted_at    = NULL,
+  updated_at    = NOW();
+
+-- ---------------------------------------------------------------------------
+-- 2. Deterministic Admin User (Default Password: AdminPassword123!)
+-- ---------------------------------------------------------------------------
+INSERT INTO users (
+  id,
+  email,
+  password_hash,
+  name
+)
+VALUES (
+  'b0000000-0000-0000-0000-000000000002',
+  'admin@ebookreads.co.ke',
+  crypt('AdminPassword123!', gen_salt('bf', 12)),
+  'EbookReads Administrator'
+)
+ON CONFLICT (email) DO UPDATE SET
+  password_hash = crypt('AdminPassword123!', gen_salt('bf', 12)),
+  deleted_at    = NULL,
+  updated_at    = NOW();
+
+-- ---------------------------------------------------------------------------
+-- 3. Owner Org Membership Link
+-- ---------------------------------------------------------------------------
+INSERT INTO org_members (
+  org_id,
+  user_id,
+  role
+)
+SELECT 
+  'a0000000-0000-0000-0000-000000000002',
+  'b0000000-0000-0000-0000-000000000002',
+  'owner'
+ON CONFLICT (org_id, user_id) DO UPDATE SET
+  role = 'owner';
+
+-- ---------------------------------------------------------------------------
+-- 4. Storefront Configuration Record
+-- ---------------------------------------------------------------------------
+INSERT INTO stores (
+  org_id,
+  slug,
+  name,
+  description,
+  location,
+  delivery_info,
+  status,
+  hero_layout,
+  hero_headline,
+  hero_subheadline,
+  hero_cta_label,
+  promo_ticker
+)
+VALUES (
+  'a0000000-0000-0000-0000-000000000002',
+  'ebookreads',
+  'EbookReads',
+  'Discover Your Next Great Book. Instant digital downloads and curated reading collections.',
+  'Diamond Mall / Diamond Plaza, 4th Parklands Ave, Nairobi',
+  'Instant PDF digital download links delivered directly to your device upon M-Pesa payment.',
+  'published',
+  'editorial',
+  'Discover Your Next Great Book',
+  'Thousands of ebooks. Endless possibilities. Read, learn, and grow — all in one place.',
+  'Browse Ebooks',
+  '[
+    {"id": "ticker-1", "text": "Get 50% OFF on all ebooks this weekend only!", "link": "#catalog-results", "is_active": true, "sort_order": 0},
+    {"id": "ticker-2", "text": "Instant PDF download delivered directly to your device upon payment", "link": "#catalog-results", "is_active": true, "sort_order": 1},
+    {"id": "ticker-3", "text": "Need a specific title? Custom book requests fulfilled on WhatsApp", "link": "https://wa.me/254143304460", "is_active": true, "sort_order": 2}
+  ]'::jsonb
+)
+ON CONFLICT (org_id) DO UPDATE SET
+  slug             = 'ebookreads',
+  name             = 'EbookReads',
+  description      = 'Discover Your Next Great Book. Instant digital downloads and curated reading collections.',
+  location         = 'Diamond Mall / Diamond Plaza, 4th Parklands Ave, Nairobi',
+  delivery_info    = 'Instant PDF digital download links delivered directly to your device upon M-Pesa payment.',
+  status           = 'published',
+  hero_headline    = 'Discover Your Next Great Book',
+  hero_subheadline = 'Thousands of ebooks. Endless possibilities. Read, learn, and grow — all in one place.',
+  hero_cta_label   = 'Browse Ebooks',
+  updated_at       = NOW();
+
+-- ---------------------------------------------------------------------------
+-- 5. Merchant Fulfillment Location Hub (Diamond Mall Base)
+-- ---------------------------------------------------------------------------
+INSERT INTO merchant_locations (
+  org_id,
+  name,
+  lat,
+  lng,
+  address_text,
+  max_delivery_radius_km,
+  base_delivery_fee,
+  fee_per_km
+)
+VALUES (
+  'a0000000-0000-0000-0000-000000000002',
+  'EbookReads Main Hub (Diamond Mall)',
+  -1.261200,
+  36.816700,
+  'Diamond Mall / Diamond Plaza, 4th Parklands Ave, Nairobi',
+  15.00,
+  100.00,
+  25.00
+)
+ON CONFLICT (org_id) DO UPDATE SET
+  name                   = 'EbookReads Main Hub (Diamond Mall)',
+  lat                    = -1.261200,
+  lng                    = 36.816700,
+  address_text           = 'Diamond Mall / Diamond Plaza, 4th Parklands Ave, Nairobi',
+  max_delivery_radius_km = 15.00,
+  base_delivery_fee      = 100.00,
+  fee_per_km             = 25.00,
+  updated_at             = NOW();
+
+-- ---------------------------------------------------------------------------
+-- 6. Canonical Bookstore Categories for EbookReads
+-- ---------------------------------------------------------------------------
+INSERT INTO categories (
+  org_id,
+  name,
+  slug,
+  description,
+  is_featured,
+  sort_order
+)
+VALUES 
+  ('a0000000-0000-0000-0000-000000000002', 'Fiction', 'fiction', 'Sci-Fi, Dystopian, Classics & Thrillers', true, 1),
+  ('a0000000-0000-0000-0000-000000000002', 'Non-Fiction', 'non-fiction', 'Biographies, Memoirs, History & Science', true, 2),
+  ('a0000000-0000-0000-0000-000000000002', 'Self Help', 'self-help', 'Habits, Psychology, Mastery & Focus', true, 3),
+  ('a0000000-0000-0000-0000-000000000002', 'Business', 'business', 'Money, Power, Investing & Freedom', true, 4),
+  ('a0000000-0000-0000-0000-000000000002', 'Technology', 'technology', 'Programming, AI, Engineering & Systems', true, 5),
+  ('a0000000-0000-0000-0000-000000000002', 'Classic', 'classic', 'Timeless Literature & Literary Masterpieces', true, 6),
+  ('a0000000-0000-0000-0000-000000000002', 'General', 'general', 'General Collection', false, 7)
+ON CONFLICT (org_id, LOWER(TRIM(name))) DO UPDATE SET
+  slug        = EXCLUDED.slug,
+  description = EXCLUDED.description,
+  is_featured = EXCLUDED.is_featured,
+  sort_order  = EXCLUDED.sort_order;
+</file>
+
+<file path="src/migrations/031_org_smtp.sql">
+-- =============================================================================
+-- Migration: 031_org_smtp.sql
+-- Soko Platform — Per-Organization Encrypted SMTP Credentials & Custom Sender Identity
+-- =============================================================================
+-- Allows each tenant to configure their own SMTP mail server (Google Workspace,
+-- Amazon SES, Brevo, Sendgrid, or private mail server) so customer purchase receipts
+-- and digital downloads come from their sovereign brand address.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS org_smtp_credentials (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id           UUID NOT NULL UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
+  smtp_host        TEXT NOT NULL,
+  smtp_port        INTEGER NOT NULL DEFAULT 465,
+  smtp_secure      BOOLEAN NOT NULL DEFAULT TRUE,
+  smtp_user        TEXT NOT NULL,
+  smtp_pass_enc    TEXT NOT NULL,         -- AES-256-GCM encrypted string (iv:authTag:ciphertext)
+  from_name        TEXT NOT NULL,         -- e.g. "EbookReads Bookstore"
+  from_email       TEXT NOT NULL,         -- e.g. "orders@ebookreads.co.ke"
+  reply_to         TEXT,                  -- Optional reply-to address
+  status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'verified', 'failed')),
+  last_verified_at TIMESTAMPTZ,
+  last_error       TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Trigger for updated_at
+DROP TRIGGER IF EXISTS trg_org_smtp_credentials_updated_at ON org_smtp_credentials;
+CREATE TRIGGER trg_org_smtp_credentials_updated_at
+  BEFORE UPDATE ON org_smtp_credentials
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- High-speed lookup index scoped by organization
+CREATE INDEX IF NOT EXISTS idx_org_smtp_credentials_org_id 
+  ON org_smtp_credentials(org_id);
+</file>
+
 <file path="src/migrations/run.ts">
 /**
  * src/migrations/run.ts
@@ -2680,6 +2907,434 @@ router.patch('/:id', updateFormatHandler);
 router.delete('/:id', deleteFormatHandler);
 
 export default router;
+</file>
+
+<file path="src/modules/smtp/smtp.controller.ts">
+// =============================================================================
+// soko-api/src/modules/smtp/smtp.controller.ts
+// HTTP controller layer for tenant SMTP credentials.
+// =============================================================================
+
+import { Request, Response, NextFunction } from 'express';
+import { success } from '../../utils/response';
+import { AppError } from '../../utils/error';
+import * as smtpService from './smtp.service';
+
+function requireOrgId(req: Request): string {
+  if (!req.orgId) {
+    throw new AppError('Unauthorized', 401);
+  }
+  return req.orgId;
+}
+
+export async function getSmtpCredentialsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const result = await smtpService.getCredentials(orgId);
+    success(res, result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function saveSmtpCredentialsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const result = await smtpService.saveCredentials(orgId, req.body);
+    success(res, result, undefined, 200);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function verifySmtpCredentialsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const result = await smtpService.verifyCredentials(orgId, req.body);
+    success(res, result, undefined, 200);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function deleteSmtpCredentialsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    await smtpService.removeCredentials(orgId);
+    success(res, { deleted: true });
+  } catch (err) {
+    next(err);
+  }
+}
+</file>
+
+<file path="src/modules/smtp/smtp.queries.ts">
+// =============================================================================
+// soko-api/src/modules/smtp/smtp.queries.ts
+// Database queries for org_smtp_credentials with AES-256-GCM encryption boundaries.
+// =============================================================================
+
+import { query } from '../../config/db';
+import { encrypt, decrypt } from '../../utils/crypto';
+
+export interface OrgSmtpCredentialsRow {
+  id: string;
+  org_id: string;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_secure: boolean;
+  smtp_user: string;
+  smtp_pass_enc: string;
+  from_name: string;
+  from_email: string;
+  reply_to: string | null;
+  status: 'pending' | 'verified' | 'failed';
+  last_verified_at: Date | null;
+  last_error: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface DecryptedSmtpCredentials {
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecure: boolean;
+  smtpUser: string;
+  smtpPass: string;
+  fromName: string;
+  fromEmail: string;
+  replyTo: string | null;
+  status: 'pending' | 'verified' | 'failed';
+}
+
+export interface UpsertSmtpCredentialsInput {
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecure: boolean;
+  smtpUser: string;
+  smtpPass: string;
+  fromName: string;
+  fromEmail: string;
+  replyTo?: string | null;
+}
+
+/**
+ * Retrieves the raw database row containing encrypted secret strings.
+ * Internal to backend queries only.
+ */
+export async function getSmtpCredentialsRowByOrgId(
+  orgId: string
+): Promise<OrgSmtpCredentialsRow | null> {
+  const result = await query<OrgSmtpCredentialsRow>(
+    `SELECT id, org_id, smtp_host, smtp_port, smtp_secure,
+            smtp_user, smtp_pass_enc, from_name, from_email,
+            reply_to, status, last_verified_at, last_error,
+            created_at, updated_at
+     FROM   org_smtp_credentials
+     WHERE  org_id = $1`,
+    [orgId]
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
+ * Decrypts stored credentials for backend consumption (Nodemailer connection).
+ * Never exposed directly in API responses.
+ */
+export async function getDecryptedSmtpCredentials(
+  orgId: string
+): Promise<DecryptedSmtpCredentials | null> {
+  const row = await getSmtpCredentialsRowByOrgId(orgId);
+  if (!row) return null;
+
+  return {
+    smtpHost: row.smtp_host,
+    smtpPort: row.smtp_port,
+    smtpSecure: row.smtp_secure,
+    smtpUser: row.smtp_user,
+    smtpPass: decrypt(row.smtp_pass_enc),
+    fromName: row.from_name,
+    fromEmail: row.from_email,
+    replyTo: row.reply_to,
+    status: row.status,
+  };
+}
+
+/**
+ * Encrypts password with AES-256-GCM and upserts into org_smtp_credentials.
+ * Resets status to 'pending' on any credential update.
+ */
+export async function upsertSmtpCredentials(
+  orgId: string,
+  input: UpsertSmtpCredentialsInput
+): Promise<OrgSmtpCredentialsRow> {
+  const smtpPassEnc = encrypt(input.smtpPass);
+
+  const result = await query<OrgSmtpCredentialsRow>(
+    `INSERT INTO org_smtp_credentials (
+       org_id, smtp_host, smtp_port, smtp_secure,
+       smtp_user, smtp_pass_enc, from_name, from_email,
+       reply_to, status, last_error
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', NULL)
+     ON CONFLICT (org_id) DO UPDATE SET
+       smtp_host        = EXCLUDED.smtp_host,
+       smtp_port        = EXCLUDED.smtp_port,
+       smtp_secure      = EXCLUDED.smtp_secure,
+       smtp_user        = EXCLUDED.smtp_user,
+       smtp_pass_enc    = EXCLUDED.smtp_pass_enc,
+       from_name        = EXCLUDED.from_name,
+       from_email       = EXCLUDED.from_email,
+       reply_to         = EXCLUDED.reply_to,
+       status           = 'pending',
+       last_error       = NULL,
+       updated_at       = NOW()
+     RETURNING id, org_id, smtp_host, smtp_port, smtp_secure,
+               smtp_user, smtp_pass_enc, from_name, from_email,
+               reply_to, status, last_verified_at, last_error,
+               created_at, updated_at`,
+    [
+      orgId,
+      input.smtpHost.trim(),
+      input.smtpPort,
+      input.smtpSecure,
+      input.smtpUser.trim(),
+      smtpPassEnc,
+      input.fromName.trim(),
+      input.fromEmail.trim().toLowerCase(),
+      input.replyTo?.trim().toLowerCase() || null,
+    ]
+  );
+
+  return result.rows[0];
+}
+
+/**
+ * Removes the organization's SMTP credentials.
+ */
+export async function deleteSmtpCredentials(orgId: string): Promise<boolean> {
+  const result = await query(
+    `DELETE FROM org_smtp_credentials WHERE org_id = $1`,
+    [orgId]
+  );
+  return result.rowCount !== null && result.rowCount > 0;
+}
+
+/**
+ * Updates verification status and records timestamp or errors.
+ */
+export async function updateSmtpVerificationStatus(
+  orgId: string,
+  status: 'verified' | 'failed',
+  lastError: string | null = null
+): Promise<void> {
+  await query(
+    `UPDATE org_smtp_credentials
+     SET    status           = $2,
+            last_error       = $3,
+            last_verified_at = (CASE WHEN $2 = 'verified' THEN NOW() ELSE last_verified_at END),
+            updated_at       = NOW()
+     WHERE  org_id = $1`,
+    [orgId, status, lastError]
+  );
+}
+</file>
+
+<file path="src/modules/smtp/smtp.routes.ts">
+// =============================================================================
+// soko-api/src/modules/smtp/smtp.routes.ts
+// Route wiring for tenant SMTP settings. All routes protected by verifyToken.
+// =============================================================================
+
+import { Router } from 'express';
+import { verifyToken } from '../../middleware/auth';
+import {
+  getSmtpCredentialsHandler,
+  saveSmtpCredentialsHandler,
+  verifySmtpCredentialsHandler,
+  deleteSmtpCredentialsHandler,
+} from './smtp.controller';
+
+const router = Router();
+
+router.use(verifyToken);
+
+router.get('/', getSmtpCredentialsHandler);
+router.post('/', saveSmtpCredentialsHandler);
+router.post('/verify', verifySmtpCredentialsHandler);
+router.delete('/', deleteSmtpCredentialsHandler);
+
+export default router;
+</file>
+
+<file path="src/modules/smtp/smtp.service.ts">
+// =============================================================================
+// soko-api/src/modules/smtp/smtp.service.ts
+// Business logic for tenant SMTP verification, saving, and pool cache invalidation.
+// =============================================================================
+
+import nodemailer from 'nodemailer';
+import { z } from 'zod';
+import { AppError } from '../../utils/error';
+import * as smtpQueries from './smtp.queries';
+import { invalidateTransporterCache } from '../../services/email.service';
+
+export const SaveSmtpSchema = z.object({
+  smtpHost: z.string().min(1, 'SMTP Host is required').max(200),
+  smtpPort: z.coerce.number().int().min(1).max(65535).default(465),
+  smtpSecure: z.boolean().default(true),
+  smtpUser: z.string().min(1, 'SMTP Username/Email is required').max(200),
+  smtpPass: z.string().min(1, 'SMTP Password is required').max(500),
+  fromName: z.string().min(1, 'Sender Name is required').max(100),
+  fromEmail: z.string().email('Valid Sender Email is required').max(200),
+  replyTo: z.string().email('Invalid reply-to email').nullable().optional().or(z.literal('')).transform(v => v || null),
+});
+
+export const VerifySmtpSchema = z.object({
+  testRecipient: z.string().email('Valid test recipient email is required'),
+});
+
+export interface PublicSmtpDto {
+  id: string;
+  org_id: string;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_secure: boolean;
+  smtp_user: string;
+  from_name: string;
+  from_email: string;
+  reply_to: string | null;
+  status: 'pending' | 'verified' | 'failed';
+  last_verified_at: Date | null;
+  last_error: string | null;
+}
+
+export function toPublicSmtpDto(row: smtpQueries.OrgSmtpCredentialsRow | null): PublicSmtpDto | null {
+  if (!row) return null;
+  return {
+    id: row.id,
+    org_id: row.org_id,
+    smtp_host: row.smtp_host,
+    smtp_port: row.smtp_port,
+    smtp_secure: row.smtp_secure,
+    smtp_user: row.smtp_user,
+    from_name: row.from_name,
+    from_email: row.from_email,
+    reply_to: row.reply_to,
+    status: row.status,
+    last_verified_at: row.last_verified_at,
+    last_error: row.last_error,
+  };
+}
+
+export async function getCredentials(orgId: string): Promise<PublicSmtpDto | null> {
+  const row = await smtpQueries.getSmtpCredentialsRowByOrgId(orgId);
+  return toPublicSmtpDto(row);
+}
+
+export async function saveCredentials(orgId: string, rawBody: unknown): Promise<PublicSmtpDto> {
+  const parsed = SaveSmtpSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid SMTP configuration', 400);
+  }
+
+  const row = await smtpQueries.upsertSmtpCredentials(orgId, parsed.data);
+  invalidateTransporterCache(orgId);
+
+  const dto = toPublicSmtpDto(row);
+  if (!dto) {
+    throw new AppError('Failed to save SMTP credentials', 500, false);
+  }
+  return dto;
+}
+
+export async function removeCredentials(orgId: string): Promise<void> {
+  const deleted = await smtpQueries.deleteSmtpCredentials(orgId);
+  if (!deleted) {
+    throw new AppError('SMTP credentials not found', 404);
+  }
+  invalidateTransporterCache(orgId);
+}
+
+export async function verifyCredentials(
+  orgId: string,
+  rawBody: unknown
+): Promise<{ success: boolean; message: string }> {
+  const parsed = VerifySmtpSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    throw new AppError(parsed.error.issues[0]?.message ?? 'Test recipient email is required', 400);
+  }
+
+  const creds = await smtpQueries.getDecryptedSmtpCredentials(orgId);
+  if (!creds) {
+    throw new AppError('SMTP credentials not configured. Save credentials before verifying.', 404);
+  }
+
+  // 1. Create a dedicated test transporter
+  const testTransporter = nodemailer.createTransport({
+    host: creds.smtpHost,
+    port: creds.smtpPort,
+    secure: creds.smtpSecure,
+    auth: {
+      user: creds.smtpUser,
+      pass: creds.smtpPass,
+    },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+  });
+
+  try {
+    // 2. Perform SMTP connection handshake verification
+    await testTransporter.verify();
+
+    // 3. Dispatch a real test email
+    await testTransporter.sendMail({
+      from: `"${creds.fromName}" <${creds.fromEmail}>`,
+      to: parsed.data.testRecipient,
+      replyTo: creds.replyTo || undefined,
+      subject: `[Verified] ${creds.fromName} SMTP Test Delivery`,
+      html: `
+        <div style="font-family: sans-serif; padding: 24px; color: #111315;">
+          <h2 style="color: #E50914; margin: 0 0 12px 0;">SMTP Connection Verified!</h2>
+          <p>This test email confirms that your store mail server (<strong>${creds.smtpHost}</strong>) is authenticated and ready to dispatch customer order receipts and eBook download tokens.</p>
+          <hr style="border: none; border-top: 1px solid #E5E7EB; margin: 16px 0;" />
+          <span style="font-size: 11px; color: #656F7D;">Authenticated via KauntaOS Multi-Tenant Mail Engine</span>
+        </div>
+      `,
+    });
+
+    // 4. Update status in database to verified
+    await smtpQueries.updateSmtpVerificationStatus(orgId, 'verified', null);
+    invalidateTransporterCache(orgId);
+
+    return {
+      success: true,
+      message: `Verification email sent successfully to ${parsed.data.testRecipient}!`,
+    };
+  } catch (err: any) {
+    const errorMsg = err.message || 'SMTP handshake failed';
+    await smtpQueries.updateSmtpVerificationStatus(orgId, 'failed', errorMsg);
+    throw new AppError(`SMTP verification failed: ${errorMsg}`, 400);
+  } finally {
+    testTransporter.close();
+  }
+}
 </file>
 
 <file path="src/scripts/heal-system.ts">
@@ -7211,192 +7866,6 @@ async function run(): Promise<void> {
 run();
 </file>
 
-<file path="src/services/email.service.ts">
-// =============================================================================
-// soko-api/src/services/email.service.ts
-// High-Reliability Transactional Order & Digital Download Email Delivery
-// =============================================================================
-
-import nodemailer from 'nodemailer';
-import { env } from '../config/env';
-import pino from 'pino';
-
-const logger = pino();
-
-let transporter: nodemailer.Transporter | null = null;
-
-function getTransporter(): nodemailer.Transporter | null {
-  if (!transporter && env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS) {
-    transporter = nodemailer.createTransport({
-      host: env.SMTP_HOST,
-      port: env.SMTP_PORT,
-      secure: env.SMTP_SECURE,
-      auth: {
-        user: env.SMTP_USER,
-        pass: env.SMTP_PASS,
-      },
-      pool: true,
-      maxConnections: 5,
-      maxMessages: 100,
-    });
-  }
-  return transporter;
-}
-
-export interface EmailDownloadItem {
-  bookTitle: string;
-  format: string;
-  token: string;
-}
-
-export interface SendOrderEmailPayload {
-  toEmail: string;
-  customerName: string;
-  customerPhone: string;
-  orderId: string;
-  total: number;
-  downloads: EmailDownloadItem[];
-  deliveryType: 'delivery' | 'pickup';
-  deliveryConfirmationCode: string | null;
-  deliveryLocation: string;
-}
-
-export async function sendOrderConfirmationEmail(
-  payload: SendOrderEmailPayload
-): Promise<boolean> {
-  const mailer = getTransporter();
-  if (!mailer) {
-    logger.warn('SMTP transport not configured. Skipping email dispatch.');
-    return false;
-  }
-
-  const frontendUrl = env.FRONTEND_URL.replace(/\/$/, '');
-  const publicApiUrl = env.API_PUBLIC_URL.replace(/\/$/, '');
-  const recoveryUrl = `${frontendUrl}/checkout/confirm?orderId=${payload.orderId}&phone=${encodeURIComponent(payload.customerPhone)}`;
-  const orderRef = payload.orderId.slice(0, 8).toUpperCase();
-
-  const digitalDownloadCardsHtml = payload.downloads.length > 0
-    ? `
-      <div style="margin: 24px 0; padding: 20px; background-color: #F4EFE6; border-radius: 12px; border: 1px solid #E2D7C3;">
-        <h3 style="margin: 0 0 14px 0; color: #052219; font-size: 16px; text-transform: uppercase; letter-spacing: 0.5px;">
-          📖 Your Digital Editions (Direct Download)
-        </h3>
-        <p style="margin: 0 0 16px 0; font-size: 13px; color: #5F6964; line-height: 1.5;">
-          Your digital copies are hosted in high-speed storage and ready to read immediately. Access is valid for 90 days.
-        </p>
-        ${payload.downloads.map(dl => {
-          const dlLink = `${publicApiUrl}/api/v1/books/download/${dl.token}?redirect=true`;
-          return `
-            <div style="margin-bottom: 12px; padding: 14px; background: #FFFFFF; border-radius: 8px; border: 1px solid #E2E8F0; display: flex; justify-content: space-between; align-items: center;">
-              <div>
-                <strong style="color: #052219; font-size: 14px; display: block;">${dl.bookTitle}</strong>
-                <span style="display: inline-block; margin-top: 4px; padding: 2px 8px; background: #052219; color: #2EE59D; font-size: 10px; font-weight: bold; border-radius: 4px; text-transform: uppercase;">
-                  ${dl.format.toUpperCase()} EBOOK
-                </span>
-              </div>
-              <div style="margin-top: 8px;">
-                <a href="${dlLink}" style="background-color: #052219; color: #FFFFFF; text-decoration: none; padding: 10px 18px; font-size: 12px; font-weight: bold; border-radius: 6px; display: inline-block;">
-                  Download ${dl.format.toUpperCase()}
-                </a>
-              </div>
-            </div>
-          `;
-        }).join('')}
-      </div>
-    `
-    : '';
-
-  const physicalDeliveryHtml = payload.deliveryConfirmationCode
-    ? `
-      <div style="margin: 24px 0; padding: 18px; background-color: #F0FDF4; border: 1px dashed #16A34A; border-radius: 12px; text-align: center;">
-        <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #166534; font-weight: bold; display: block;">
-          Courier Delivery Handover Code
-        </span>
-        <div style="font-size: 28px; font-family: monospace; font-weight: 800; letter-spacing: 6px; color: #052219; margin: 10px 0;">
-          ${payload.deliveryConfirmationCode.split('').join(' ')}
-        </div>
-        <p style="margin: 0; font-size: 12px; color: #4B5563;">
-          Read this 4-digit code to your dispatch rider upon delivery to confirm handover.
-        </p>
-      </div>
-    `
-    : '';
-
-  const htmlBody = `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Order #${orderRef} Confirmed</title>
-      </head>
-      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #FAF8F5; margin: 0; padding: 24px; color: #141E1A;">
-        <div style="max-width: 600px; margin: 0 auto; background-color: #FFFFFF; border-radius: 16px; border: 1px solid #EAE5DC; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.04);">
-          
-          <!-- Header -->
-          <div style="background-color: #052219; padding: 32px 24px; text-align: center;">
-            <h1 style="color: #FFFFFF; margin: 0; font-size: 24px; letter-spacing: -0.5px;">Flemela Bookstore</h1>
-            <p style="color: #2EE59D; margin: 6px 0 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">
-              Order Confirmed &amp; Verified
-            </p>
-          </div>
-
-          <!-- Body -->
-          <div style="padding: 32px 24px;">
-            <p style="font-size: 15px; margin-top: 0;">
-              Hello <strong>${payload.customerName}</strong>,
-            </p>
-            <p style="font-size: 14px; color: #4A5568; line-height: 1.6;">
-              Thank you for reading with Flemela. Your payment of <strong>KSh ${payload.total.toLocaleString('en-KE')}</strong> for Order <strong>#${orderRef}</strong> has been received and confirmed.
-            </p>
-
-            ${digitalDownloadCardsHtml}
-            ${physicalDeliveryHtml}
-
-            <!-- Permanent Recovery Button -->
-            <div style="text-align: center; margin: 32px 0 16px 0;">
-              <a href="${recoveryUrl}" style="background-color: #F05A36; color: #FFFFFF; text-decoration: none; padding: 14px 28px; font-size: 14px; font-weight: bold; border-radius: 8px; display: inline-block; box-shadow: 0 2px 8px rgba(240, 90, 54, 0.3);">
-                View Live Order &amp; Library Access
-              </a>
-            </div>
-
-            <p style="font-size: 12px; color: #718096; text-align: center; margin-top: 12px;">
-              You can access this link at any time to recover your order details or digital downloads.
-            </p>
-
-            <!-- Order Meta -->
-            <div style="border-top: 1px solid #E2E8F0; margin-top: 28px; padding-top: 20px; font-size: 12px; color: #718096;">
-              <div><strong>Destination:</strong> ${payload.deliveryLocation}</div>
-              <div style="margin-top: 4px;"><strong>Customer Contact:</strong> ${payload.customerPhone}</div>
-            </div>
-          </div>
-
-          <!-- Footer -->
-          <div style="background-color: #F8F9FA; padding: 20px; text-align: center; font-size: 11px; color: #A0AEC0; border-top: 1px solid #EDF2F7;">
-            &copy; ${new Date().getFullYear()} Flemela Bookstore • Sarit Centre, Westlands, Nairobi.<br>
-            Need assistance? Reach out to our concierge at <a href="https://wa.me/254143304460" style="color: #052219; font-weight: bold;">WhatsApp Concierge (0143304460)</a>
-          </div>
-        </div>
-      </body>
-    </html>
-  `;
-
-  try {
-    await mailer.sendMail({
-      from: env.SMTP_FROM,
-      to: payload.toEmail,
-      subject: `📚 Your Flemela Books Are Ready! [Order #${orderRef}]`,
-      html: htmlBody,
-    });
-    logger.info(`Transactional email dispatched to ${payload.toEmail} for Order #${orderRef}`);
-    return true;
-  } catch (err: any) {
-    logger.error({ err: err.message, to: payload.toEmail }, 'Failed to dispatch order email');
-    return false;
-  }
-}
-</file>
-
 <file path="src/tests/e2e-delivery-flow.test.ts">
 // =============================================================================
 // src/tests/e2e-delivery-flow.test.ts
@@ -8081,199 +8550,6 @@ router.post('/google-sheet', startGoogleSheetImportHandler);
 router.get('/:id', getImportStatusHandler);
 
 export default router;
-</file>
-
-<file path="src/verticals/books/delivery.service.ts">
-// =============================================================================
-// soko-api/src/verticals/books/delivery.service.ts
-// Digital fulfillment engine for books: snapshots assets and dispatches emails.
-// =============================================================================
-
-import crypto from 'crypto';
-import { PoolClient } from 'pg';
-import { pool } from '../../config/db';
-import { sendOrderConfirmationEmail } from '../../services/email.service';
-import pino from 'pino';
-
-const logger = pino();
-
-export interface DigitalFulfillmentItem {
-  order_item_id: string;
-  format_id: string | null;
-  file_url: string;
-  file_public_id: string | null;
-  file_size_bytes: string | null;
-  format: 'pdf' | 'epub';
-  book_title: string;
-}
-
-export function generateDownloadToken(): string {
-  return crypto.randomBytes(32).toString('hex');
-}
-
-/**
- * Fulfills all digital items for an order:
- * 1. Snapshots book title, format, and R2 key into digital_downloads.
- * 2. Sets 90-day TTL and 15 download attempts.
- * 3. Triggers out-of-band email dispatch via Nodemailer asynchronously.
- */
-export async function fulfillDigitalItems(
-  orderId: string,
-  existingClient?: PoolClient
-): Promise<void> {
-  const runner = existingClient || (await pool.connect());
-  const shouldManageTxn = !existingClient;
-
-  try {
-    if (shouldManageTxn) {
-      await runner.query('BEGIN');
-    }
-
-    // 1. Resolve digital line items with format file links
-    const itemsRes = await runner.query<DigitalFulfillmentItem>(
-      `SELECT oi.id AS order_item_id,
-              oi.format_id,
-              COALESCE(pf.file_url, pf.file_public_id) AS file_url,
-              pf.file_public_id,
-              pf.file_size_bytes::text AS file_size_bytes,
-              COALESCE(pf.format, 'pdf') AS format,
-              p.name AS book_title
-       FROM order_items oi
-       LEFT JOIN product_formats pf ON pf.id = oi.format_id
-       LEFT JOIN products p ON p.id = pf.product_id OR p.id = oi.product_id
-       WHERE oi.order_id = $1
-         AND (oi.delivery_method = 'digital' OR pf.format IN ('pdf', 'epub'))
-         AND (pf.file_url IS NOT NULL OR pf.file_public_id IS NOT NULL)`,
-      [orderId]
-    );
-
-    const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000); // 90-Day Access Window
-    const generatedTokens: Array<{ bookTitle: string; format: string; token: string }> = [];
-
-    for (const item of itemsRes.rows) {
-      const existing = await runner.query<{ id: string; download_token: string }>(
-        `SELECT id, download_token FROM digital_downloads WHERE order_item_id = $1`,
-        [item.order_item_id]
-      );
-
-      if (existing.rows.length === 0) {
-        const token = generateDownloadToken();
-
-        await runner.query(
-          `INSERT INTO digital_downloads (
-             order_item_id, format_id, download_token, max_downloads, download_count,
-             expires_at, book_title, format, file_url, file_public_id, file_size_bytes
-           )
-           VALUES ($1, $2, $3, 15, 0, $4, $5, $6, $7, $8, $9)`,
-          [
-            item.order_item_id,
-            item.format_id,
-            token,
-            expiresAt,
-            item.book_title,
-            item.format,
-            item.file_url,
-            item.file_public_id,
-            item.file_size_bytes ? parseInt(item.file_size_bytes, 10) : null,
-          ]
-        );
-
-        generatedTokens.push({
-          bookTitle: item.book_title,
-          format: item.format,
-          token,
-        });
-      } else {
-        generatedTokens.push({
-          bookTitle: item.book_title,
-          format: item.format,
-          token: existing.rows[0].download_token,
-        });
-      }
-    }
-
-    if (shouldManageTxn) {
-      await runner.query('COMMIT');
-    }
-
-    // 2. Asynchronously Dispatch Out-of-Band Email (Non-blocking)
-    setImmediate(async () => {
-      try {
-        const orderInfo = await pool.query<{
-          id: string;
-          customer_name: string;
-          customer_email: string | null;
-          customer_phone: string;
-          total: string;
-          delivery_type: 'delivery' | 'pickup';
-          delivery_confirmation_code: string | null;
-          delivery_location: string;
-        }>(
-          `SELECT id, customer_name, customer_email, customer_phone,
-                  total::text AS total, delivery_type, delivery_confirmation_code, delivery_location
-           FROM orders
-           WHERE id = $1`,
-          [orderId]
-        );
-
-        const order = orderInfo.rows[0];
-        if (order && order.customer_email && order.customer_email.includes('@')) {
-          await sendOrderConfirmationEmail({
-            toEmail: order.customer_email,
-            customerName: order.customer_name,
-            customerPhone: order.customer_phone,
-            orderId: order.id,
-            total: parseFloat(order.total),
-            downloads: generatedTokens,
-            deliveryType: order.delivery_type,
-            deliveryConfirmationCode: order.delivery_confirmation_code,
-            deliveryLocation: order.delivery_location,
-          });
-        }
-      } catch (emailErr: any) {
-        logger.error({ err: emailErr.message, orderId }, 'Background email trigger error');
-      }
-    });
-  } catch (err) {
-    if (shouldManageTxn) {
-      await runner.query('ROLLBACK');
-    }
-    throw err;
-  } finally {
-    if (shouldManageTxn) {
-      runner.release();
-    }
-  }
-}
-
-/**
- * Sweeps and retroactively fulfills orders when an admin uploads a file to an existing format.
- */
-export async function reconcilePendingDownloadsForFormat(formatId: string): Promise<number> {
-  const client = await pool.connect();
-  try {
-    const unfulfilled = await client.query<{ order_id: string }>(
-      `SELECT DISTINCT oi.order_id
-       FROM order_items oi
-       JOIN orders o ON o.id = oi.order_id
-       LEFT JOIN digital_downloads dd ON dd.order_item_id = oi.id
-       WHERE oi.format_id = $1
-         AND o.payment_status = 'paid'
-         AND dd.id IS NULL`,
-      [formatId]
-    );
-
-    let fulfilledCount = 0;
-    for (const row of unfulfilled.rows) {
-      await fulfillDigitalItems(row.order_id, client);
-      fulfilledCount++;
-    }
-
-    return fulfilledCount;
-  } finally {
-    client.release();
-  }
-}
 </file>
 
 <file path="src/server.ts">
@@ -11798,6 +12074,313 @@ export function parseCallback(body: unknown): MpesaCallbackResult {
 }
 </file>
 
+<file path="src/services/email.service.ts">
+// =============================================================================
+// soko-api/src/services/email.service.ts
+// Dynamic Tenant-Aware Transporter Pool with Automatic Fallback Strategy
+// =============================================================================
+
+import nodemailer from 'nodemailer';
+import crypto from 'crypto';
+import { env } from '../config/env';
+import { getDecryptedSmtpCredentials } from '../modules/smtp/smtp.queries';
+import pino from 'pino';
+
+const logger = pino();
+
+interface CachedTransporter {
+  transporter: nodemailer.Transporter;
+  fingerprint: string;
+  fromAddress: string;
+  replyToAddress?: string | null;
+}
+
+// In-memory pool of open SMTP connection pools per organization
+const transporterPool = new Map<string, CachedTransporter>();
+
+/**
+ * Invalidates cached transporter when credentials for an org change.
+ */
+export function invalidateTransporterCache(orgId: string): void {
+  const cached = transporterPool.get(orgId);
+  if (cached) {
+    cached.transporter.close();
+    transporterPool.delete(orgId);
+    logger.info({ orgId }, 'Invalidated cached SMTP transporter for organization');
+  }
+}
+
+function computeFingerprint(host: string, port: number, user: string, pass: string): string {
+  return crypto.createHash('sha256').update(`${host}:${port}:${user}:${pass}`).digest('hex');
+}
+
+/**
+ * Resolves the authenticated transporter for a given tenant:
+ * 1. Checks if the organization has verified custom SMTP credentials.
+ * 2. Checks and reuses the active pool if fingerprint matches.
+ * 3. Falls back to platform default SMTP if tenant has none configured.
+ */
+async function resolveTransporterForOrg(orgId?: string): Promise<{
+  transporter: nodemailer.Transporter;
+  from: string;
+  replyTo?: string | null;
+} | null> {
+  // 1. Check for Tenant-Specific SMTP
+  if (orgId) {
+    try {
+      const creds = await getDecryptedSmtpCredentials(orgId);
+
+      if (creds && creds.status === 'verified') {
+        const fingerprint = computeFingerprint(
+          creds.smtpHost,
+          creds.smtpPort,
+          creds.smtpUser,
+          creds.smtpPass
+        );
+
+        const cached = transporterPool.get(orgId);
+        if (cached && cached.fingerprint === fingerprint) {
+          return {
+            transporter: cached.transporter,
+            from: cached.fromAddress,
+            replyTo: cached.replyToAddress,
+          };
+        }
+
+        // Evict old transporter if exists
+        if (cached) {
+          cached.transporter.close();
+        }
+
+        const freshTransporter = nodemailer.createTransport({
+          host: creds.smtpHost,
+          port: creds.smtpPort,
+          secure: creds.smtpSecure,
+          auth: {
+            user: creds.smtpUser,
+            pass: creds.smtpPass,
+          },
+          pool: true,
+          maxConnections: 5,
+          maxMessages: 100,
+        });
+
+        const fromAddress = `"${creds.fromName}" <${creds.fromEmail}>`;
+
+        transporterPool.set(orgId, {
+          transporter: freshTransporter,
+          fingerprint,
+          fromAddress,
+          replyToAddress: creds.replyTo,
+        });
+
+        return {
+          transporter: freshTransporter,
+          from: fromAddress,
+          replyTo: creds.replyTo,
+        };
+      }
+    } catch (err: any) {
+      logger.warn({ err: err.message, orgId }, 'Failed to resolve tenant custom SMTP. Attempting platform fallback.');
+    }
+  }
+
+  // 2. Global Platform Fallback SMTP
+  if (env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS) {
+    const globalCached = transporterPool.get('__platform_default__');
+    const globalFingerprint = computeFingerprint(
+      env.SMTP_HOST,
+      env.SMTP_PORT,
+      env.SMTP_USER,
+      env.SMTP_PASS
+    );
+
+    if (globalCached && globalCached.fingerprint === globalFingerprint) {
+      return {
+        transporter: globalCached.transporter,
+        from: globalCached.fromAddress,
+      };
+    }
+
+    const platformTransporter = nodemailer.createTransport({
+      host: env.SMTP_HOST,
+      port: env.SMTP_PORT,
+      secure: env.SMTP_SECURE,
+      auth: {
+        user: env.SMTP_USER,
+        pass: env.SMTP_PASS,
+      },
+      pool: true,
+      maxConnections: 5,
+      maxMessages: 100,
+    });
+
+    transporterPool.set('__platform_default__', {
+      transporter: platformTransporter,
+      fingerprint: globalFingerprint,
+      fromAddress: env.SMTP_FROM,
+    });
+
+    return {
+      transporter: platformTransporter,
+      from: env.SMTP_FROM,
+    };
+  }
+
+  return null;
+}
+
+export interface EmailDownloadItem {
+  bookTitle: string;
+  format: string;
+  token: string;
+}
+
+export interface SendOrderEmailPayload {
+  orgId?: string;
+  toEmail: string;
+  customerName: string;
+  customerPhone: string;
+  orderId: string;
+  total: number;
+  downloads: EmailDownloadItem[];
+  deliveryType: 'delivery' | 'pickup';
+  deliveryConfirmationCode: string | null;
+  deliveryLocation: string;
+}
+
+export async function sendOrderConfirmationEmail(
+  payload: SendOrderEmailPayload
+): Promise<boolean> {
+  const mailChannel = await resolveTransporterForOrg(payload.orgId);
+  if (!mailChannel) {
+    logger.warn({ orgId: payload.orgId }, 'No verified tenant SMTP or platform fallback configured. Email skipped.');
+    return false;
+  }
+
+  const frontendUrl = env.FRONTEND_URL.replace(/\/$/, '');
+  const publicApiUrl = env.API_PUBLIC_URL.replace(/\/$/, '');
+  const recoveryUrl = `${frontendUrl}/checkout/confirm?orderId=${payload.orderId}&phone=${encodeURIComponent(payload.customerPhone)}`;
+  const orderRef = payload.orderId.slice(0, 8).toUpperCase();
+
+  const digitalDownloadCardsHtml = payload.downloads.length > 0
+    ? `
+      <div style="margin: 24px 0; padding: 20px; background-color: #F8F9FA; border-radius: 12px; border: 1px solid #E5E7EB;">
+        <h3 style="margin: 0 0 14px 0; color: #111315; font-size: 16px; text-transform: uppercase; letter-spacing: 0.5px;">
+          📖 Your Digital Editions (Direct Download)
+        </h3>
+        <p style="margin: 0 0 16px 0; font-size: 13px; color: #656F7D; line-height: 1.5;">
+          Your digital copies are hosted in high-speed storage and ready to read immediately. Access is valid for 90 days.
+        </p>
+        ${payload.downloads.map(dl => {
+          const dlLink = `${publicApiUrl}/api/v1/books/download/${dl.token}?redirect=true`;
+          return `
+            <div style="margin-bottom: 12px; padding: 14px; background: #FFFFFF; border-radius: 8px; border: 1px solid #E5E7EB; display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <strong style="color: #111315; font-size: 14px; display: block;">${dl.bookTitle}</strong>
+                <span style="display: inline-block; margin-top: 4px; padding: 2px 8px; background: #111315; color: #E50914; font-size: 10px; font-weight: bold; border-radius: 4px; text-transform: uppercase;">
+                  ${dl.format.toUpperCase()} EBOOK
+                </span>
+              </div>
+              <div style="margin-top: 8px;">
+                <a href="${dlLink}" style="background-color: #E50914; color: #FFFFFF; text-decoration: none; padding: 10px 18px; font-size: 12px; font-weight: bold; border-radius: 6px; display: inline-block;">
+                  Download ${dl.format.toUpperCase()}
+                </a>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `
+    : '';
+
+  const physicalDeliveryHtml = payload.deliveryConfirmationCode
+    ? `
+      <div style="margin: 24px 0; padding: 18px; background-color: #F0FDF4; border: 1px dashed #16A34A; border-radius: 12px; text-align: center;">
+        <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #166534; font-weight: bold; display: block;">
+          Courier Delivery Handover Code
+        </span>
+        <div style="font-size: 28px; font-family: monospace; font-weight: 800; letter-spacing: 6px; color: #111315; margin: 10px 0;">
+          ${payload.deliveryConfirmationCode.split('').join(' ')}
+        </div>
+        <p style="margin: 0; font-size: 12px; color: #4B5563;">
+          Read this 4-digit code to your dispatch rider upon delivery to confirm handover.
+        </p>
+      </div>
+    `
+    : '';
+
+  const htmlBody = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Order #${orderRef} Confirmed</title>
+      </head>
+      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F8F9FA; margin: 0; padding: 24px; color: #14171A;">
+        <div style="max-width: 600px; margin: 0 auto; background-color: #FFFFFF; border-radius: 16px; border: 1px solid #E5E7EB; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.04);">
+          
+          <div style="background-color: #111315; padding: 32px 24px; text-align: center;">
+            <h1 style="color: #FFFFFF; margin: 0; font-size: 24px; letter-spacing: -0.5px;">EbookStore</h1>
+            <p style="color: #E50914; margin: 6px 0 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700;">
+              Order Confirmed &amp; Verified
+            </p>
+          </div>
+
+          <div style="padding: 32px 24px;">
+            <p style="font-size: 15px; margin-top: 0;">
+              Hello <strong>${payload.customerName}</strong>,
+            </p>
+            <p style="font-size: 14px; color: #656F7D; line-height: 1.6;">
+              Thank you for your purchase. Your payment of <strong>KSh ${payload.total.toLocaleString('en-KE')}</strong> for Order <strong>#${orderRef}</strong> has been received and confirmed.
+            </p>
+
+            ${digitalDownloadCardsHtml}
+            ${physicalDeliveryHtml}
+
+            <div style="text-align: center; margin: 32px 0 16px 0;">
+              <a href="${recoveryUrl}" style="background-color: #E50914; color: #FFFFFF; text-decoration: none; padding: 14px 28px; font-size: 14px; font-weight: bold; border-radius: 8px; display: inline-block; box-shadow: 0 2px 8px rgba(229, 9, 20, 0.3);">
+                View Live Order &amp; Library Access
+              </a>
+            </div>
+
+            <p style="font-size: 12px; color: #9AA2AD; text-align: center; margin-top: 12px;">
+              You can access this link at any time to recover your order details or digital downloads.
+            </p>
+
+            <div style="border-top: 1px solid #E5E7EB; margin-top: 28px; padding-top: 20px; font-size: 12px; color: #656F7D;">
+              <div><strong>Destination:</strong> ${payload.deliveryLocation}</div>
+              <div style="margin-top: 4px;"><strong>Customer Contact:</strong> ${payload.customerPhone}</div>
+            </div>
+          </div>
+
+          <div style="background-color: #0B0C0E; padding: 20px; text-align: center; font-size: 11px; color: #9AA2AD; border-top: 1px solid rgba(255,255,255,0.1);">
+            &copy; ${new Date().getFullYear()} EbookStore • Instant Cloudflare R2 Digital Delivery.<br>
+            Need assistance? Reach out to your bookstore concierge directly on WhatsApp.
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+
+  try {
+    await mailChannel.transporter.sendMail({
+      from: mailChannel.from,
+      to: payload.toEmail,
+      replyTo: mailChannel.replyTo || undefined,
+      subject: `📚 Your Books Are Ready! [Order #${orderRef}]`,
+      html: htmlBody,
+    });
+    logger.info({ to: payload.toEmail, orderRef, from: mailChannel.from }, 'Transactional order confirmation email dispatched');
+    return true;
+  } catch (err: any) {
+    logger.error({ err: err.message, to: payload.toEmail, orderRef }, 'Failed to dispatch order email');
+    return false;
+  }
+}
+</file>
+
 <file path="src/tests/e2e-integration.test.ts">
 // =============================================================================
 // soko-api/src/tests/e2e-integration.test.ts
@@ -12078,6 +12661,201 @@ export async function getJobStatus(
     throw new AppError('Import job not found', 404);
   }
   return record;
+}
+</file>
+
+<file path="src/verticals/books/delivery.service.ts">
+// =============================================================================
+// soko-api/src/verticals/books/delivery.service.ts
+// Digital fulfillment engine for books: snapshots assets and dispatches emails.
+// =============================================================================
+
+import crypto from 'crypto';
+import { PoolClient } from 'pg';
+import { pool } from '../../config/db';
+import { sendOrderConfirmationEmail } from '../../services/email.service';
+import pino from 'pino';
+
+const logger = pino();
+
+export interface DigitalFulfillmentItem {
+  order_item_id: string;
+  format_id: string | null;
+  file_url: string;
+  file_public_id: string | null;
+  file_size_bytes: string | null;
+  format: 'pdf' | 'epub';
+  book_title: string;
+}
+
+export function generateDownloadToken(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+/**
+ * Fulfills all digital items for an order:
+ * 1. Snapshots book title, format, and R2 key into digital_downloads.
+ * 2. Sets 90-day TTL and 15 download attempts.
+ * 3. Resolves tenant org_id and dispatches email via tenant-specific SMTP.
+ */
+export async function fulfillDigitalItems(
+  orderId: string,
+  existingClient?: PoolClient
+): Promise<void> {
+  const runner = existingClient || (await pool.connect());
+  const shouldManageTxn = !existingClient;
+
+  try {
+    if (shouldManageTxn) {
+      await runner.query('BEGIN');
+    }
+
+    // 1. Resolve digital line items with format file links
+    const itemsRes = await runner.query<DigitalFulfillmentItem>(
+      `SELECT oi.id AS order_item_id,
+              oi.format_id,
+              COALESCE(pf.file_url, pf.file_public_id) AS file_url,
+              pf.file_public_id,
+              pf.file_size_bytes::text AS file_size_bytes,
+              COALESCE(pf.format, 'pdf') AS format,
+              p.name AS book_title
+       FROM order_items oi
+       LEFT JOIN product_formats pf ON pf.id = oi.format_id
+       LEFT JOIN products p ON p.id = pf.product_id OR p.id = oi.product_id
+       WHERE oi.order_id = $1
+         AND (oi.delivery_method = 'digital' OR pf.format IN ('pdf', 'epub'))
+         AND (pf.file_url IS NOT NULL OR pf.file_public_id IS NOT NULL)`,
+      [orderId]
+    );
+
+    const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000); // 90-Day Access Window
+    const generatedTokens: Array<{ bookTitle: string; format: string; token: string }> = [];
+
+    for (const item of itemsRes.rows) {
+      const existing = await runner.query<{ id: string; download_token: string }>(
+        `SELECT id, download_token FROM digital_downloads WHERE order_item_id = $1`,
+        [item.order_item_id]
+      );
+
+      if (existing.rows.length === 0) {
+        const token = generateDownloadToken();
+
+        await runner.query(
+          `INSERT INTO digital_downloads (
+             order_item_id, format_id, download_token, max_downloads, download_count,
+             expires_at, book_title, format, file_url, file_public_id, file_size_bytes
+           )
+           VALUES ($1, $2, $3, 15, 0, $4, $5, $6, $7, $8, $9)`,
+          [
+            item.order_item_id,
+            item.format_id,
+            token,
+            expiresAt,
+            item.book_title,
+            item.format,
+            item.file_url,
+            item.file_public_id,
+            item.file_size_bytes ? parseInt(item.file_size_bytes, 10) : null,
+          ]
+        );
+
+        generatedTokens.push({
+          bookTitle: item.book_title,
+          format: item.format,
+          token,
+        });
+      } else {
+        generatedTokens.push({
+          bookTitle: item.book_title,
+          format: item.format,
+          token: existing.rows[0].download_token,
+        });
+      }
+    }
+
+    if (shouldManageTxn) {
+      await runner.query('COMMIT');
+    }
+
+    // 2. Asynchronously Dispatch Out-of-Band Email with org_id binding
+    setImmediate(async () => {
+      try {
+        const orderInfo = await pool.query<{
+          id: string;
+          org_id: string;
+          customer_name: string;
+          customer_email: string | null;
+          customer_phone: string;
+          total: string;
+          delivery_type: 'delivery' | 'pickup';
+          delivery_confirmation_code: string | null;
+          delivery_location: string;
+        }>(
+          `SELECT id, org_id, customer_name, customer_email, customer_phone,
+                  total::text AS total, delivery_type, delivery_confirmation_code, delivery_location
+           FROM orders
+           WHERE id = $1`,
+          [orderId]
+        );
+
+        const order = orderInfo.rows[0];
+        if (order && order.customer_email && order.customer_email.includes('@')) {
+          await sendOrderConfirmationEmail({
+            orgId: order.org_id, // Pass tenant org_id to resolve tenant-specific SMTP
+            toEmail: order.customer_email,
+            customerName: order.customer_name,
+            customerPhone: order.customer_phone,
+            orderId: order.id,
+            total: parseFloat(order.total),
+            downloads: generatedTokens,
+            deliveryType: order.delivery_type,
+            deliveryConfirmationCode: order.delivery_confirmation_code,
+            deliveryLocation: order.delivery_location,
+          });
+        }
+      } catch (emailErr: any) {
+        logger.error({ err: emailErr.message, orderId }, 'Background email trigger error');
+      }
+    });
+  } catch (err) {
+    if (shouldManageTxn) {
+      await runner.query('ROLLBACK');
+    }
+    throw err;
+  } finally {
+    if (shouldManageTxn) {
+      runner.release();
+    }
+  }
+}
+
+/**
+ * Sweeps and retroactively fulfills orders when an admin uploads a file to an existing format.
+ */
+export async function reconcilePendingDownloadsForFormat(formatId: string): Promise<number> {
+  const client = await pool.connect();
+  try {
+    const unfulfilled = await client.query<{ order_id: string }>(
+      `SELECT DISTINCT oi.order_id
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       LEFT JOIN digital_downloads dd ON dd.order_item_id = oi.id
+       WHERE oi.format_id = $1
+         AND o.payment_status = 'paid'
+         AND dd.id IS NULL`,
+      [formatId]
+    );
+
+    let fulfilledCount = 0;
+    for (const row of unfulfilled.rows) {
+      await fulfillDigitalItems(row.order_id, client);
+      fulfilledCount++;
+    }
+
+    return fulfilledCount;
+  } finally {
+    client.release();
+  }
 }
 </file>
 
@@ -14158,403 +14936,6 @@ export async function handleMpesaCallback(rawPayload: unknown): Promise<void> {
 }
 </file>
 
-<file path="src/services/bookCover.service.ts">
-// =============================================================================
-// soko-api/src/services/bookCover.service.ts
-// Multi-Source HD (800px+) Book Cover Engine with Rate-Limit Circuit Breakers
-// =============================================================================
-
-import axios from 'axios';
-import { env } from '../config/env';
-
-export interface CoverSearchResult {
-  coverUrl: string | null;
-  title: string;
-  author?: string;
-  source: 'applebooks' | 'openlibrary' | 'googlebooks' | 'goodreads' | null;
-}
-
-// In-memory cache across searches
-const searchCache = new Map<string, { result: CoverSearchResult; timestamp: number }>();
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 Hours
-
-// Circuit breaker: pauses Google Books on HTTP 429 to avoid spamming a locked IP
-let googleBooksBlockedUntil = 0;
-
-// -----------------------------------------------------------------------------
-// 1. String Sanitizers & ISBN Validation
-// -----------------------------------------------------------------------------
-
-export function cleanTitleString(input: string): { full: string; primary: string; searchTerms: string[] } {
-  if (!input) return { full: '', primary: '', searchTerms: [] };
-
-  const sanitized = input
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/^by\s+/i, '')
-    .replace(/^(?:author|title):\s*/i, '')
-    // Strip ONLY technical edition/format brackets, keeping creative subtitles
-    .replace(/\s*[\(\[][^\)\]]*(?:edition|paperback|hardcover|anniversary|reprint|series|vol\.|volume|copy)[^\)\]]*[\)\]]/gi, ' ')
-    .replace(/\.(?:pdf|epub|mobi|azw3?)$/i, '')
-    .replace(/[“”"]/g, '')
-    .replace(/[\u2018\u2019']/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  // Primary title (before colon or spaced dash)
-  const parts = sanitized.split(/\s*[:–—]\s*|\s+-\s+/);
-  const primary = (parts[0] || sanitized).trim();
-
-  // Strip parentheses for providers that struggle with punctuation
-  const noParens = sanitized.replace(/[\(\)\[\]\{\}]/g, ' ').replace(/\s+/g, ' ').trim();
-
-  const searchTerms = Array.from(new Set([sanitized, primary, noParens])).filter((t) => t.length > 0);
-
-  return { full: sanitized, primary, searchTerms };
-}
-
-export function cleanAuthorString(input?: string | null): string {
-  if (!input) return '';
-  return input
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/^by\s+/i, '')
-    .replace(/^(?:author|written by):\s*/i, '')
-    .replace(/\s+(?:and|with|&|\+)\s+.*$/i, '')
-    .replace(/,\s*.*$/, '')
-    .replace(/\b(?:Ph\.?D\.?|M\.?D\.?|Dr\.?|Prof\.?|Esq\.?)\b/gi, '')
-    .replace(/[\(\[\{][^\)\]\}]*[\)\]\}]/g, ' ')
-    .replace(/[^\w\s'.]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-export function isValidIsbn10(isbn: string): boolean {
-  if (!/^[0-9]{9}[0-9X]$/i.test(isbn)) return false;
-  let sum = 0;
-  for (let i = 0; i < 9; i++) {
-    sum += parseInt(isbn[i], 10) * (10 - i);
-  }
-  const checkChar = isbn[9].toUpperCase();
-  sum += checkChar === 'X' ? 10 : parseInt(checkChar, 10);
-  return sum % 11 === 0;
-}
-
-export function isValidIsbn13(isbn: string): boolean {
-  if (!/^97[89][0-9]{10}$/.test(isbn)) return false;
-  let sum = 0;
-  for (let i = 0; i < 13; i++) {
-    const digit = parseInt(isbn[i], 10);
-    sum += i % 2 === 0 ? digit : digit * 3;
-  }
-  return sum % 10 === 0;
-}
-
-export function extractValidIsbn(raw?: string | null): string | null {
-  if (!raw) return null;
-  const digits = raw.replace(/[^0-9X]/gi, '').toUpperCase();
-  if (digits.length === 10 && isValidIsbn10(digits)) return digits;
-  if (digits.length === 13 && isValidIsbn13(digits)) return digits;
-  return null;
-}
-
-// -----------------------------------------------------------------------------
-// 2. Provider 1: Apple Books / iTunes Storefront (No Rate Limits, High Res)
-// -----------------------------------------------------------------------------
-
-async function queryAppleBooks(
-  searchTerm: string,
-  author?: string
-): Promise<{ url: string; title: string; author?: string } | null> {
-  const query = author ? `${searchTerm} ${author}` : searchTerm;
-  const url = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=ibook&limit=3`;
-
-  try {
-    const res = await axios.get<{
-      resultCount: number;
-      results: Array<{ trackCensoredName: string; artistName: string; artworkUrl100?: string }>;
-    }>(url, {
-      timeout: 4500,
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; FlemelaCoverEngine/2.0)' },
-    });
-
-    if (res.data?.resultCount > 0) {
-      for (const item of res.data.results) {
-        if (item.artworkUrl100) {
-          // Uncap Apple's 100x100 thumbnail to full-quality 800x800+ publisher artwork
-          const hdUrl = item.artworkUrl100
-            .replace('100x100bb', '800x800bb')
-            .replace('100x100', '800x800');
-
-          return {
-            url: hdUrl,
-            title: item.trackCensoredName,
-            author: item.artistName,
-          };
-        }
-      }
-    }
-  } catch {
-    // Non-blocking cascade
-  }
-
-  return null;
-}
-
-// -----------------------------------------------------------------------------
-// 3. Provider 2: Open Library (Direct Cover IDs & ISBNs)
-// -----------------------------------------------------------------------------
-
-async function queryOpenLibrary(
-  searchTerms: string[],
-  cleanAuthor?: string,
-  validIsbn?: string | null
-): Promise<{ url: string; title: string; author?: string } | null> {
-  // Direct ISBN cover
-  if (validIsbn) {
-    return {
-      url: `https://covers.openlibrary.org/b/isbn/${validIsbn}-L.jpg`,
-      title: searchTerms[0] || 'Book',
-      author: cleanAuthor,
-    };
-  }
-
-  // Open Library Search
-  for (const term of searchTerms) {
-    try {
-      const q = cleanAuthor ? `${term} ${cleanAuthor}` : term;
-      const olUrl = `https://openlibrary.org/search.json?q=${encodeURIComponent(q)}&fields=key,title,author_name,cover_i,isbn&limit=5`;
-
-      const res = await axios.get<{
-        docs: Array<{ title: string; author_name?: string[]; cover_i?: number; isbn?: string[] }>;
-      }>(olUrl, {
-        timeout: 6000,
-        headers: { 'User-Agent': 'FlemelaBookstore/2.0 (concierge@flemela.co.ke)' },
-      });
-
-      const docs = res.data?.docs || [];
-      for (const doc of docs) {
-        if (doc.cover_i && typeof doc.cover_i === 'number' && doc.cover_i > 0) {
-          return {
-            url: `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`,
-            title: doc.title || term,
-            author: doc.author_name?.[0] || cleanAuthor,
-          };
-        }
-        if (doc.isbn && doc.isbn.length > 0) {
-          return {
-            url: `https://covers.openlibrary.org/b/isbn/${doc.isbn[0]}-L.jpg`,
-            title: doc.title || term,
-            author: doc.author_name?.[0] || cleanAuthor,
-          };
-        }
-      }
-    } catch {
-      // Continue to next search term
-    }
-  }
-
-  return null;
-}
-
-// -----------------------------------------------------------------------------
-// 4. Provider 3: Google Books (Protected by Circuit Breaker)
-// -----------------------------------------------------------------------------
-
-function transformGoogleBooksToHd(volumeId: string, rawUrl?: string): string {
-  if (volumeId) {
-    return `https://books.google.com/books/publisher/content/images/frontcover/${volumeId}?fife=w800&source=gbs_api`;
-  }
-  if (rawUrl) {
-    return rawUrl
-      .replace(/^http:\/\//i, 'https://')
-      .replace(/&edge=curl/gi, '')
-      .replace(/&zoom=[1-9]/gi, '&zoom=0')
-      .concat(rawUrl.includes('fife=') ? '' : '&fife=w800');
-  }
-  return '';
-}
-
-async function queryGoogleBooks(
-  queryParam: string,
-  apiKey?: string
-): Promise<{ url: string; volumeId: string; title: string; author?: string } | null> {
-  // If IP is locked in a 429 cooldown, skip Google Books entirely
-  if (Date.now() < googleBooksBlockedUntil) {
-    return null;
-  }
-
-  const url = new URL('https://www.googleapis.com/books/v1/volumes');
-  url.searchParams.set('q', queryParam);
-  url.searchParams.set('maxResults', '3');
-  url.searchParams.set('printType', 'books');
-  if (apiKey) url.searchParams.set('key', apiKey);
-
-  try {
-    const res = await axios.get(url.toString(), {
-      timeout: 5000,
-      headers: { 'User-Agent': 'Flemela-GoogleBooks-Resolver/2.0' },
-    });
-
-    const items = res.data?.items || [];
-    for (const item of items) {
-      const volumeId = item.id;
-      const volumeInfo = item.volumeInfo || {};
-      const imageLinks = volumeInfo.imageLinks;
-
-      if (imageLinks) {
-        const candidateUrl =
-          imageLinks.extraLarge ||
-          imageLinks.large ||
-          imageLinks.medium ||
-          imageLinks.thumbnail ||
-          imageLinks.smallThumbnail;
-
-        if (candidateUrl) {
-          const hdUrl = transformGoogleBooksToHd(volumeId, candidateUrl);
-          return {
-            url: hdUrl,
-            volumeId,
-            title: volumeInfo.title || '',
-            author: volumeInfo.authors?.[0],
-          };
-        }
-      }
-    }
-  } catch (err: any) {
-    if (err.response?.status === 429) {
-      googleBooksBlockedUntil = Date.now() + 10 * 60 * 1000; // 10-minute circuit breaker
-      console.warn('⚠️ Google Books IP rate-limit active. Pausing Google Books for 10 minutes and shifting to Apple Books & Open Library.');
-    }
-  }
-
-  return null;
-}
-
-// -----------------------------------------------------------------------------
-// 5. Provider 4: Goodreads / Public BookCover API
-// -----------------------------------------------------------------------------
-
-async function queryGoodreads(
-  title: string,
-  author?: string,
-  isbn?: string | null
-): Promise<string | null> {
-  try {
-    let url = `https://bookcover.longitood.com/bookcover?book_title=${encodeURIComponent(title)}`;
-    if (author) url += `&author_name=${encodeURIComponent(author)}`;
-    if (isbn) url = `https://bookcover.longitood.com/bookcover?isbn=${isbn}`;
-
-    const res = await axios.get<{ url?: string }>(url, { timeout: 4500 });
-    let coverUrl = res.data?.url;
-
-    if (coverUrl && coverUrl.startsWith('http')) {
-      coverUrl = coverUrl.replace(/\._S[XY]\d+_\./i, '.');
-      return coverUrl;
-    }
-  } catch {
-    // Non-blocking
-  }
-  return null;
-}
-
-// -----------------------------------------------------------------------------
-// 6. Master Resolution Engine
-// -----------------------------------------------------------------------------
-
-export async function findBestBookCover(
-  rawTitle: string,
-  rawAuthor?: string,
-  rawIsbnOrSku?: string
-): Promise<CoverSearchResult> {
-  const { full: titleFull, primary: titlePrimary, searchTerms } = cleanTitleString(rawTitle);
-  const author = cleanAuthorString(rawAuthor);
-  const validIsbn = extractValidIsbn(rawIsbnOrSku);
-
-  if (!titleFull && !validIsbn) {
-    return { coverUrl: null, title: rawTitle, source: null };
-  }
-
-  // Check cache
-  const cacheKey = `${validIsbn || ''}_${titleFull.toLowerCase()}_${author.toLowerCase()}`;
-  const cached = searchCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-    return cached.result;
-  }
-
-  // ---------------------------------------------------------------------------
-  // STEP 1: Apple Books Storefront (Fast, Studio-Grade HD, No 429 Blocks)
-  // ---------------------------------------------------------------------------
-  for (const term of searchTerms) {
-    const appleResult = await queryAppleBooks(term, author);
-    if (appleResult?.url) {
-      const finalResult: CoverSearchResult = {
-        coverUrl: appleResult.url,
-        title: appleResult.title || rawTitle,
-        author: appleResult.author || rawAuthor,
-        source: 'applebooks',
-      };
-      searchCache.set(cacheKey, { result: finalResult, timestamp: Date.now() });
-      return finalResult;
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // STEP 2: Open Library (By ISBN or High-Speed Works Search)
-  // ---------------------------------------------------------------------------
-  const olResult = await queryOpenLibrary(searchTerms, author, validIsbn);
-  if (olResult?.url) {
-    const finalResult: CoverSearchResult = {
-      coverUrl: olResult.url,
-      title: olResult.title || rawTitle,
-      author: olResult.author || rawAuthor,
-      source: 'openlibrary',
-    };
-    searchCache.set(cacheKey, { result: finalResult, timestamp: Date.now() });
-    return finalResult;
-  }
-
-  // ---------------------------------------------------------------------------
-  // STEP 3: Google Books (If not in a 429 lockout window)
-  // ---------------------------------------------------------------------------
-  const apiKey = (env as any).GOOGLE_BOOKS_API_KEY || process.env.GOOGLE_BOOKS_API_KEY || undefined;
-  if (Date.now() >= googleBooksBlockedUntil) {
-    const gbooksQuery = validIsbn
-      ? `isbn:${validIsbn}`
-      : author
-      ? `intitle:"${titlePrimary}" inauthor:"${author}"`
-      : `intitle:"${titlePrimary}"`;
-
-    const gbooksResult = await queryGoogleBooks(gbooksQuery, apiKey);
-    if (gbooksResult?.url) {
-      const finalResult: CoverSearchResult = {
-        coverUrl: gbooksResult.url,
-        title: gbooksResult.title || rawTitle,
-        author: gbooksResult.author || rawAuthor,
-        source: 'googlebooks',
-      };
-      searchCache.set(cacheKey, { result: finalResult, timestamp: Date.now() });
-      return finalResult;
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // STEP 4: Goodreads / Public BookCover Fallback
-  // ---------------------------------------------------------------------------
-  const goodreadsUrl = await queryGoodreads(titlePrimary, author, validIsbn);
-  if (goodreadsUrl) {
-    const finalResult: CoverSearchResult = {
-      coverUrl: goodreadsUrl,
-      title: rawTitle,
-      author: rawAuthor,
-      source: 'goodreads',
-    };
-    searchCache.set(cacheKey, { result: finalResult, timestamp: Date.now() });
-    return finalResult;
-  }
-
-  return { coverUrl: null, title: rawTitle, source: null };
-}
-</file>
-
 <file path="src/config/env.ts">
 // =============================================================================
 // soko-api/src/config/env.ts
@@ -16013,6 +16394,320 @@ export async function savePromoTicker(orgId: string, rawBody: unknown) {
 }
 </file>
 
+<file path="src/services/bookCover.service.ts">
+// =============================================================================
+// soko-api/src/services/bookCover.service.ts
+// Multi-Source HD Cover Engine — APPLE BOOKS PRIORITY #1
+// =============================================================================
+
+import axios from 'axios';
+import { env } from '../config/env';
+
+export interface CoverSearchResult {
+  coverUrl: string | null;
+  title: string;
+  author?: string;
+  source: 'applebooks' | 'openlibrary' | 'googlebooks' | 'goodreads' | null;
+}
+
+const searchCache = new Map<string, { result: CoverSearchResult; timestamp: number }>();
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 Hours
+
+let googleBooksBlockedUntil = 0;
+
+export function cleanTitleString(input: string): { full: string; primary: string; searchTerms: string[] } {
+  if (!input) return { full: '', primary: '', searchTerms: [] };
+
+  const sanitized = input
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/^by\s+/i, '')
+    .replace(/^(?:author|title):\s*/i, '')
+    .replace(/\s*[\(\[][^\)\]]*(?:edition|paperback|hardcover|anniversary|reprint|series|vol\.|volume|copy)[^\)\]]*[\)\]]/gi, ' ')
+    .replace(/\.(?:pdf|epub|mobi|azw3?)$/i, '')
+    .replace(/[“”"]/g, '')
+    .replace(/[\u2018\u2019']/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const parts = sanitized.split(/\s*[:–—]\s*|\s+-\s+/);
+  const primary = (parts[0] || sanitized).trim();
+  const noParens = sanitized.replace(/[\(\)\[\]\{\}]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  const searchTerms = Array.from(new Set([sanitized, primary, noParens])).filter((t) => t.length > 0);
+  return { full: sanitized, primary, searchTerms };
+}
+
+export function cleanAuthorString(input?: string | null): string {
+  if (!input) return '';
+  return input
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/^by\s+/i, '')
+    .replace(/^(?:author|written by):\s*/i, '')
+    .replace(/\s+(?:and|with|&|\+)\s+.*$/i, '')
+    .replace(/,\s*.*$/, '')
+    .replace(/\b(?:Ph\.?D\.?|M\.?D\.?|Dr\.?|Prof\.?|Esq\.?)\b/gi, '')
+    .replace(/[\(\[\{][^\)\]\}]*[\)\]\}]/g, ' ')
+    .replace(/[^\w\s'.]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function extractValidIsbn(raw?: string | null): string | null {
+  if (!raw) return null;
+  const digits = raw.replace(/[^0-9X]/gi, '').toUpperCase();
+  if (digits.length === 10 || digits.length === 13) return digits;
+  return null;
+}
+
+// -----------------------------------------------------------------------------
+// Priority 1: Apple Books Storefront (Studio Publisher Artwork, No 429 Blocks)
+// -----------------------------------------------------------------------------
+async function queryAppleBooks(
+  searchTerm: string,
+  author?: string
+): Promise<{ url: string; title: string; author?: string } | null> {
+  // Try with author first; if that returns 0 results, query title alone
+  const queries = author
+    ? [`${searchTerm} ${author}`, searchTerm]
+    : [searchTerm];
+
+  for (const q of queries) {
+    const url = `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=ibook&country=us&limit=3`;
+
+    try {
+      const res = await axios.get<{
+        resultCount: number;
+        results: Array<{ trackCensoredName: string; artistName: string; artworkUrl100?: string }>;
+      }>(url, {
+        timeout: 4000,
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AppleBookCoverEngine/2.0)' },
+      });
+
+      if (res.data?.resultCount > 0) {
+        for (const item of res.data.results) {
+          if (item.artworkUrl100) {
+            // Uncap Apple's 100x100 thumbnail to 1000x1000 studio jacket
+            const hdUrl = item.artworkUrl100
+              .replace('100x100bb', '1000x1000bb')
+              .replace('100x100', '1000x1000');
+
+            return {
+              url: hdUrl,
+              title: item.trackCensoredName,
+              author: item.artistName,
+            };
+          }
+        }
+      }
+    } catch {
+      // Continue to next query attempt
+    }
+  }
+
+  return null;
+}
+
+// -----------------------------------------------------------------------------
+// Priority 2: Open Library (Direct ISBN Archive)
+// -----------------------------------------------------------------------------
+async function queryOpenLibrary(
+  searchTerms: string[],
+  cleanAuthor?: string,
+  validIsbn?: string | null
+): Promise<{ url: string; title: string; author?: string } | null> {
+  if (validIsbn) {
+    return {
+      url: `https://covers.openlibrary.org/b/isbn/${validIsbn}-L.jpg?default=false`,
+      title: searchTerms[0] || 'Book',
+      author: cleanAuthor,
+    };
+  }
+
+  for (const term of searchTerms) {
+    try {
+      const q = cleanAuthor ? `${term} ${cleanAuthor}` : term;
+      const olUrl = `https://openlibrary.org/search.json?q=${encodeURIComponent(q)}&fields=key,title,author_name,cover_i,isbn&limit=3`;
+
+      const res = await axios.get<{
+        docs: Array<{ title: string; author_name?: string[]; cover_i?: number; isbn?: string[] }>;
+      }>(olUrl, {
+        timeout: 4000,
+        headers: { 'User-Agent': 'BookCoverEngine/2.0' },
+      });
+
+      const docs = res.data?.docs || [];
+      for (const doc of docs) {
+        if (doc.cover_i && typeof doc.cover_i === 'number' && doc.cover_i > 0) {
+          return {
+            url: `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`,
+            title: doc.title || term,
+            author: doc.author_name?.[0] || cleanAuthor,
+          };
+        }
+        if (doc.isbn && doc.isbn.length > 0) {
+          return {
+            url: `https://covers.openlibrary.org/b/isbn/${doc.isbn[0]}-L.jpg`,
+            title: doc.title || term,
+            author: doc.author_name?.[0] || cleanAuthor,
+          };
+        }
+      }
+    } catch {
+      // Continue
+    }
+  }
+
+  return null;
+}
+
+// -----------------------------------------------------------------------------
+// Priority 3: Google Books (Strictly a Fallback if Apple & OpenLibrary have no record)
+// -----------------------------------------------------------------------------
+function buildVerifiedGoogleBooksUrl(volumeId: string, rawThumbnailUrl?: string): string {
+  if (rawThumbnailUrl) {
+    let clean = rawThumbnailUrl.replace(/^http:\/\//i, 'https://').replace(/&edge=curl/gi, '');
+    if (!clean.includes('&fife=')) {
+      clean += '&fife=w800';
+    }
+    return clean;
+  }
+  return `https://books.google.com/books/content?id=${volumeId}&printsec=frontcover&img=1&zoom=1&source=gbs_api`;
+}
+
+async function queryGoogleBooks(
+  title: string,
+  author?: string,
+  validIsbn?: string | null,
+  apiKey?: string
+): Promise<{ url: string; volumeId: string; title: string; author?: string } | null> {
+  if (Date.now() < googleBooksBlockedUntil) {
+    return null;
+  }
+
+  const queryTerms = validIsbn
+    ? `isbn:${validIsbn}`
+    : author
+    ? `${title} ${author}`
+    : title;
+
+  const url = new URL('https://www.googleapis.com/books/v1/volumes');
+  url.searchParams.set('q', queryTerms);
+  url.searchParams.set('maxResults', '3');
+  url.searchParams.set('printType', 'books');
+  if (apiKey) url.searchParams.set('key', apiKey);
+
+  try {
+    const res = await axios.get(url.toString(), {
+      timeout: 3500,
+      headers: { 'User-Agent': 'BookCoverEngine/2.0' },
+    });
+
+    const items = res.data?.items || [];
+    for (const item of items) {
+      const volumeId = item.id;
+      const volumeInfo = item.volumeInfo || {};
+      const imageLinks = volumeInfo.imageLinks;
+
+      const candidateUrl =
+        imageLinks?.extraLarge ||
+        imageLinks?.large ||
+        imageLinks?.medium ||
+        imageLinks?.thumbnail ||
+        imageLinks?.smallThumbnail;
+
+      if (candidateUrl || volumeId) {
+        return {
+          url: buildVerifiedGoogleBooksUrl(volumeId, candidateUrl),
+          volumeId,
+          title: volumeInfo.title || title,
+          author: volumeInfo.authors?.[0] || author,
+        };
+      }
+    }
+  } catch (err: any) {
+    if (err.response?.status === 429) {
+      googleBooksBlockedUntil = Date.now() + 5 * 60 * 1000;
+    }
+  }
+
+  return null;
+}
+
+// -----------------------------------------------------------------------------
+// Master Resolution Engine — Enforces Apple Books First
+// -----------------------------------------------------------------------------
+export async function findBestBookCover(
+  rawTitle: string,
+  rawAuthor?: string,
+  rawIsbnOrSku?: string
+): Promise<CoverSearchResult> {
+  const { full: titleFull, primary: titlePrimary, searchTerms } = cleanTitleString(rawTitle);
+  const author = cleanAuthorString(rawAuthor);
+  const validIsbn = extractValidIsbn(rawIsbnOrSku);
+
+  if (!titleFull && !validIsbn) {
+    return { coverUrl: null, title: rawTitle, source: null };
+  }
+
+  // Check 24-hour cache
+  const cacheKey = `${validIsbn || ''}_${titleFull.toLowerCase()}_${author.toLowerCase()}`;
+  const cached = searchCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    return cached.result;
+  }
+
+  // ===========================================================================
+  // STEP 1: Apple Books Storefront (PRIORITY #1)
+  // ===========================================================================
+  for (const term of searchTerms) {
+    const appleResult = await queryAppleBooks(term, author);
+    if (appleResult?.url) {
+      const finalResult: CoverSearchResult = {
+        coverUrl: appleResult.url,
+        title: appleResult.title || rawTitle,
+        author: appleResult.author || rawAuthor,
+        source: 'applebooks',
+      };
+      searchCache.set(cacheKey, { result: finalResult, timestamp: Date.now() });
+      return finalResult;
+    }
+  }
+
+  // ===========================================================================
+  // STEP 2: Open Library (PRIORITY #2 — Direct ISBN)
+  // ===========================================================================
+  const olResult = await queryOpenLibrary(searchTerms, author, validIsbn);
+  if (olResult?.url) {
+    const finalResult: CoverSearchResult = {
+      coverUrl: olResult.url,
+      title: olResult.title || rawTitle,
+      author: olResult.author || rawAuthor,
+      source: 'openlibrary',
+    };
+    searchCache.set(cacheKey, { result: finalResult, timestamp: Date.now() });
+    return finalResult;
+  }
+
+  // ===========================================================================
+  // STEP 3: Google Books (PRIORITY #3 — Last-Resort Fallback Only)
+  // ===========================================================================
+  const apiKey = (env as any).GOOGLE_BOOKS_API_KEY || process.env.GOOGLE_BOOKS_API_KEY || undefined;
+  const gbooksResult = await queryGoogleBooks(titlePrimary, author, validIsbn, apiKey);
+  if (gbooksResult?.url) {
+    const finalResult: CoverSearchResult = {
+      coverUrl: gbooksResult.url,
+      title: gbooksResult.title || rawTitle,
+      author: gbooksResult.author || rawAuthor,
+      source: 'googlebooks',
+    };
+    searchCache.set(cacheKey, { result: finalResult, timestamp: Date.now() });
+    return finalResult;
+  }
+
+  return { coverUrl: null, title: rawTitle, source: null };
+}
+</file>
+
 <file path="package.json">
 {
   "name": "kauntaos-api",
@@ -17353,165 +18048,6 @@ export async function getPublicOrderItems(orderId: string): Promise<PublicOrderI
   );
   return result.rows;
 }
-</file>
-
-<file path="src/app.ts">
-// =============================================================================
-// soko-api/src/app.ts
-// Multi-Frontend CORS Support & Master Express Route Registrations
-// =============================================================================
-
-import express, { Request, Response, NextFunction } from "express";
-import helmet from "helmet";
-import cors from "cors";
-import pinoHttp from "pino-http";
-import rateLimit from "express-rate-limit";
-import { v4 as uuidv4 } from "uuid";
-import { env } from "./config/env";
-import { errorHandler } from "./middleware/errorHandler";
-import { AppError } from "./utils/error";
-import { HealthCheckResponse } from "./types/health";
-import { pool } from "./config/db";
-
-// Route Imports
-import authRoutes from "./modules/auth/auth.routes";
-import customersRoutes from "./modules/customers/customers.routes";
-import transactionsRoutes from "./modules/transactions/transactions.routes";
-import dashboardRoutes from "./modules/transactions/dashboard.routes";
-import paymentsRoutes from "./modules/payments/payments.routes";
-import agentRoutes from "./verticals/market/agent.routes";
-import expensesRoutes from "./modules/expenses/expenses.routes";
-import adminRoutes from "./modules/admin/admin.routes";
-import productsRoutes from "./modules/products/products.routes";
-import productFormatsRoutes from "./modules/product-formats/product-formats.routes";
-import storesRoutes from "./modules/stores/stores.routes";
-import ordersRoutes from "./modules/orders/orders.routes";
-import publicRoutes from "./modules/public/public.routes";
-import mpesaCredentialsRoutes from "./modules/mpesa-credentials/mpesa-credentials.routes";
-import analyticsRoutes from "./modules/analytics/analytics.routes";
-import booksRoutes from "./verticals/books/books.routes";
-import bannersRoutes from "./modules/banners/banners.routes";
-
-const app = express();
-
-app.use(helmet());
-
-// Multi-Frontend Allowed Origins
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://localhost:3000',
-  'http://localhost:3333',
-];
-
-// Support comma-separated URLs in FRONTEND_URL
-if (env.FRONTEND_URL) {
-  const customOrigins = env.FRONTEND_URL.split(',').map((o) => o.trim().replace(/\/$/, ''));
-  allowedOrigins.push(...customOrigins);
-}
-
-app.use(
-  cors({
-    origin: (requestOrigin, callback) => {
-      if (!requestOrigin) return callback(null, true);
-
-      if (allowedOrigins.includes(requestOrigin)) {
-        return callback(null, true);
-      }
-
-      if (requestOrigin.endsWith('.vercel.app')) {
-        return callback(null, true);
-      }
-
-      return callback(new Error(`Origin ${requestOrigin} is not allowed by CORS`));
-    },
-    credentials: true,
-  })
-);
-
-app.use(express.json());
-
-app.use((req: Request, _res: Response, next: NextFunction) => {
-  req.requestId = uuidv4();
-  next();
-});
-
-app.use(
-  pinoHttp({
-    customProps: req => ({
-      requestId: (req as Request).requestId
-    }),
-    autoLogging: {
-      ignore: req => req.url === "/api/v1/health"
-    }
-  })
-);
-
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 300,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    success: false,
-    error: {
-      message: "Too many requests. Please try again later."
-    }
-  }
-});
-app.use(limiter);
-
-const apiRouter = express.Router();
-
-apiRouter.get("/health", async (_req: Request, res: Response) => {
-  let dbStatus: HealthCheckResponse["db"] = "connected";
-
-  try {
-    await pool.query("SELECT 1");
-  } catch {
-    dbStatus = "error";
-  }
-
-  const response: HealthCheckResponse = {
-    status: dbStatus === "connected" ? "ok" : "error",
-    db: dbStatus,
-    timestamp: new Date().toISOString()
-  };
-
-  res.status(dbStatus === "connected" ? 200 : 503).json(response);
-});
-
-apiRouter.use("/auth", authRoutes);
-apiRouter.use("/customers", customersRoutes);
-apiRouter.use("/transactions", transactionsRoutes);
-apiRouter.use("/dashboard", dashboardRoutes);
-apiRouter.use("/payments", paymentsRoutes);
-apiRouter.use("/agent", agentRoutes);
-apiRouter.use("/expenses", expensesRoutes);
-apiRouter.use("/public", publicRoutes);
-apiRouter.use("/admin", adminRoutes);
-apiRouter.use("/products/:productId/formats", productFormatsRoutes);
-apiRouter.use("/products", productsRoutes);
-apiRouter.use("/store", storesRoutes);
-apiRouter.use("/orders", ordersRoutes);
-apiRouter.use("/mpesa-credentials", mpesaCredentialsRoutes);
-apiRouter.use("/analytics", analyticsRoutes);
-apiRouter.use("/books", booksRoutes);
-apiRouter.use("/banners", bannersRoutes);
-
-app.use("/api/v1", apiRouter);
-
-app.use((req: Request, _res: Response, next: NextFunction) => {
-  next(
-    new AppError(
-      `Endpoint not found: ${req.method} ${req.originalUrl}`,
-      404
-    )
-  );
-});
-
-app.use(errorHandler);
-
-export default app;
 </file>
 
 <file path="src/modules/public/public.service.ts">
@@ -18893,6 +19429,167 @@ export async function processGoogleSheet(
     }
   }
 }
+</file>
+
+<file path="src/app.ts">
+// =============================================================================
+// soko-api/src/app.ts
+// Multi-Frontend CORS Support & Master Express Route Registrations
+// =============================================================================
+
+import express, { Request, Response, NextFunction } from "express";
+import helmet from "helmet";
+import cors from "cors";
+import pinoHttp from "pino-http";
+import rateLimit from "express-rate-limit";
+import { v4 as uuidv4 } from "uuid";
+import { env } from "./config/env";
+import { errorHandler } from "./middleware/errorHandler";
+import { AppError } from "./utils/error";
+import { HealthCheckResponse } from "./types/health";
+import { pool } from "./config/db";
+
+// Route Imports
+import authRoutes from "./modules/auth/auth.routes";
+import customersRoutes from "./modules/customers/customers.routes";
+import transactionsRoutes from "./modules/transactions/transactions.routes";
+import dashboardRoutes from "./modules/transactions/dashboard.routes";
+import paymentsRoutes from "./modules/payments/payments.routes";
+import agentRoutes from "./verticals/market/agent.routes";
+import expensesRoutes from "./modules/expenses/expenses.routes";
+import adminRoutes from "./modules/admin/admin.routes";
+import productsRoutes from "./modules/products/products.routes";
+import productFormatsRoutes from "./modules/product-formats/product-formats.routes";
+import storesRoutes from "./modules/stores/stores.routes";
+import ordersRoutes from "./modules/orders/orders.routes";
+import publicRoutes from "./modules/public/public.routes";
+import mpesaCredentialsRoutes from "./modules/mpesa-credentials/mpesa-credentials.routes";
+import analyticsRoutes from "./modules/analytics/analytics.routes";
+import booksRoutes from "./verticals/books/books.routes";
+import bannersRoutes from "./modules/banners/banners.routes";
+import smtpRoutes from "./modules/smtp/smtp.routes";
+
+const app = express();
+
+app.use(helmet());
+
+// Multi-Frontend Allowed Origins
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:3333',
+];
+
+// Support comma-separated URLs in FRONTEND_URL
+if (env.FRONTEND_URL) {
+  const customOrigins = env.FRONTEND_URL.split(',').map((o) => o.trim().replace(/\/$/, ''));
+  allowedOrigins.push(...customOrigins);
+}
+
+app.use(
+  cors({
+    origin: (requestOrigin, callback) => {
+      if (!requestOrigin) return callback(null, true);
+
+      if (allowedOrigins.includes(requestOrigin)) {
+        return callback(null, true);
+      }
+
+      if (requestOrigin.endsWith('.vercel.app')) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`Origin ${requestOrigin} is not allowed by CORS`));
+    },
+    credentials: true,
+  })
+);
+
+app.use(express.json());
+
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  req.requestId = uuidv4();
+  next();
+});
+
+app.use(
+  pinoHttp({
+    customProps: req => ({
+      requestId: (req as Request).requestId
+    }),
+    autoLogging: {
+      ignore: req => req.url === "/api/v1/health"
+    }
+  })
+);
+
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: {
+      message: "Too many requests. Please try again later."
+    }
+  }
+});
+app.use(limiter);
+
+const apiRouter = express.Router();
+
+apiRouter.get("/health", async (_req: Request, res: Response) => {
+  let dbStatus: HealthCheckResponse["db"] = "connected";
+
+  try {
+    await pool.query("SELECT 1");
+  } catch {
+    dbStatus = "error";
+  }
+
+  const response: HealthCheckResponse = {
+    status: dbStatus === "connected" ? "ok" : "error",
+    db: dbStatus,
+    timestamp: new Date().toISOString()
+  };
+
+  res.status(dbStatus === "connected" ? 200 : 503).json(response);
+});
+
+apiRouter.use("/auth", authRoutes);
+apiRouter.use("/customers", customersRoutes);
+apiRouter.use("/transactions", transactionsRoutes);
+apiRouter.use("/dashboard", dashboardRoutes);
+apiRouter.use("/payments", paymentsRoutes);
+apiRouter.use("/agent", agentRoutes);
+apiRouter.use("/expenses", expensesRoutes);
+apiRouter.use("/public", publicRoutes);
+apiRouter.use("/admin", adminRoutes);
+apiRouter.use("/products/:productId/formats", productFormatsRoutes);
+apiRouter.use("/products", productsRoutes);
+apiRouter.use("/store", storesRoutes);
+apiRouter.use("/orders", ordersRoutes);
+apiRouter.use("/mpesa-credentials", mpesaCredentialsRoutes);
+apiRouter.use("/analytics", analyticsRoutes);
+apiRouter.use("/books", booksRoutes);
+apiRouter.use("/banners", bannersRoutes);
+apiRouter.use("/smtp", smtpRoutes);
+
+app.use("/api/v1", apiRouter);
+
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  next(
+    new AppError(
+      `Endpoint not found: ${req.method} ${req.originalUrl}`,
+      404
+    )
+  );
+});
+
+app.use(errorHandler);
+
+export default app;
 </file>
 
 </files>

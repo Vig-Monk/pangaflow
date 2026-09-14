@@ -40,6 +40,8 @@ export function getR2Client(): S3Client {
 export interface PresignedUploadResult {
   uploadUrl: string;
   key: string;
+  fileUrl: string;
+  expiresInSeconds: number;
 }
 
 /**
@@ -60,11 +62,17 @@ export async function generatePresignedUploadUrl(
     ContentType: contentType,
   });
 
-  const uploadUrl = await getSignedUrl(client, command, { expiresIn: 900 });
+  const expiresInSeconds = 900;
+  const uploadUrl = await getSignedUrl(client, command, { expiresIn: expiresInSeconds });
+
+  // Compute storage file reference URI
+  const fileUrl = `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${env.R2_BUCKET_NAME}/${key}`;
 
   return {
     uploadUrl,
     key,
+    fileUrl,
+    expiresInSeconds,
   };
 }
 
@@ -89,7 +97,7 @@ export async function generatePresignedDownloadUrl(
 }
 
 /**
- * Streams a remote file (e.g. Google Drive direct link) directly into Cloudflare R2.
+ * Streams a remote file directly into Cloudflare R2.
  */
 export async function streamRemoteUrlToR2(
   remoteUrl: string,
@@ -142,7 +150,7 @@ export async function streamRemoteUrlToR2(
 }
 
 /**
- * Deletes a file from Cloudflare R2 bucket.
+ * Deletes an object from Cloudflare R2 bucket.
  */
 export async function deleteR2Object(key: string): Promise<void> {
   const client = getR2Client();

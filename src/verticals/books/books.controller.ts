@@ -12,13 +12,16 @@ import { generatePresignedUploadUrl } from '../../services/r2.service';
 
 function requireOrgId(req: Request): string {
   if (!req.orgId) {
-    throw new AppError('Unauthorized', 401);
+    throw new AppError('Unauthorized access', 401, true, { code: 'UNAUTHORIZED' });
   }
   return req.orgId;
 }
 
 const PresignedUploadSchema = z.object({
-  filename: z.string().min(1, 'Filename is required').max(255),
+  filename: z
+    .string()
+    .min(1, 'Filename is required')
+    .max(255, 'Filename cannot exceed 255 characters'),
   format: z.enum(['pdf', 'epub']).default('pdf'),
   contentType: z.string().optional(),
 });
@@ -33,13 +36,21 @@ export async function getPresignedR2UploadUrlHandler(
     const parsed = PresignedUploadSchema.safeParse(req.body);
 
     if (!parsed.success) {
-      throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid upload payload', 400);
+      throw new AppError(
+        parsed.error.issues[0]?.message ?? 'Invalid upload payload specification',
+        400,
+        true,
+        { code: 'VALIDATION_FAILED', details: parsed.error.format() }
+      );
     }
 
-    const mime = parsed.data.contentType || (parsed.data.format === 'pdf' ? 'application/pdf' : 'application/epub+zip');
+    const mime =
+      parsed.data.contentType ||
+      (parsed.data.format === 'pdf' ? 'application/pdf' : 'application/epub+zip');
+
     const result = await generatePresignedUploadUrl(orgId, parsed.data.filename, mime);
 
-    success(res, result);
+    success(res, result, undefined, 200);
   } catch (err) {
     next(err);
   }
