@@ -19,29 +19,45 @@ import { AppError } from '../utils/error';
 
 let s3ClientInstance: S3Client | null = null;
 
-export function getR2Client(): S3Client {
-  if (!s3ClientInstance) {
-    if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) {
-      throw new AppError('Cloudflare R2 credentials are not configured in environment', 500);
-    }
-
-    s3ClientInstance = new S3Client({
-      region: 'auto',
-      endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId: env.R2_ACCESS_KEY_ID,
-        secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-      },
-    });
-  }
-  return s3ClientInstance;
-}
-
 export interface PresignedUploadResult {
   uploadUrl: string;
   key: string;
   fileUrl: string;
   expiresInSeconds: number;
+}
+
+function cleanAccountId(raw: string): string {
+  return (raw || '')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\.r2\.cloudflarestorage\.com.*$/i, '')
+    .replace(/\/+$/, '');
+}
+
+export function getR2Client(): S3Client {
+  if (!s3ClientInstance) {
+    const accountId = cleanAccountId(env.R2_ACCOUNT_ID);
+    const accessKeyId = (env.R2_ACCESS_KEY_ID || '').trim();
+    const secretAccessKey = (env.R2_SECRET_ACCESS_KEY || '').trim();
+    const bucketName = (env.R2_BUCKET_NAME || '').trim();
+
+    if (!accountId || !accessKeyId || !secretAccessKey || !bucketName) {
+      throw new AppError(
+        'Cloudflare R2 is not configured. Please set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and R2_BUCKET_NAME.',
+        503
+      );
+    }
+
+    s3ClientInstance = new S3Client({
+      region: 'auto',
+      endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId,
+        secretAccessKey,
+      },
+    });
+  }
+  return s3ClientInstance;
 }
 
 /**
@@ -53,11 +69,14 @@ export async function generatePresignedUploadUrl(
   contentType = 'application/pdf'
 ): Promise<PresignedUploadResult> {
   const client = getR2Client();
+  const accountId = cleanAccountId(env.R2_ACCOUNT_ID);
+  const bucketName = (env.R2_BUCKET_NAME || 'flemela-books').trim();
+
   const sanitized = rawFilename.toLowerCase().replace(/[^a-z0-9.-]/g, '_');
   const key = `ebooks/${orgId}/${Date.now()}-${sanitized}`;
 
   const command = new PutObjectCommand({
-    Bucket: env.R2_BUCKET_NAME,
+    Bucket: bucketName,
     Key: key,
     ContentType: contentType,
   });
@@ -66,7 +85,7 @@ export async function generatePresignedUploadUrl(
   const uploadUrl = await getSignedUrl(client, command, { expiresIn: expiresInSeconds });
 
   // Compute storage file reference URI
-  const fileUrl = `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${env.R2_BUCKET_NAME}/${key}`;
+  const fileUrl = `https://${accountId}.r2.cloudflarestorage.com/${bucketName}/${key}`;
 
   return {
     uploadUrl,
@@ -85,10 +104,11 @@ export async function generatePresignedDownloadUrl(
   expiresInSeconds = 3600
 ): Promise<string> {
   const client = getR2Client();
+  const bucketName = (env.R2_BUCKET_NAME || 'flemela-books').trim();
   const safeFilename = downloadFilename.replace(/[^a-zA-Z0-9._-]/g, '_');
 
   const command = new GetObjectCommand({
-    Bucket: env.R2_BUCKET_NAME,
+    Bucket: bucketName,
     Key: fileKey,
     ResponseContentDisposition: `attachment; filename="${safeFilename}"`,
   });
@@ -106,6 +126,7 @@ export async function streamRemoteUrlToR2(
   contentType = 'application/pdf'
 ): Promise<{ key: string; fileSizeBytes: number }> {
   const client = getR2Client();
+  const bucketName = (env.R2_BUCKET_NAME || 'flemela-books').trim();
   const sanitized = filename.toLowerCase().replace(/[^a-z0-9.-]/g, '_');
   const key = `ebooks/${orgId}/${Date.now()}-${sanitized}`;
 
@@ -126,7 +147,7 @@ export async function streamRemoteUrlToR2(
   const upload = new Upload({
     client,
     params: {
-      Bucket: env.R2_BUCKET_NAME,
+      Bucket: bucketName,
       Key: key,
       Body: response.data,
       ContentType: contentType,
@@ -154,10 +175,11 @@ export async function streamRemoteUrlToR2(
  */
 export async function deleteR2Object(key: string): Promise<void> {
   const client = getR2Client();
+  const bucketName = (env.R2_BUCKET_NAME || 'flemela-books').trim();
   try {
     await client.send(
       new DeleteObjectCommand({
-        Bucket: env.R2_BUCKET_NAME,
+        Bucket: bucketName,
         Key: key,
       })
     );

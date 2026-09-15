@@ -3769,168 +3769,6 @@ async function restoreBoundaries(): Promise<void> {
 restoreBoundaries();
 </file>
 
-<file path="src/services/r2.service.ts">
-// =============================================================================
-// soko-api/src/services/r2.service.ts
-// Cloudflare R2 Private S3-Compatible Object Storage Service
-// Generates presigned upload URLs (PUT) and expiring download URLs (GET).
-// =============================================================================
-
-import {
-  S3Client,
-  PutObjectCommand,
-  GetObjectCommand,
-  DeleteObjectCommand,
-} from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { Upload } from '@aws-sdk/lib-storage';
-import axios from 'axios';
-import { Readable } from 'stream';
-import { env } from '../config/env';
-import { AppError } from '../utils/error';
-
-let s3ClientInstance: S3Client | null = null;
-
-export function getR2Client(): S3Client {
-  if (!s3ClientInstance) {
-    if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) {
-      throw new AppError('Cloudflare R2 credentials are not configured in environment', 500);
-    }
-
-    s3ClientInstance = new S3Client({
-      region: 'auto',
-      endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId: env.R2_ACCESS_KEY_ID,
-        secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-      },
-    });
-  }
-  return s3ClientInstance;
-}
-
-export interface PresignedUploadResult {
-  uploadUrl: string;
-  key: string;
-}
-
-/**
- * Generates a presigned PUT URL for direct browser-to-Cloudflare-R2 upload (15-min TTL).
- */
-export async function generatePresignedUploadUrl(
-  orgId: string,
-  rawFilename: string,
-  contentType = 'application/pdf'
-): Promise<PresignedUploadResult> {
-  const client = getR2Client();
-  const sanitized = rawFilename.toLowerCase().replace(/[^a-z0-9.-]/g, '_');
-  const key = `ebooks/${orgId}/${Date.now()}-${sanitized}`;
-
-  const command = new PutObjectCommand({
-    Bucket: env.R2_BUCKET_NAME,
-    Key: key,
-    ContentType: contentType,
-  });
-
-  const uploadUrl = await getSignedUrl(client, command, { expiresIn: 900 });
-
-  return {
-    uploadUrl,
-    key,
-  };
-}
-
-/**
- * Generates an expiring presigned GET URL for authorized tokenized book downloads (1-hour TTL).
- */
-export async function generatePresignedDownloadUrl(
-  fileKey: string,
-  downloadFilename: string,
-  expiresInSeconds = 3600
-): Promise<string> {
-  const client = getR2Client();
-  const safeFilename = downloadFilename.replace(/[^a-zA-Z0-9._-]/g, '_');
-
-  const command = new GetObjectCommand({
-    Bucket: env.R2_BUCKET_NAME,
-    Key: fileKey,
-    ResponseContentDisposition: `attachment; filename="${safeFilename}"`,
-  });
-
-  return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
-}
-
-/**
- * Streams a remote file (e.g. Google Drive direct link) directly into Cloudflare R2.
- */
-export async function streamRemoteUrlToR2(
-  remoteUrl: string,
-  orgId: string,
-  filename: string,
-  contentType = 'application/pdf'
-): Promise<{ key: string; fileSizeBytes: number }> {
-  const client = getR2Client();
-  const sanitized = filename.toLowerCase().replace(/[^a-z0-9.-]/g, '_');
-  const key = `ebooks/${orgId}/${Date.now()}-${sanitized}`;
-
-  const response = await axios.get<Readable>(remoteUrl, {
-    responseType: 'stream',
-    timeout: 60000,
-    maxRedirects: 5,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-    },
-  });
-
-  let bytesCount = 0;
-  response.data.on('data', (chunk: Buffer) => {
-    bytesCount += chunk.length;
-  });
-
-  const upload = new Upload({
-    client,
-    params: {
-      Bucket: env.R2_BUCKET_NAME,
-      Key: key,
-      Body: response.data,
-      ContentType: contentType,
-    },
-  });
-
-  await upload.done();
-
-  const rawLength = response.headers['content-length'];
-  const parsedLength =
-    typeof rawLength === 'number'
-      ? rawLength
-      : typeof rawLength === 'string'
-        ? parseInt(rawLength, 10)
-        : 0;
-
-  return {
-    key,
-    fileSizeBytes: bytesCount || (isNaN(parsedLength) ? 0 : parsedLength),
-  };
-}
-
-/**
- * Deletes a file from Cloudflare R2 bucket.
- */
-export async function deleteR2Object(key: string): Promise<void> {
-  const client = getR2Client();
-  try {
-    await client.send(
-      new DeleteObjectCommand({
-        Bucket: env.R2_BUCKET_NAME,
-        Key: key,
-      })
-    );
-  } catch (err) {
-    console.warn(`Failed to delete object from R2 (Key: ${key}):`, err);
-  }
-}
-</file>
-
 <file path="src/tests/admin-console.test.ts">
 // =============================================================================
 // src/tests/admin-console.test.ts
@@ -4502,91 +4340,6 @@ export function error(
     },
   };
   return res.status(statusCode).json(responseBody);
-}
-</file>
-
-<file path="src/verticals/books/books.controller.ts">
-// =============================================================================
-// src/verticals/books/books.controller.ts
-// Administrative controller for Cloudflare R2 uploads and bookstore telemetry.
-// =============================================================================
-
-import { Request, Response, NextFunction } from 'express';
-import { z } from 'zod';
-import { success } from '../../utils/response';
-import { AppError } from '../../utils/error';
-import { query } from '../../config/db';
-import { generatePresignedUploadUrl } from '../../services/r2.service';
-
-function requireOrgId(req: Request): string {
-  if (!req.orgId) {
-    throw new AppError('Unauthorized', 401);
-  }
-  return req.orgId;
-}
-
-const PresignedUploadSchema = z.object({
-  filename: z.string().min(1, 'Filename is required').max(255),
-  format: z.enum(['pdf', 'epub']).default('pdf'),
-  contentType: z.string().optional(),
-});
-
-export async function getPresignedR2UploadUrlHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const parsed = PresignedUploadSchema.safeParse(req.body);
-
-    if (!parsed.success) {
-      throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid upload payload', 400);
-    }
-
-    const mime = parsed.data.contentType || (parsed.data.format === 'pdf' ? 'application/pdf' : 'application/epub+zip');
-    const result = await generatePresignedUploadUrl(orgId, parsed.data.filename, mime);
-
-    success(res, result);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function getBookstoreStorageStatsHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-
-    const result = await query<{
-      total_bytes: string;
-      digital_books_count: string;
-    }>(
-      `SELECT
-         COALESCE(SUM(pf.file_size_bytes), 0)::text AS total_bytes,
-         COUNT(DISTINCT pf.product_id)::text AS digital_books_count
-       FROM product_formats pf
-       INNER JOIN products p ON p.id = pf.product_id
-       WHERE p.org_id = $1 AND p.deleted_at IS NULL AND pf.file_url IS NOT NULL`,
-      [orgId]
-    );
-
-    const row = result.rows[0];
-    const totalBytes = parseInt(row?.total_bytes || '0', 10);
-    const totalMb = Math.round((totalBytes / (1024 * 1024)) * 10) / 10;
-    const digitalBooksCount = parseInt(row?.digital_books_count || '0', 10);
-
-    success(res, {
-      totalBytes,
-      totalMb,
-      digitalBooksCount,
-    });
-  } catch (err) {
-    next(err);
-  }
 }
 </file>
 
@@ -5379,93 +5132,6 @@ export async function query<T extends QueryResultRow = Record<string, unknown>>(
     throw err;
   }
 }
-</file>
-
-<file path="src/middleware/auth.ts">
-// =============================================================================
-// soko-api/src/middleware/auth.ts
-// Dual Authentication Guard: Supports User JWTs & Master Organization API Keys.
-// =============================================================================
-
-import { RequestHandler } from 'express';
-import jwt from 'jsonwebtoken';
-import { env } from '../config/env';
-import { AppError } from '../utils/error';
-import { findUserById } from '../modules/auth/auth.queries';
-import { JwtPayload } from '../modules/auth/auth.service';
-import { pool } from '../config/db';
-
-function isAppJwtPayload(decoded: unknown): decoded is JwtPayload {
-  if (typeof decoded !== 'object' || decoded === null) return false;
-  const c = decoded as Record<string, unknown>;
-  return (
-    typeof c.userId === 'string' &&
-    typeof c.orgId  === 'string' &&
-    typeof c.role   === 'string'
-  );
-}
-
-export const verifyToken: RequestHandler = async (req, _res, next) => {
-  try {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      throw new AppError('Missing or malformed Authorization header', 401);
-    }
-
-    const token = authHeader.slice('Bearer '.length).trim();
-
-    if (token.length === 0) {
-      throw new AppError('Missing access token', 401);
-    }
-
-    // -------------------------------------------------------------------------
-    // Method 1: Permanent Master Org API Key or Admin Secret
-    // -------------------------------------------------------------------------
-    if (token === env.ADMIN_SECRET) {
-      const orgRes = await pool.query<{ id: string }>(
-        `SELECT id FROM organizations WHERE deleted_at IS NULL ORDER BY created_at ASC LIMIT 1`
-      );
-      if (orgRes.rows[0]) {
-        req.orgId = orgRes.rows[0].id;
-        req.role = 'owner';
-        return next();
-      }
-    }
-
-    // -------------------------------------------------------------------------
-    // Method 2: Standard User/Service JWT
-    // -------------------------------------------------------------------------
-    let decoded: unknown;
-    try {
-      decoded = jwt.verify(token, env.JWT_SECRET);
-    } catch {
-      throw new AppError('Invalid or expired access token', 401);
-    }
-
-    if (!isAppJwtPayload(decoded)) {
-      throw new AppError('Invalid access token payload', 401);
-    }
-
-    const userWithOrg = await findUserById(decoded.userId);
-
-    if (!userWithOrg) {
-      throw new AppError('User account no longer exists', 401);
-    }
-
-    if (userWithOrg.org_id !== decoded.orgId) {
-      throw new AppError('Token organization mismatch. Please log in again.', 403);
-    }
-
-    req.user  = userWithOrg;
-    req.orgId = userWithOrg.org_id;
-    req.role  = userWithOrg.role;
-
-    next();
-  } catch (err) {
-    next(err);
-  }
-};
 </file>
 
 <file path="src/middleware/errorHandler.ts">
@@ -7866,6 +7532,176 @@ async function run(): Promise<void> {
 run();
 </file>
 
+<file path="src/services/r2.service.ts">
+// =============================================================================
+// soko-api/src/services/r2.service.ts
+// Cloudflare R2 Private S3-Compatible Object Storage Service
+// Generates presigned upload URLs (PUT) and expiring download URLs (GET).
+// =============================================================================
+
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+} from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { Upload } from '@aws-sdk/lib-storage';
+import axios from 'axios';
+import { Readable } from 'stream';
+import { env } from '../config/env';
+import { AppError } from '../utils/error';
+
+let s3ClientInstance: S3Client | null = null;
+
+export function getR2Client(): S3Client {
+  if (!s3ClientInstance) {
+    if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) {
+      throw new AppError('Cloudflare R2 credentials are not configured in environment', 500);
+    }
+
+    s3ClientInstance = new S3Client({
+      region: 'auto',
+      endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId: env.R2_ACCESS_KEY_ID,
+        secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+      },
+    });
+  }
+  return s3ClientInstance;
+}
+
+export interface PresignedUploadResult {
+  uploadUrl: string;
+  key: string;
+  fileUrl: string;
+  expiresInSeconds: number;
+}
+
+/**
+ * Generates a presigned PUT URL for direct browser-to-Cloudflare-R2 upload (15-min TTL).
+ */
+export async function generatePresignedUploadUrl(
+  orgId: string,
+  rawFilename: string,
+  contentType = 'application/pdf'
+): Promise<PresignedUploadResult> {
+  const client = getR2Client();
+  const sanitized = rawFilename.toLowerCase().replace(/[^a-z0-9.-]/g, '_');
+  const key = `ebooks/${orgId}/${Date.now()}-${sanitized}`;
+
+  const command = new PutObjectCommand({
+    Bucket: env.R2_BUCKET_NAME,
+    Key: key,
+    ContentType: contentType,
+  });
+
+  const expiresInSeconds = 900;
+  const uploadUrl = await getSignedUrl(client, command, { expiresIn: expiresInSeconds });
+
+  // Compute storage file reference URI
+  const fileUrl = `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${env.R2_BUCKET_NAME}/${key}`;
+
+  return {
+    uploadUrl,
+    key,
+    fileUrl,
+    expiresInSeconds,
+  };
+}
+
+/**
+ * Generates an expiring presigned GET URL for authorized tokenized book downloads (1-hour TTL).
+ */
+export async function generatePresignedDownloadUrl(
+  fileKey: string,
+  downloadFilename: string,
+  expiresInSeconds = 3600
+): Promise<string> {
+  const client = getR2Client();
+  const safeFilename = downloadFilename.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+  const command = new GetObjectCommand({
+    Bucket: env.R2_BUCKET_NAME,
+    Key: fileKey,
+    ResponseContentDisposition: `attachment; filename="${safeFilename}"`,
+  });
+
+  return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
+}
+
+/**
+ * Streams a remote file directly into Cloudflare R2.
+ */
+export async function streamRemoteUrlToR2(
+  remoteUrl: string,
+  orgId: string,
+  filename: string,
+  contentType = 'application/pdf'
+): Promise<{ key: string; fileSizeBytes: number }> {
+  const client = getR2Client();
+  const sanitized = filename.toLowerCase().replace(/[^a-z0-9.-]/g, '_');
+  const key = `ebooks/${orgId}/${Date.now()}-${sanitized}`;
+
+  const response = await axios.get<Readable>(remoteUrl, {
+    responseType: 'stream',
+    timeout: 60000,
+    maxRedirects: 5,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    },
+  });
+
+  let bytesCount = 0;
+  response.data.on('data', (chunk: Buffer) => {
+    bytesCount += chunk.length;
+  });
+
+  const upload = new Upload({
+    client,
+    params: {
+      Bucket: env.R2_BUCKET_NAME,
+      Key: key,
+      Body: response.data,
+      ContentType: contentType,
+    },
+  });
+
+  await upload.done();
+
+  const rawLength = response.headers['content-length'];
+  const parsedLength =
+    typeof rawLength === 'number'
+      ? rawLength
+      : typeof rawLength === 'string'
+        ? parseInt(rawLength, 10)
+        : 0;
+
+  return {
+    key,
+    fileSizeBytes: bytesCount || (isNaN(parsedLength) ? 0 : parsedLength),
+  };
+}
+
+/**
+ * Deletes an object from Cloudflare R2 bucket.
+ */
+export async function deleteR2Object(key: string): Promise<void> {
+  const client = getR2Client();
+  try {
+    await client.send(
+      new DeleteObjectCommand({
+        Bucket: env.R2_BUCKET_NAME,
+        Key: key,
+      })
+    );
+  } catch (err) {
+    console.warn(`Failed to delete object from R2 (Key: ${key}):`, err);
+  }
+}
+</file>
+
 <file path="src/tests/e2e-delivery-flow.test.ts">
 // =============================================================================
 // src/tests/e2e-delivery-flow.test.ts
@@ -8552,6 +8388,102 @@ router.get('/:id', getImportStatusHandler);
 export default router;
 </file>
 
+<file path="src/verticals/books/books.controller.ts">
+// =============================================================================
+// src/verticals/books/books.controller.ts
+// Administrative controller for Cloudflare R2 uploads and bookstore telemetry.
+// =============================================================================
+
+import { Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
+import { success } from '../../utils/response';
+import { AppError } from '../../utils/error';
+import { query } from '../../config/db';
+import { generatePresignedUploadUrl } from '../../services/r2.service';
+
+function requireOrgId(req: Request): string {
+  if (!req.orgId) {
+    throw new AppError('Unauthorized access', 401, true, { code: 'UNAUTHORIZED' });
+  }
+  return req.orgId;
+}
+
+const PresignedUploadSchema = z.object({
+  filename: z
+    .string()
+    .min(1, 'Filename is required')
+    .max(255, 'Filename cannot exceed 255 characters'),
+  format: z.enum(['pdf', 'epub']).default('pdf'),
+  contentType: z.string().optional(),
+});
+
+export async function getPresignedR2UploadUrlHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const parsed = PresignedUploadSchema.safeParse(req.body);
+
+    if (!parsed.success) {
+      throw new AppError(
+        parsed.error.issues[0]?.message ?? 'Invalid upload payload specification',
+        400,
+        true,
+        { code: 'VALIDATION_FAILED', details: parsed.error.format() }
+      );
+    }
+
+    const mime =
+      parsed.data.contentType ||
+      (parsed.data.format === 'pdf' ? 'application/pdf' : 'application/epub+zip');
+
+    const result = await generatePresignedUploadUrl(orgId, parsed.data.filename, mime);
+
+    success(res, result, undefined, 200);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getBookstoreStorageStatsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+
+    const result = await query<{
+      total_bytes: string;
+      digital_books_count: string;
+    }>(
+      `SELECT
+         COALESCE(SUM(pf.file_size_bytes), 0)::text AS total_bytes,
+         COUNT(DISTINCT pf.product_id)::text AS digital_books_count
+       FROM product_formats pf
+       INNER JOIN products p ON p.id = pf.product_id
+       WHERE p.org_id = $1 AND p.deleted_at IS NULL AND pf.file_url IS NOT NULL`,
+      [orgId]
+    );
+
+    const row = result.rows[0];
+    const totalBytes = parseInt(row?.total_bytes || '0', 10);
+    const totalMb = Math.round((totalBytes / (1024 * 1024)) * 10) / 10;
+    const digitalBooksCount = parseInt(row?.digital_books_count || '0', 10);
+
+    success(res, {
+      totalBytes,
+      totalMb,
+      digitalBooksCount,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+</file>
+
 <file path="src/server.ts">
 // =============================================================================
 // soko-api/src/server.ts
@@ -8675,6 +8607,120 @@ const _planNamesMatchCheck: _AssertPlanNamesMatch = true;
 void _planNamesMatchCheck;
 
 export const PLAN_NAMES = Object.keys(PLANS) as PlanName[];
+</file>
+
+<file path="src/middleware/auth.ts">
+// =============================================================================
+// soko-api/src/middleware/auth.ts
+// Dual Authentication Guard: Case-Insensitive Bearer & Master Secret Support
+// =============================================================================
+
+import { RequestHandler } from 'express';
+import jwt from 'jsonwebtoken';
+import { env } from '../config/env';
+import { AppError } from '../utils/error';
+import { findUserById } from '../modules/auth/auth.queries';
+import { JwtPayload } from '../modules/auth/auth.service';
+import { pool } from '../config/db';
+
+function isAppJwtPayload(decoded: unknown): decoded is JwtPayload {
+  if (typeof decoded !== 'object' || decoded === null) return false;
+  const c = decoded as Record<string, unknown>;
+  return (
+    typeof c.userId === 'string' &&
+    typeof c.orgId === 'string' &&
+    typeof c.role === 'string'
+  );
+}
+
+export const verifyToken: RequestHandler = async (req, _res, next) => {
+  try {
+    const rawHeader = req.headers.authorization;
+
+    if (!rawHeader || typeof rawHeader !== 'string') {
+      throw new AppError('Missing or malformed Authorization header', 401, true, {
+        code: 'AUTH_HEADER_MISSING',
+      });
+    }
+
+    const trimmedHeader = rawHeader.trim();
+    // RFC 6750 compliant case-insensitive Bearer prefix match
+    const match = trimmedHeader.match(/^Bearer\s+(.+)$/i);
+
+    if (!match || !match[1]) {
+      throw new AppError('Missing or malformed Authorization header', 401, true, {
+        code: 'AUTH_HEADER_MALFORMED',
+      });
+    }
+
+    const token = match[1].trim();
+
+    // Guard against stringified empty states
+    if (!token || token === 'undefined' || token === 'null' || token === '[object Object]') {
+      throw new AppError('Missing access token', 401, true, {
+        code: 'AUTH_TOKEN_EMPTY',
+      });
+    }
+
+    // -------------------------------------------------------------------------
+    // Method 1: Permanent Master Org API Key or Admin Secret
+    // -------------------------------------------------------------------------
+    if (token === env.ADMIN_SECRET) {
+      const orgRes = await pool.query<{ id: string }>(
+        `SELECT id FROM organizations WHERE deleted_at IS NULL ORDER BY created_at ASC LIMIT 1`
+      );
+      if (orgRes.rows[0]) {
+        req.orgId = orgRes.rows[0].id;
+        req.role = 'owner';
+        return next();
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Method 2: Standard User/Service JWT Verification
+    // -------------------------------------------------------------------------
+    let decoded: unknown;
+    try {
+      decoded = jwt.verify(token, env.JWT_SECRET);
+    } catch (jwtErr: any) {
+      const isExpired = jwtErr?.name === 'TokenExpiredError';
+      throw new AppError(
+        isExpired ? 'Access token has expired' : 'Invalid or expired access token',
+        401,
+        true,
+        { code: isExpired ? 'AUTH_TOKEN_EXPIRED' : 'AUTH_TOKEN_INVALID' }
+      );
+    }
+
+    if (!isAppJwtPayload(decoded)) {
+      throw new AppError('Invalid access token payload structure', 401, true, {
+        code: 'AUTH_PAYLOAD_INVALID',
+      });
+    }
+
+    const userWithOrg = await findUserById(decoded.userId);
+
+    if (!userWithOrg) {
+      throw new AppError('User account no longer exists', 401, true, {
+        code: 'AUTH_USER_NOT_FOUND',
+      });
+    }
+
+    if (userWithOrg.org_id !== decoded.orgId) {
+      throw new AppError('Token organization mismatch. Please log in again.', 403, true, {
+        code: 'AUTH_ORG_MISMATCH',
+      });
+    }
+
+    req.user = userWithOrg;
+    req.orgId = userWithOrg.org_id;
+    req.role = userWithOrg.role;
+
+    next();
+  } catch (err) {
+    next(err);
+  }
+};
 </file>
 
 <file path="src/middleware/checkLimit.ts">
