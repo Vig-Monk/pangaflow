@@ -39,8 +39,26 @@ export async function listStoreProductsHandler(
   next: NextFunction
 ): Promise<void> {
   try {
-    const products = await publicService.listStoreProducts(req.params.storeSlug);
-    success(res, products);
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50));
+    const searchQuery = typeof req.query.q === 'string' ? req.query.q.trim() : undefined;
+    const category = typeof req.query.category === 'string'
+      ? req.query.category.trim()
+      : (typeof req.query.category_id === 'string' ? req.query.category_id.trim() : undefined);
+
+    const result = await publicService.listStoreProducts(req.params.storeSlug, {
+      page,
+      limit,
+      searchQuery,
+      category,
+    });
+
+    success(res, result, {
+      page: result.page,
+      limit: result.limit,
+      totalItems: result.total,
+      totalPages: result.totalPages,
+    });
   } catch (err) {
     next(err);
   }

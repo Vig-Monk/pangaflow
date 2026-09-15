@@ -313,12 +313,28 @@ export async function getStoreMetadata(storeSlug: string): Promise<PublicStoreDt
   return toPublicStoreDto(store, mpesaVerified);
 }
 
-export async function listStoreProducts(storeSlug: string): Promise<PublicProductDto[]> {
+export async function listStoreProducts(
+  storeSlug: string,
+  options: publicQueries.ListStoreProductsOptions = {}
+): Promise<{
+  products: PublicProductDto[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}> {
   const normalizedSlug = (storeSlug || '').trim().toLowerCase();
   const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
   if (!store) throw new AppError('Store not found', 404);
-  const products = await publicQueries.getProductsByStoreOrgIdPublic(store.org_id);
-  return products.map(toPublicProductDto);
+
+  const result = await publicQueries.getProductsByStoreOrgIdPublic(store.org_id, options);
+  return {
+    products: result.products.map(toPublicProductDto),
+    total: result.total,
+    page: result.page,
+    limit: result.limit,
+    totalPages: result.totalPages,
+  };
 }
 
 export async function getProductDetails(storeSlug: string, productSlug: string): Promise<PublicProductDto> {

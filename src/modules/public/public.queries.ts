@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/public/public.queries.ts
-// Strict Tenant-Isolated Public Storefront Queries with Promotion & Ticker Fields
+// Strict Tenant-Isolated Public Storefront Queries with Search & Pagination
 // =============================================================================
 
 import { query } from '../../config/db';
@@ -97,6 +97,21 @@ export interface LocalEstateRow {
   lng: string;
 }
 
+export interface ListStoreProductsOptions {
+  searchQuery?: string;
+  category?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface PaginatedPublicProducts {
+  products: PublicProductRow[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
 export async function searchEstatesLocal(searchQuery: string): Promise<LocalEstateRow[]> {
   const result = await query<LocalEstateRow>(
     `SELECT id, name, city, lat::text AS lat, lng::text AS lng
@@ -132,8 +147,82 @@ export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow
   return result.rows[0] ?? null;
 }
 
-export async function getProductsByStoreOrgIdPublic(orgId: string): Promise<PublicProductRow[]> {
-  const result = await query<PublicProductRow>(
+export async function getProductsByStoreOrgIdPublic(
+  orgId: string,
+  options: ListStoreProductsOptions = {}
+): Promise<PaginatedPublicProducts> {
+  const page = Math.max(1, options.page || 1);
+  const limit = Math.min(100, Math.max(1, options.limit || 50));
+  const offset = (page - 1) * limit;
+
+  const conditions: string[] = [
+    'p.org_id = $1',
+    "p.status = 'published'",
+    'p.deleted_at IS NULL',
+  ];
+  const params: unknown[] = [orgId];
+  let paramIndex = 2;
+
+  // Category filter
+  if (
+    options.category &&
+    !['general', 'all', 'all books'].includes(options.category.toLowerCase().trim())
+  ) {
+    const cleanCat = options.category.trim();
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanCat)) {
+      conditions.push(`p.category_id = $${paramIndex}`);
+      params.push(cleanCat);
+      paramIndex++;
+    } else {
+      conditions.push(`(
+        LOWER(TRIM(c.name)) = LOWER(TRIM($${paramIndex})) OR
+        c.slug = LOWER(TRIM($${paramIndex})) OR
+        c.name ILIKE $${paramIndex + 1}
+      )`);
+      params.push(cleanCat, `%${cleanCat}%`);
+      paramIndex += 2;
+    }
+  }
+
+  // Spot-on Search across title, description/author, SKU/ISBN, category name
+  if (options.searchQuery && options.searchQuery.trim().length > 0) {
+    const searchPattern = `%${options.searchQuery.trim()}%`;
+    conditions.push(`(
+      p.name ILIKE $${paramIndex} OR
+      p.description ILIKE $${paramIndex} OR
+      p.sku ILIKE $${paramIndex} OR
+      c.name ILIKE $${paramIndex}
+    )`);
+    params.push(searchPattern);
+    paramIndex++;
+  }
+
+  const whereClause = conditions.join(' AND ');
+
+  // Count total matching items across the entire database
+  const countResult = await query<{ count: string }>(
+    `SELECT COUNT(p.id) AS count
+     FROM   products p
+     LEFT JOIN categories c ON c.id = p.category_id
+     WHERE  ${whereClause}`,
+    params
+  );
+
+  const total = parseInt(countResult.rows[0]?.count ?? '0', 10);
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+
+  if (total === 0) {
+    return {
+      products: [],
+      total: 0,
+      page,
+      limit,
+      totalPages: 1,
+    };
+  }
+
+  const dataParams = [...params, limit, offset];
+  const dataResult = await query<PublicProductRow>(
     `SELECT p.id,
             p.org_id,
             p.category_id,
@@ -193,13 +282,19 @@ export async function getProductsByStoreOrgIdPublic(orgId: string): Promise<Publ
      FROM   products p
      LEFT JOIN categories c ON c.id = p.category_id
      LEFT JOIN inventory i  ON i.product_id = p.id
-     WHERE  p.org_id     = $1
-       AND  p.status     = 'published'
-       AND  p.deleted_at IS NULL
-     ORDER  BY p.created_at DESC`,
-    [orgId]
+     WHERE  ${whereClause}
+     ORDER  BY p.created_at DESC
+     LIMIT  $${paramIndex} OFFSET $${paramIndex + 1}`,
+    dataParams
   );
-  return result.rows;
+
+  return {
+    products: dataResult.rows,
+    total,
+    page,
+    limit,
+    totalPages,
+  };
 }
 
 export async function getProductBySlugPublic(

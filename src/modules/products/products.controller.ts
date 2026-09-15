@@ -124,17 +124,33 @@ export async function listProductsHandler(
 ): Promise<void> {
   try {
     const orgId = requireOrgId(req);
-    const result = await productsService.listMerchantProducts(orgId, req.query);
-    
-    const page = Number(req.query.page ?? 1);
-    const limit = Number(req.query.limit ?? 20);
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50));
 
-    success(res, result.products, {
+    const result = await productsService.listMerchantProducts(orgId, {
+      ...req.query,
       page,
       limit,
-      totalItems: result.total,
-      totalPages: Math.ceil(result.total / limit),
     });
+    
+    const totalPages = Math.max(1, Math.ceil(result.total / limit));
+
+    success(
+      res,
+      {
+        products: result.products,
+        total: result.total,
+        page,
+        limit,
+        totalPages,
+      },
+      {
+        page,
+        limit,
+        totalItems: result.total,
+        totalPages,
+      }
+    );
   } catch (err) {
     next(err);
   }

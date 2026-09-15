@@ -36,8 +36,8 @@ export async function listOrdersHandler(
 ): Promise<void> {
   try {
     const orgId = requireOrgId(req);
-    const page = Number(req.query.page ?? 1);
-    const limit = Number(req.query.limit ?? 20);
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '20'), 10) || 20));
     const status = typeof req.query.status === 'string' ? req.query.status : undefined;
     const paymentStatus = typeof req.query.payment_status === 'string' ? req.query.payment_status : undefined;
     const paymentMethod = typeof req.query.payment_method === 'string' ? req.query.payment_method : undefined;
@@ -52,12 +52,24 @@ export async function listOrdersHandler(
       q,
     });
 
-    success(res, result.orders, {
-      page,
-      limit,
-      totalItems: result.total,
-      totalPages: Math.ceil(result.total / limit),
-    });
+    const totalPages = Math.max(1, Math.ceil(result.total / limit));
+
+    success(
+      res,
+      {
+        orders: result.orders,
+        total: result.total,
+        page,
+        limit,
+        totalPages,
+      },
+      {
+        page,
+        limit,
+        totalItems: result.total,
+        totalPages,
+      }
+    );
   } catch (err) {
     next(err);
   }

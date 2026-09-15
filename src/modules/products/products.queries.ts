@@ -310,9 +310,10 @@ export async function listProducts(
         paramIndex++;
     }
 
+    // Spot-on database search across title, SKU/ISBN, description/author, and category
     if (searchQuery && searchQuery.trim().length > 0) {
         conditions.push(
-            `(p.name ILIKE $${paramIndex} OR p.sku ILIKE $${paramIndex} OR p.description ILIKE $${paramIndex})`
+            `(p.name ILIKE $${paramIndex} OR p.sku ILIKE $${paramIndex} OR p.description ILIKE $${paramIndex} OR c.name ILIKE $${paramIndex})`
         );
         params.push(`%${searchQuery.trim()}%`);
         paramIndex++;
@@ -321,8 +322,9 @@ export async function listProducts(
     const whereClause = conditions.join(" AND ");
 
     const countResult = await query<{ count: string }>(
-        `SELECT COUNT(*) AS count 
+        `SELECT COUNT(p.id) AS count 
          FROM products p 
+         LEFT JOIN categories c ON c.id = p.category_id
          WHERE ${whereClause}`,
         params
     );
