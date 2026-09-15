@@ -55,19 +55,19 @@ const FORMAT_SELECT_FIELDS = `
   pf.updated_at
 `;
 
-// Fields for INSERT / UPDATE RETURNING clauses
+// Qualified fields to eliminate PostgreSQL "column reference is ambiguous" errors
 const FORMAT_RETURNING_FIELDS = `
-  id,
-  product_id,
-  format,
-  price::text AS price,
-  compare_at_price::text AS compare_at_price,
-  file_url,
-  file_public_id,
-  file_size_bytes::text AS file_size_bytes,
-  stock,
-  created_at,
-  updated_at
+  product_formats.id,
+  product_formats.product_id,
+  product_formats.format,
+  product_formats.price::text AS price,
+  product_formats.compare_at_price::text AS compare_at_price,
+  product_formats.file_url,
+  product_formats.file_public_id,
+  product_formats.file_size_bytes::text AS file_size_bytes,
+  product_formats.stock,
+  product_formats.created_at,
+  product_formats.updated_at
 `;
 
 export async function checkProductBelongsToOrg(
@@ -166,6 +166,10 @@ export async function updateProductFormat(
 
   if (data.price !== undefined) {
     setClauses.push(`price = $${paramIdx}`);
+    // Defensively reset compare_at_price to NULL if updated price exceeds or equals compare_at_price
+    setClauses.push(
+      `compare_at_price = (CASE WHEN compare_at_price IS NOT NULL AND compare_at_price <= $${paramIdx} THEN NULL ELSE compare_at_price END)`
+    );
     params.push(data.price);
     paramIdx++;
   }
