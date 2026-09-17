@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/product-formats/product-formats.queries.ts
-// Database access layer for product formats with compare_at_price support.
+// Database access layer for product formats with unambiguous UPDATE scope.
 // =============================================================================
 
 import { query } from '../../config/db';
@@ -55,7 +55,7 @@ const FORMAT_SELECT_FIELDS = `
   pf.updated_at
 `;
 
-// Qualified fields to eliminate PostgreSQL "column reference is ambiguous" errors
+// Explicitly qualified fields to prevent any ambiguity in RETURNING clauses
 const FORMAT_RETURNING_FIELDS = `
   product_formats.id,
   product_formats.product_id,
@@ -166,7 +166,7 @@ export async function updateProductFormat(
 
   if (data.price !== undefined) {
     setClauses.push(`price = $${paramIdx}`);
-    // Defensively reset compare_at_price to NULL if updated price exceeds or equals compare_at_price
+    // Defensive reset of compare_at_price (unambiguous because product_formats is the sole table in scope)
     setClauses.push(
       `compare_at_price = (CASE WHEN compare_at_price IS NOT NULL AND compare_at_price <= $${paramIdx} THEN NULL ELSE compare_at_price END)`
     );
@@ -210,15 +210,16 @@ export async function updateProductFormat(
 
   setClauses.push('updated_at = NOW()');
 
+  // Tenant ownership enforced without multi-table join ambiguity
   const result = await query<ProductFormatRow>(
     `UPDATE product_formats
      SET ${setClauses.join(', ')}
-     FROM products p
-     WHERE product_formats.product_id = p.id
-       AND p.org_id = $1
-       AND p.id = $2
-       AND product_formats.id = $3
-       AND p.deleted_at IS NULL
+     WHERE id = $3
+       AND product_id = $2
+       AND product_id IN (
+         SELECT id FROM products
+         WHERE id = $2 AND org_id = $1 AND deleted_at IS NULL
+       )
      RETURNING ${FORMAT_RETURNING_FIELDS}`,
     params
   );
