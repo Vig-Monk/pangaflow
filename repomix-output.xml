@@ -7161,250 +7161,6 @@ export async function getMpesaTransactionByCheckoutId(
 }
 </file>
 
-<file path="src/modules/product-formats/product-formats.queries.ts">
-// =============================================================================
-// soko-api/src/modules/product-formats/product-formats.queries.ts
-// Database access layer for product formats with compare_at_price support.
-// =============================================================================
-
-import { query } from '../../config/db';
-
-export type FormatType = 'pdf' | 'epub' | 'hardcopy';
-
-export interface ProductFormatRow {
-  id: string;
-  product_id: string;
-  format: FormatType;
-  price: string;
-  compare_at_price: string | null;
-  file_url: string | null;
-  file_public_id: string | null;
-  file_size_bytes: string | null;
-  stock: number | null;
-  created_at: Date;
-  updated_at: Date;
-}
-
-export interface CreateFormatInput {
-  format: FormatType;
-  price: number;
-  compareAtPrice?: number | null;
-  fileUrl?: string | null;
-  filePublicId?: string | null;
-  fileSizeBytes?: number | null;
-  stock?: number | null;
-}
-
-export interface UpdateFormatInput {
-  price?: number;
-  compareAtPrice?: number | null;
-  fileUrl?: string | null;
-  filePublicId?: string | null;
-  fileSizeBytes?: number | null;
-  stock?: number | null;
-}
-
-// Fields for SELECT queries joining product_formats as pf
-const FORMAT_SELECT_FIELDS = `
-  pf.id,
-  pf.product_id,
-  pf.format,
-  pf.price::text AS price,
-  pf.compare_at_price::text AS compare_at_price,
-  pf.file_url,
-  pf.file_public_id,
-  pf.file_size_bytes::text AS file_size_bytes,
-  pf.stock,
-  pf.created_at,
-  pf.updated_at
-`;
-
-// Fields for INSERT / UPDATE RETURNING clauses
-const FORMAT_RETURNING_FIELDS = `
-  id,
-  product_id,
-  format,
-  price::text AS price,
-  compare_at_price::text AS compare_at_price,
-  file_url,
-  file_public_id,
-  file_size_bytes::text AS file_size_bytes,
-  stock,
-  created_at,
-  updated_at
-`;
-
-export async function checkProductBelongsToOrg(
-  orgId: string,
-  productId: string
-): Promise<boolean> {
-  const result = await query<{ id: string }>(
-    `SELECT id FROM products WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL`,
-    [productId, orgId]
-  );
-  return result.rows.length > 0;
-}
-
-export async function getFormatsByProductId(
-  orgId: string,
-  productId: string
-): Promise<ProductFormatRow[]> {
-  const result = await query<ProductFormatRow>(
-    `SELECT ${FORMAT_SELECT_FIELDS}
-     FROM product_formats pf
-     INNER JOIN products p ON p.id = pf.product_id
-     WHERE p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL
-     ORDER BY (
-       CASE pf.format
-         WHEN 'hardcopy' THEN 1
-         WHEN 'pdf' THEN 2
-         WHEN 'epub' THEN 3
-         ELSE 4
-       END
-     ) ASC, pf.created_at ASC`,
-    [orgId, productId]
-  );
-  return result.rows;
-}
-
-export async function getFormatById(
-  orgId: string,
-  productId: string,
-  formatId: string
-): Promise<ProductFormatRow | null> {
-  const result = await query<ProductFormatRow>(
-    `SELECT ${FORMAT_SELECT_FIELDS}
-     FROM product_formats pf
-     INNER JOIN products p ON p.id = pf.product_id
-     WHERE p.org_id = $1 AND p.id = $2 AND pf.id = $3 AND p.deleted_at IS NULL`,
-    [orgId, productId, formatId]
-  );
-  return result.rows[0] ?? null;
-}
-
-export async function createProductFormat(
-  orgId: string,
-  productId: string,
-  data: CreateFormatInput
-): Promise<ProductFormatRow | null> {
-  const result = await query<ProductFormatRow>(
-    `INSERT INTO product_formats (
-       product_id, format, price, compare_at_price, file_url, file_public_id, file_size_bytes, stock
-     )
-     SELECT p.id, $3, $4, $5, $6, $7, $8, $9
-     FROM products p
-     WHERE p.id = $2 AND p.org_id = $1 AND p.deleted_at IS NULL
-     ON CONFLICT (product_id, format) DO UPDATE SET
-       price            = EXCLUDED.price,
-       compare_at_price = EXCLUDED.compare_at_price,
-       file_url         = EXCLUDED.file_url,
-       file_public_id   = EXCLUDED.file_public_id,
-       file_size_bytes  = EXCLUDED.file_size_bytes,
-       stock            = EXCLUDED.stock,
-       updated_at       = NOW()
-     RETURNING ${FORMAT_RETURNING_FIELDS}`,
-    [
-      orgId,
-      productId,
-      data.format,
-      data.price,
-      data.compareAtPrice ?? null,
-      data.fileUrl ?? null,
-      data.filePublicId ?? null,
-      data.fileSizeBytes ?? null,
-      data.stock ?? null,
-    ]
-  );
-  return result.rows[0] ?? null;
-}
-
-export async function updateProductFormat(
-  orgId: string,
-  productId: string,
-  formatId: string,
-  data: UpdateFormatInput
-): Promise<ProductFormatRow | null> {
-  const setClauses: string[] = [];
-  const params: unknown[] = [orgId, productId, formatId];
-  let paramIdx = 4;
-
-  if (data.price !== undefined) {
-    setClauses.push(`price = $${paramIdx}`);
-    params.push(data.price);
-    paramIdx++;
-  }
-
-  if (data.compareAtPrice !== undefined) {
-    setClauses.push(`compare_at_price = $${paramIdx}`);
-    params.push(data.compareAtPrice);
-    paramIdx++;
-  }
-
-  if (data.fileUrl !== undefined) {
-    setClauses.push(`file_url = $${paramIdx}`);
-    params.push(data.fileUrl);
-    paramIdx++;
-  }
-
-  if (data.filePublicId !== undefined) {
-    setClauses.push(`file_public_id = $${paramIdx}`);
-    params.push(data.filePublicId);
-    paramIdx++;
-  }
-
-  if (data.fileSizeBytes !== undefined) {
-    setClauses.push(`file_size_bytes = $${paramIdx}`);
-    params.push(data.fileSizeBytes);
-    paramIdx++;
-  }
-
-  if (data.stock !== undefined) {
-    setClauses.push(`stock = $${paramIdx}`);
-    params.push(data.stock);
-    paramIdx++;
-  }
-
-  if (setClauses.length === 0) {
-    return getFormatById(orgId, productId, formatId);
-  }
-
-  setClauses.push('updated_at = NOW()');
-
-  const result = await query<ProductFormatRow>(
-    `UPDATE product_formats
-     SET ${setClauses.join(', ')}
-     FROM products p
-     WHERE product_formats.product_id = p.id
-       AND p.org_id = $1
-       AND p.id = $2
-       AND product_formats.id = $3
-       AND p.deleted_at IS NULL
-     RETURNING ${FORMAT_RETURNING_FIELDS}`,
-    params
-  );
-
-  return result.rows[0] ?? null;
-}
-
-export async function deleteProductFormat(
-  orgId: string,
-  productId: string,
-  formatId: string
-): Promise<boolean> {
-  const result = await query(
-    `DELETE FROM product_formats pf
-     USING products p
-     WHERE pf.product_id = p.id
-       AND p.org_id = $1
-       AND p.id = $2
-       AND pf.id = $3
-       AND p.deleted_at IS NULL`,
-    [orgId, productId, formatId]
-  );
-  return (result.rowCount ?? 0) > 0;
-}
-</file>
-
 <file path="src/modules/transactions/dashboard.routes.ts">
 // =============================================================================
 // src/modules/transactions/dashboard.routes.ts
@@ -7530,176 +7286,6 @@ async function run(): Promise<void> {
 }
 
 run();
-</file>
-
-<file path="src/services/r2.service.ts">
-// =============================================================================
-// soko-api/src/services/r2.service.ts
-// Cloudflare R2 Private S3-Compatible Object Storage Service
-// Generates presigned upload URLs (PUT) and expiring download URLs (GET).
-// =============================================================================
-
-import {
-  S3Client,
-  PutObjectCommand,
-  GetObjectCommand,
-  DeleteObjectCommand,
-} from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { Upload } from '@aws-sdk/lib-storage';
-import axios from 'axios';
-import { Readable } from 'stream';
-import { env } from '../config/env';
-import { AppError } from '../utils/error';
-
-let s3ClientInstance: S3Client | null = null;
-
-export function getR2Client(): S3Client {
-  if (!s3ClientInstance) {
-    if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) {
-      throw new AppError('Cloudflare R2 credentials are not configured in environment', 500);
-    }
-
-    s3ClientInstance = new S3Client({
-      region: 'auto',
-      endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId: env.R2_ACCESS_KEY_ID,
-        secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-      },
-    });
-  }
-  return s3ClientInstance;
-}
-
-export interface PresignedUploadResult {
-  uploadUrl: string;
-  key: string;
-  fileUrl: string;
-  expiresInSeconds: number;
-}
-
-/**
- * Generates a presigned PUT URL for direct browser-to-Cloudflare-R2 upload (15-min TTL).
- */
-export async function generatePresignedUploadUrl(
-  orgId: string,
-  rawFilename: string,
-  contentType = 'application/pdf'
-): Promise<PresignedUploadResult> {
-  const client = getR2Client();
-  const sanitized = rawFilename.toLowerCase().replace(/[^a-z0-9.-]/g, '_');
-  const key = `ebooks/${orgId}/${Date.now()}-${sanitized}`;
-
-  const command = new PutObjectCommand({
-    Bucket: env.R2_BUCKET_NAME,
-    Key: key,
-    ContentType: contentType,
-  });
-
-  const expiresInSeconds = 900;
-  const uploadUrl = await getSignedUrl(client, command, { expiresIn: expiresInSeconds });
-
-  // Compute storage file reference URI
-  const fileUrl = `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${env.R2_BUCKET_NAME}/${key}`;
-
-  return {
-    uploadUrl,
-    key,
-    fileUrl,
-    expiresInSeconds,
-  };
-}
-
-/**
- * Generates an expiring presigned GET URL for authorized tokenized book downloads (1-hour TTL).
- */
-export async function generatePresignedDownloadUrl(
-  fileKey: string,
-  downloadFilename: string,
-  expiresInSeconds = 3600
-): Promise<string> {
-  const client = getR2Client();
-  const safeFilename = downloadFilename.replace(/[^a-zA-Z0-9._-]/g, '_');
-
-  const command = new GetObjectCommand({
-    Bucket: env.R2_BUCKET_NAME,
-    Key: fileKey,
-    ResponseContentDisposition: `attachment; filename="${safeFilename}"`,
-  });
-
-  return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
-}
-
-/**
- * Streams a remote file directly into Cloudflare R2.
- */
-export async function streamRemoteUrlToR2(
-  remoteUrl: string,
-  orgId: string,
-  filename: string,
-  contentType = 'application/pdf'
-): Promise<{ key: string; fileSizeBytes: number }> {
-  const client = getR2Client();
-  const sanitized = filename.toLowerCase().replace(/[^a-z0-9.-]/g, '_');
-  const key = `ebooks/${orgId}/${Date.now()}-${sanitized}`;
-
-  const response = await axios.get<Readable>(remoteUrl, {
-    responseType: 'stream',
-    timeout: 60000,
-    maxRedirects: 5,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-    },
-  });
-
-  let bytesCount = 0;
-  response.data.on('data', (chunk: Buffer) => {
-    bytesCount += chunk.length;
-  });
-
-  const upload = new Upload({
-    client,
-    params: {
-      Bucket: env.R2_BUCKET_NAME,
-      Key: key,
-      Body: response.data,
-      ContentType: contentType,
-    },
-  });
-
-  await upload.done();
-
-  const rawLength = response.headers['content-length'];
-  const parsedLength =
-    typeof rawLength === 'number'
-      ? rawLength
-      : typeof rawLength === 'string'
-        ? parseInt(rawLength, 10)
-        : 0;
-
-  return {
-    key,
-    fileSizeBytes: bytesCount || (isNaN(parsedLength) ? 0 : parsedLength),
-  };
-}
-
-/**
- * Deletes an object from Cloudflare R2 bucket.
- */
-export async function deleteR2Object(key: string): Promise<void> {
-  const client = getR2Client();
-  try {
-    await client.send(
-      new DeleteObjectCommand({
-        Bucket: env.R2_BUCKET_NAME,
-        Key: key,
-      })
-    );
-  } catch (err) {
-    console.warn(`Failed to delete object from R2 (Key: ${key}):`, err);
-  }
-}
 </file>
 
 <file path="src/tests/e2e-delivery-flow.test.ts">
@@ -10433,6 +10019,254 @@ router.patch('/:id/payment-status', updateOrderPaymentStatusHandler);
 export default router;
 </file>
 
+<file path="src/modules/product-formats/product-formats.queries.ts">
+// =============================================================================
+// soko-api/src/modules/product-formats/product-formats.queries.ts
+// Database access layer for product formats with compare_at_price support.
+// =============================================================================
+
+import { query } from '../../config/db';
+
+export type FormatType = 'pdf' | 'epub' | 'hardcopy';
+
+export interface ProductFormatRow {
+  id: string;
+  product_id: string;
+  format: FormatType;
+  price: string;
+  compare_at_price: string | null;
+  file_url: string | null;
+  file_public_id: string | null;
+  file_size_bytes: string | null;
+  stock: number | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface CreateFormatInput {
+  format: FormatType;
+  price: number;
+  compareAtPrice?: number | null;
+  fileUrl?: string | null;
+  filePublicId?: string | null;
+  fileSizeBytes?: number | null;
+  stock?: number | null;
+}
+
+export interface UpdateFormatInput {
+  price?: number;
+  compareAtPrice?: number | null;
+  fileUrl?: string | null;
+  filePublicId?: string | null;
+  fileSizeBytes?: number | null;
+  stock?: number | null;
+}
+
+// Fields for SELECT queries joining product_formats as pf
+const FORMAT_SELECT_FIELDS = `
+  pf.id,
+  pf.product_id,
+  pf.format,
+  pf.price::text AS price,
+  pf.compare_at_price::text AS compare_at_price,
+  pf.file_url,
+  pf.file_public_id,
+  pf.file_size_bytes::text AS file_size_bytes,
+  pf.stock,
+  pf.created_at,
+  pf.updated_at
+`;
+
+// Qualified fields to eliminate PostgreSQL "column reference is ambiguous" errors
+const FORMAT_RETURNING_FIELDS = `
+  product_formats.id,
+  product_formats.product_id,
+  product_formats.format,
+  product_formats.price::text AS price,
+  product_formats.compare_at_price::text AS compare_at_price,
+  product_formats.file_url,
+  product_formats.file_public_id,
+  product_formats.file_size_bytes::text AS file_size_bytes,
+  product_formats.stock,
+  product_formats.created_at,
+  product_formats.updated_at
+`;
+
+export async function checkProductBelongsToOrg(
+  orgId: string,
+  productId: string
+): Promise<boolean> {
+  const result = await query<{ id: string }>(
+    `SELECT id FROM products WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL`,
+    [productId, orgId]
+  );
+  return result.rows.length > 0;
+}
+
+export async function getFormatsByProductId(
+  orgId: string,
+  productId: string
+): Promise<ProductFormatRow[]> {
+  const result = await query<ProductFormatRow>(
+    `SELECT ${FORMAT_SELECT_FIELDS}
+     FROM product_formats pf
+     INNER JOIN products p ON p.id = pf.product_id
+     WHERE p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL
+     ORDER BY (
+       CASE pf.format
+         WHEN 'hardcopy' THEN 1
+         WHEN 'pdf' THEN 2
+         WHEN 'epub' THEN 3
+         ELSE 4
+       END
+     ) ASC, pf.created_at ASC`,
+    [orgId, productId]
+  );
+  return result.rows;
+}
+
+export async function getFormatById(
+  orgId: string,
+  productId: string,
+  formatId: string
+): Promise<ProductFormatRow | null> {
+  const result = await query<ProductFormatRow>(
+    `SELECT ${FORMAT_SELECT_FIELDS}
+     FROM product_formats pf
+     INNER JOIN products p ON p.id = pf.product_id
+     WHERE p.org_id = $1 AND p.id = $2 AND pf.id = $3 AND p.deleted_at IS NULL`,
+    [orgId, productId, formatId]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function createProductFormat(
+  orgId: string,
+  productId: string,
+  data: CreateFormatInput
+): Promise<ProductFormatRow | null> {
+  const result = await query<ProductFormatRow>(
+    `INSERT INTO product_formats (
+       product_id, format, price, compare_at_price, file_url, file_public_id, file_size_bytes, stock
+     )
+     SELECT p.id, $3, $4, $5, $6, $7, $8, $9
+     FROM products p
+     WHERE p.id = $2 AND p.org_id = $1 AND p.deleted_at IS NULL
+     ON CONFLICT (product_id, format) DO UPDATE SET
+       price            = EXCLUDED.price,
+       compare_at_price = EXCLUDED.compare_at_price,
+       file_url         = EXCLUDED.file_url,
+       file_public_id   = EXCLUDED.file_public_id,
+       file_size_bytes  = EXCLUDED.file_size_bytes,
+       stock            = EXCLUDED.stock,
+       updated_at       = NOW()
+     RETURNING ${FORMAT_RETURNING_FIELDS}`,
+    [
+      orgId,
+      productId,
+      data.format,
+      data.price,
+      data.compareAtPrice ?? null,
+      data.fileUrl ?? null,
+      data.filePublicId ?? null,
+      data.fileSizeBytes ?? null,
+      data.stock ?? null,
+    ]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function updateProductFormat(
+  orgId: string,
+  productId: string,
+  formatId: string,
+  data: UpdateFormatInput
+): Promise<ProductFormatRow | null> {
+  const setClauses: string[] = [];
+  const params: unknown[] = [orgId, productId, formatId];
+  let paramIdx = 4;
+
+  if (data.price !== undefined) {
+    setClauses.push(`price = $${paramIdx}`);
+    // Defensively reset compare_at_price to NULL if updated price exceeds or equals compare_at_price
+    setClauses.push(
+      `compare_at_price = (CASE WHEN compare_at_price IS NOT NULL AND compare_at_price <= $${paramIdx} THEN NULL ELSE compare_at_price END)`
+    );
+    params.push(data.price);
+    paramIdx++;
+  }
+
+  if (data.compareAtPrice !== undefined) {
+    setClauses.push(`compare_at_price = $${paramIdx}`);
+    params.push(data.compareAtPrice);
+    paramIdx++;
+  }
+
+  if (data.fileUrl !== undefined) {
+    setClauses.push(`file_url = $${paramIdx}`);
+    params.push(data.fileUrl);
+    paramIdx++;
+  }
+
+  if (data.filePublicId !== undefined) {
+    setClauses.push(`file_public_id = $${paramIdx}`);
+    params.push(data.filePublicId);
+    paramIdx++;
+  }
+
+  if (data.fileSizeBytes !== undefined) {
+    setClauses.push(`file_size_bytes = $${paramIdx}`);
+    params.push(data.fileSizeBytes);
+    paramIdx++;
+  }
+
+  if (data.stock !== undefined) {
+    setClauses.push(`stock = $${paramIdx}`);
+    params.push(data.stock);
+    paramIdx++;
+  }
+
+  if (setClauses.length === 0) {
+    return getFormatById(orgId, productId, formatId);
+  }
+
+  setClauses.push('updated_at = NOW()');
+
+  const result = await query<ProductFormatRow>(
+    `UPDATE product_formats
+     SET ${setClauses.join(', ')}
+     FROM products p
+     WHERE product_formats.product_id = p.id
+       AND p.org_id = $1
+       AND p.id = $2
+       AND product_formats.id = $3
+       AND p.deleted_at IS NULL
+     RETURNING ${FORMAT_RETURNING_FIELDS}`,
+    params
+  );
+
+  return result.rows[0] ?? null;
+}
+
+export async function deleteProductFormat(
+  orgId: string,
+  productId: string,
+  formatId: string
+): Promise<boolean> {
+  const result = await query(
+    `DELETE FROM product_formats pf
+     USING products p
+     WHERE pf.product_id = p.id
+       AND p.org_id = $1
+       AND p.id = $2
+       AND pf.id = $3
+       AND p.deleted_at IS NULL`,
+    [orgId, productId, formatId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+</file>
+
 <file path="src/modules/product-formats/product-formats.service.ts">
 // =============================================================================
 // soko-api/src/modules/product-formats/product-formats.service.ts
@@ -12427,6 +12261,198 @@ export async function sendOrderConfirmationEmail(
 }
 </file>
 
+<file path="src/services/r2.service.ts">
+// =============================================================================
+// soko-api/src/services/r2.service.ts
+// Cloudflare R2 Private S3-Compatible Object Storage Service
+// Generates presigned upload URLs (PUT) and expiring download URLs (GET).
+// =============================================================================
+
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+} from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { Upload } from '@aws-sdk/lib-storage';
+import axios from 'axios';
+import { Readable } from 'stream';
+import { env } from '../config/env';
+import { AppError } from '../utils/error';
+
+let s3ClientInstance: S3Client | null = null;
+
+export interface PresignedUploadResult {
+  uploadUrl: string;
+  key: string;
+  fileUrl: string;
+  expiresInSeconds: number;
+}
+
+function cleanAccountId(raw: string): string {
+  return (raw || '')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\.r2\.cloudflarestorage\.com.*$/i, '')
+    .replace(/\/+$/, '');
+}
+
+export function getR2Client(): S3Client {
+  if (!s3ClientInstance) {
+    const accountId = cleanAccountId(env.R2_ACCOUNT_ID);
+    const accessKeyId = (env.R2_ACCESS_KEY_ID || '').trim();
+    const secretAccessKey = (env.R2_SECRET_ACCESS_KEY || '').trim();
+    const bucketName = (env.R2_BUCKET_NAME || '').trim();
+
+    if (!accountId || !accessKeyId || !secretAccessKey || !bucketName) {
+      throw new AppError(
+        'Cloudflare R2 is not configured. Please set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and R2_BUCKET_NAME.',
+        503
+      );
+    }
+
+    s3ClientInstance = new S3Client({
+      region: 'auto',
+      endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId,
+        secretAccessKey,
+      },
+    });
+  }
+  return s3ClientInstance;
+}
+
+/**
+ * Generates a presigned PUT URL for direct browser-to-Cloudflare-R2 upload (15-min TTL).
+ */
+export async function generatePresignedUploadUrl(
+  orgId: string,
+  rawFilename: string,
+  contentType = 'application/pdf'
+): Promise<PresignedUploadResult> {
+  const client = getR2Client();
+  const accountId = cleanAccountId(env.R2_ACCOUNT_ID);
+  const bucketName = (env.R2_BUCKET_NAME || 'flemela-books').trim();
+
+  const sanitized = rawFilename.toLowerCase().replace(/[^a-z0-9.-]/g, '_');
+  const key = `ebooks/${orgId}/${Date.now()}-${sanitized}`;
+
+  const command = new PutObjectCommand({
+    Bucket: bucketName,
+    Key: key,
+    ContentType: contentType,
+  });
+
+  const expiresInSeconds = 900;
+  const uploadUrl = await getSignedUrl(client, command, { expiresIn: expiresInSeconds });
+
+  // Compute storage file reference URI
+  const fileUrl = `https://${accountId}.r2.cloudflarestorage.com/${bucketName}/${key}`;
+
+  return {
+    uploadUrl,
+    key,
+    fileUrl,
+    expiresInSeconds,
+  };
+}
+
+/**
+ * Generates an expiring presigned GET URL for authorized tokenized book downloads (1-hour TTL).
+ */
+export async function generatePresignedDownloadUrl(
+  fileKey: string,
+  downloadFilename: string,
+  expiresInSeconds = 3600
+): Promise<string> {
+  const client = getR2Client();
+  const bucketName = (env.R2_BUCKET_NAME || 'flemela-books').trim();
+  const safeFilename = downloadFilename.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+  const command = new GetObjectCommand({
+    Bucket: bucketName,
+    Key: fileKey,
+    ResponseContentDisposition: `attachment; filename="${safeFilename}"`,
+  });
+
+  return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
+}
+
+/**
+ * Streams a remote file directly into Cloudflare R2.
+ */
+export async function streamRemoteUrlToR2(
+  remoteUrl: string,
+  orgId: string,
+  filename: string,
+  contentType = 'application/pdf'
+): Promise<{ key: string; fileSizeBytes: number }> {
+  const client = getR2Client();
+  const bucketName = (env.R2_BUCKET_NAME || 'flemela-books').trim();
+  const sanitized = filename.toLowerCase().replace(/[^a-z0-9.-]/g, '_');
+  const key = `ebooks/${orgId}/${Date.now()}-${sanitized}`;
+
+  const response = await axios.get<Readable>(remoteUrl, {
+    responseType: 'stream',
+    timeout: 60000,
+    maxRedirects: 5,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    },
+  });
+
+  let bytesCount = 0;
+  response.data.on('data', (chunk: Buffer) => {
+    bytesCount += chunk.length;
+  });
+
+  const upload = new Upload({
+    client,
+    params: {
+      Bucket: bucketName,
+      Key: key,
+      Body: response.data,
+      ContentType: contentType,
+    },
+  });
+
+  await upload.done();
+
+  const rawLength = response.headers['content-length'];
+  const parsedLength =
+    typeof rawLength === 'number'
+      ? rawLength
+      : typeof rawLength === 'string'
+        ? parseInt(rawLength, 10)
+        : 0;
+
+  return {
+    key,
+    fileSizeBytes: bytesCount || (isNaN(parsedLength) ? 0 : parsedLength),
+  };
+}
+
+/**
+ * Deletes an object from Cloudflare R2 bucket.
+ */
+export async function deleteR2Object(key: string): Promise<void> {
+  const client = getR2Client();
+  const bucketName = (env.R2_BUCKET_NAME || 'flemela-books').trim();
+  try {
+    await client.send(
+      new DeleteObjectCommand({
+        Bucket: bucketName,
+        Key: key,
+      })
+    );
+  } catch (err) {
+    console.warn(`Failed to delete object from R2 (Key: ${key}):`, err);
+  }
+}
+</file>
+
 <file path="src/tests/e2e-integration.test.ts">
 // =============================================================================
 // soko-api/src/tests/e2e-integration.test.ts
@@ -13452,577 +13478,6 @@ export async function recordClick(bannerId: string): Promise<void> {
 }
 </file>
 
-<file path="src/modules/orders/orders.controller.ts">
-// =============================================================================
-// src/modules/orders/orders.controller.ts
-// =============================================================================
-
-import { Request, Response, NextFunction } from 'express';
-import { success } from '../../utils/response';
-import { AppError } from '../../utils/error';
-import * as ordersQueries from './orders.queries';
-import * as ordersService from './orders.service';
-
-function requireOrgId(req: Request): string {
-  if (!req.orgId) {
-    throw new AppError('Unauthorized', 401);
-  }
-  return req.orgId;
-}
-
-export async function getOrdersSummaryHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const summary = await ordersQueries.getOrdersSummary(orgId);
-    success(res, summary);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function listOrdersHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const page = Number(req.query.page ?? 1);
-    const limit = Number(req.query.limit ?? 20);
-    const status = typeof req.query.status === 'string' ? req.query.status : undefined;
-    const paymentStatus = typeof req.query.payment_status === 'string' ? req.query.payment_status : undefined;
-    const paymentMethod = typeof req.query.payment_method === 'string' ? req.query.payment_method : undefined;
-    const q = typeof req.query.q === 'string' ? req.query.q : undefined;
-
-    const result = await ordersQueries.listOrders(orgId, {
-      page,
-      limit,
-      status,
-      paymentStatus,
-      paymentMethod,
-      q,
-    });
-
-    success(res, result.orders, {
-      page,
-      limit,
-      totalItems: result.total,
-      totalPages: Math.ceil(result.total / limit),
-    });
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function getOrderHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const order = await ordersQueries.getOrderById(orgId, req.params.id);
-    if (!order) {
-      throw new AppError('Order not found', 404);
-    }
-    success(res, order);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function updateOrderStatusHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const order = await ordersQueries.updateOrderStatus(orgId, req.params.id, req.body.status);
-    if (!order) {
-      throw new AppError('Order not found', 404);
-    }
-    success(res, order);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function updateOrderPaymentStatusHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const order = await ordersQueries.updateOrderPaymentStatus(
-      orgId,
-      req.params.id,
-      req.body.payment_status
-    );
-    if (!order) {
-      throw new AppError('Order not found', 404);
-    }
-    success(res, order);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function getNearbyOrdersHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const nearby = await ordersService.getNearbyOrders(orgId, req.params.id);
-    success(res, nearby);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function assignRiderHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const result = await ordersService.assignRider(orgId, req.body);
-    success(res, result);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function completeDeliveryHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const result = await ordersService.completeDelivery(orgId, req.params.id, req.body);
-    success(res, result);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function getCashReconciliationHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const summary = await ordersService.getCashReconciliation(orgId, {
-      startDate: typeof req.query.startDate === 'string' ? req.query.startDate : undefined,
-      endDate: typeof req.query.endDate === 'string' ? req.query.endDate : undefined,
-    });
-    success(res, summary);
-  } catch (err) {
-    next(err);
-  }
-}
-</file>
-
-<file path="src/modules/products/products.controller.ts">
-// =============================================================================
-// soko-api/src/modules/products/products.controller.ts
-// =============================================================================
-
-import { Request, Response, NextFunction } from 'express';
-import { z } from 'zod';
-import { success } from '../../utils/response';
-import { AppError } from '../../utils/error';
-import * as productsService from './products.service';
-import * as productsQueries from './products.queries';
-import { findBestBookCover } from '../../services/bookCover.service';
-
-function requireOrgId(req: Request): string {
-  if (!req.orgId) {
-    throw new AppError('Unauthorized', 401);
-  }
-  return req.orgId;
-}
-
-const FindCoverQuerySchema = z.object({
-  title: z.string().min(1, 'Book title is required'),
-  author: z.string().optional(),
-});
-
-export async function autoFindBookCoverHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const parsed = FindCoverQuerySchema.safeParse(req.query);
-    if (!parsed.success) {
-      throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid query parameters', 400);
-    }
-
-    const result = await findBestBookCover(parsed.data.title, parsed.data.author);
-    success(res, result);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function uploadSignatureHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const target = req.query.target === 'store' ? 'store' : 'products';
-    
-    const signature = await productsService.generateUploadSignature(orgId, target);
-    success(res, signature);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function deleteProductHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const result = await productsService.deleteMerchantProduct(orgId, req.params.id);
-    success(res, result);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function bulkDeleteProductsHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const result = await productsService.deleteProductsBulk(orgId, req.body);
-    success(res, result);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function createCategoryHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const schema = z.object({ name: z.string().min(1, 'Category name is required').max(100) });
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) {
-      throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid category name', 400);
-    }
-    const category = await productsService.createCategory(orgId, parsed.data.name);
-    success(res, category, undefined, 201);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function listCategoriesHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const categories = await productsQueries.listCategories(orgId);
-    success(res, categories);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function listProductsHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const result = await productsService.listMerchantProducts(orgId, req.query);
-    
-    const page = Number(req.query.page ?? 1);
-    const limit = Number(req.query.limit ?? 20);
-
-    success(res, result.products, {
-      page,
-      limit,
-      totalItems: result.total,
-      totalPages: Math.ceil(result.total / limit),
-    });
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function getProductHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const product = await productsService.getMerchantProduct(orgId, req.params.id);
-    success(res, product);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function updateProductHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const product = await productsService.modifyMerchantProduct(orgId, req.params.id, req.body);
-    success(res, product);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function publishProductHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const product = await productsService.updateMerchantProductStatus(orgId, req.params.id, 'published');
-    success(res, product);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function unpublishProductHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const product = await productsService.updateMerchantProductStatus(orgId, req.params.id, 'draft');
-    success(res, product);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function archiveProductHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const product = await productsService.archiveMerchantProduct(orgId, req.params.id);
-    success(res, { archived: true, product });
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function unarchiveProductHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const product = await productsService.unarchiveMerchantProduct(orgId, req.params.id);
-    success(res, { unarchived: true, product });
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function listInventoryHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const result = await productsService.listMerchantInventory(orgId, req.query);
-    
-    const page = Number(req.query.page ?? 1);
-    const limit = Number(req.query.limit ?? 20);
-
-    success(res, result.inventory, {
-      page,
-      limit,
-      totalItems: result.total,
-      totalPages: Math.ceil(result.total / limit),
-    });
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function updateStockHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const inventory = await productsService.updateMerchantStock(orgId, req.params.productId, req.body);
-    success(res, inventory);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function createProductsBulkHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const resultProducts = await productsService.createProductsBulk(orgId, req.body);
-    success(res, resultProducts, undefined, 201);
-  } catch (err) {
-    next(err);
-  }
-}
-</file>
-
-<file path="src/modules/public/public.controller.ts">
-// =============================================================================
-// soko-api/src/modules/public/public.controller.ts
-// Public HTTP controller handling catalog, orders, and payment recovery.
-// =============================================================================
-
-import { Request, Response, NextFunction } from 'express';
-import { success } from '../../utils/response';
-import * as publicService from './public.service';
-
-export async function searchDeliveryLocationsHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const results = await publicService.searchDeliveryLocations(req.query);
-    success(res, results);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function getStoreMetadataHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const store = await publicService.getStoreMetadata(req.params.storeSlug);
-    success(res, store);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function listStoreProductsHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const products = await publicService.listStoreProducts(req.params.storeSlug);
-    success(res, products);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function getProductDetailsHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const product = await publicService.getProductDetails(req.params.storeSlug, req.params.productSlug);
-    success(res, product);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function placeOrderHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const result = await publicService.placeOrder(req.params.storeSlug, req.body);
-    success(res, result, undefined, 201);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function getPublicOrderDetailsHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const verifyingPhone = typeof req.query.phone === 'string' ? req.query.phone : undefined;
-    const orderDetails = await publicService.getPublicOrderDetails(
-      req.params.storeSlug,
-      req.params.orderId,
-      verifyingPhone
-    );
-    success(res, orderDetails);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function retryOrderPaymentHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const result = await publicService.retryOrderPayment(
-      req.params.storeSlug,
-      req.params.orderId,
-      req.body
-    );
-    success(res, result);
-  } catch (err) {
-    next(err);
-  }
-}
-</file>
-
 <file path="src/modules/transactions/transactions.service.ts">
 // =============================================================================
 // src/modules/transactions/transactions.service.ts
@@ -14680,6 +14135,199 @@ services:
     ipAllowList: [] # Accessible internally by your backend only
 </file>
 
+<file path="src/modules/orders/orders.controller.ts">
+// =============================================================================
+// src/modules/orders/orders.controller.ts
+// =============================================================================
+
+import { Request, Response, NextFunction } from 'express';
+import { success } from '../../utils/response';
+import { AppError } from '../../utils/error';
+import * as ordersQueries from './orders.queries';
+import * as ordersService from './orders.service';
+
+function requireOrgId(req: Request): string {
+  if (!req.orgId) {
+    throw new AppError('Unauthorized', 401);
+  }
+  return req.orgId;
+}
+
+export async function getOrdersSummaryHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const summary = await ordersQueries.getOrdersSummary(orgId);
+    success(res, summary);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function listOrdersHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '20'), 10) || 20));
+    const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+    const paymentStatus = typeof req.query.payment_status === 'string' ? req.query.payment_status : undefined;
+    const paymentMethod = typeof req.query.payment_method === 'string' ? req.query.payment_method : undefined;
+    const q = typeof req.query.q === 'string' ? req.query.q : undefined;
+
+    const result = await ordersQueries.listOrders(orgId, {
+      page,
+      limit,
+      status,
+      paymentStatus,
+      paymentMethod,
+      q,
+    });
+
+    const totalPages = Math.max(1, Math.ceil(result.total / limit));
+
+    success(
+      res,
+      {
+        orders: result.orders,
+        total: result.total,
+        page,
+        limit,
+        totalPages,
+      },
+      {
+        page,
+        limit,
+        totalItems: result.total,
+        totalPages,
+      }
+    );
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getOrderHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const order = await ordersQueries.getOrderById(orgId, req.params.id);
+    if (!order) {
+      throw new AppError('Order not found', 404);
+    }
+    success(res, order);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateOrderStatusHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const order = await ordersQueries.updateOrderStatus(orgId, req.params.id, req.body.status);
+    if (!order) {
+      throw new AppError('Order not found', 404);
+    }
+    success(res, order);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateOrderPaymentStatusHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const order = await ordersQueries.updateOrderPaymentStatus(
+      orgId,
+      req.params.id,
+      req.body.payment_status
+    );
+    if (!order) {
+      throw new AppError('Order not found', 404);
+    }
+    success(res, order);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getNearbyOrdersHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const nearby = await ordersService.getNearbyOrders(orgId, req.params.id);
+    success(res, nearby);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function assignRiderHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const result = await ordersService.assignRider(orgId, req.body);
+    success(res, result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function completeDeliveryHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const result = await ordersService.completeDelivery(orgId, req.params.id, req.body);
+    success(res, result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getCashReconciliationHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const summary = await ordersService.getCashReconciliation(orgId, {
+      startDate: typeof req.query.startDate === 'string' ? req.query.startDate : undefined,
+      endDate: typeof req.query.endDate === 'string' ? req.query.endDate : undefined,
+    });
+    success(res, summary);
+  } catch (err) {
+    next(err);
+  }
+}
+</file>
+
 <file path="src/modules/payments/payments.service.ts">
 // =============================================================================
 // soko-api/src/modules/payments/payments.service.ts
@@ -14982,6 +14630,430 @@ export async function handleMpesaCallback(rawPayload: unknown): Promise<void> {
 }
 </file>
 
+<file path="src/modules/products/products.controller.ts">
+// =============================================================================
+// soko-api/src/modules/products/products.controller.ts
+// =============================================================================
+
+import { Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
+import { success } from '../../utils/response';
+import { AppError } from '../../utils/error';
+import * as productsService from './products.service';
+import * as productsQueries from './products.queries';
+import { findBestBookCover } from '../../services/bookCover.service';
+
+function requireOrgId(req: Request): string {
+  if (!req.orgId) {
+    throw new AppError('Unauthorized', 401);
+  }
+  return req.orgId;
+}
+
+const FindCoverQuerySchema = z.object({
+  title: z.string().min(1, 'Book title is required'),
+  author: z.string().optional(),
+});
+
+export async function autoFindBookCoverHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const parsed = FindCoverQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid query parameters', 400);
+    }
+
+    const result = await findBestBookCover(parsed.data.title, parsed.data.author);
+    success(res, result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function uploadSignatureHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const target = req.query.target === 'store' ? 'store' : 'products';
+    
+    const signature = await productsService.generateUploadSignature(orgId, target);
+    success(res, signature);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function deleteProductHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const result = await productsService.deleteMerchantProduct(orgId, req.params.id);
+    success(res, result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function bulkDeleteProductsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const result = await productsService.deleteProductsBulk(orgId, req.body);
+    success(res, result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function createCategoryHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const schema = z.object({ name: z.string().min(1, 'Category name is required').max(100) });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid category name', 400);
+    }
+    const category = await productsService.createCategory(orgId, parsed.data.name);
+    success(res, category, undefined, 201);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function listCategoriesHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const categories = await productsQueries.listCategories(orgId);
+    success(res, categories);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function listProductsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50));
+
+    const result = await productsService.listMerchantProducts(orgId, {
+      ...req.query,
+      page,
+      limit,
+    });
+    
+    const totalPages = Math.max(1, Math.ceil(result.total / limit));
+
+    success(
+      res,
+      {
+        products: result.products,
+        total: result.total,
+        page,
+        limit,
+        totalPages,
+      },
+      {
+        page,
+        limit,
+        totalItems: result.total,
+        totalPages,
+      }
+    );
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getProductHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const product = await productsService.getMerchantProduct(orgId, req.params.id);
+    success(res, product);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateProductHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const product = await productsService.modifyMerchantProduct(orgId, req.params.id, req.body);
+    success(res, product);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function publishProductHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const product = await productsService.updateMerchantProductStatus(orgId, req.params.id, 'published');
+    success(res, product);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function unpublishProductHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const product = await productsService.updateMerchantProductStatus(orgId, req.params.id, 'draft');
+    success(res, product);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function archiveProductHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const product = await productsService.archiveMerchantProduct(orgId, req.params.id);
+    success(res, { archived: true, product });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function unarchiveProductHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const product = await productsService.unarchiveMerchantProduct(orgId, req.params.id);
+    success(res, { unarchived: true, product });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function listInventoryHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const result = await productsService.listMerchantInventory(orgId, req.query);
+    
+    const page = Number(req.query.page ?? 1);
+    const limit = Number(req.query.limit ?? 20);
+
+    success(res, result.inventory, {
+      page,
+      limit,
+      totalItems: result.total,
+      totalPages: Math.ceil(result.total / limit),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateStockHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const inventory = await productsService.updateMerchantStock(orgId, req.params.productId, req.body);
+    success(res, inventory);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function createProductsBulkHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const orgId = requireOrgId(req);
+    const resultProducts = await productsService.createProductsBulk(orgId, req.body);
+    success(res, resultProducts, undefined, 201);
+  } catch (err) {
+    next(err);
+  }
+}
+</file>
+
+<file path="src/modules/public/public.controller.ts">
+// =============================================================================
+// soko-api/src/modules/public/public.controller.ts
+// Public HTTP controller handling catalog, orders, and payment recovery.
+// =============================================================================
+
+import { Request, Response, NextFunction } from 'express';
+import { success } from '../../utils/response';
+import * as publicService from './public.service';
+
+export async function searchDeliveryLocationsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const results = await publicService.searchDeliveryLocations(req.query);
+    success(res, results);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getStoreMetadataHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const store = await publicService.getStoreMetadata(req.params.storeSlug);
+    success(res, store);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function listStoreProductsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50));
+    const searchQuery = typeof req.query.q === 'string' ? req.query.q.trim() : undefined;
+    const category = typeof req.query.category === 'string'
+      ? req.query.category.trim()
+      : (typeof req.query.category_id === 'string' ? req.query.category_id.trim() : undefined);
+
+    const result = await publicService.listStoreProducts(req.params.storeSlug, {
+      page,
+      limit,
+      searchQuery,
+      category,
+    });
+
+    success(res, result, {
+      page: result.page,
+      limit: result.limit,
+      totalItems: result.total,
+      totalPages: result.totalPages,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getProductDetailsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const product = await publicService.getProductDetails(req.params.storeSlug, req.params.productSlug);
+    success(res, product);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function placeOrderHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const result = await publicService.placeOrder(req.params.storeSlug, req.body);
+    success(res, result, undefined, 201);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getPublicOrderDetailsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const verifyingPhone = typeof req.query.phone === 'string' ? req.query.phone : undefined;
+    const orderDetails = await publicService.getPublicOrderDetails(
+      req.params.storeSlug,
+      req.params.orderId,
+      verifyingPhone
+    );
+    success(res, orderDetails);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function retryOrderPaymentHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const result = await publicService.retryOrderPayment(
+      req.params.storeSlug,
+      req.params.orderId,
+      req.body
+    );
+    success(res, result);
+  } catch (err) {
+    next(err);
+  }
+}
+</file>
+
 <file path="src/config/env.ts">
 // =============================================================================
 // soko-api/src/config/env.ts
@@ -15036,818 +15108,6 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
-</file>
-
-<file path="src/modules/products/products.queries.ts">
-// =============================================================================
-// soko-api/src/modules/products/products.queries.ts
-// Product and Category catalog queries with slugification, badges, and smart deletes.
-// =============================================================================
-
-import { PoolClient } from "pg";
-import { query, pool } from "../../config/db";
-
-export type FormatType = 'pdf' | 'epub' | 'hardcopy';
-
-export interface ProductFormatRow {
-    id: string;
-    product_id: string;
-    format: FormatType;
-    price: string;
-    compare_at_price: string | null;
-    file_url: string | null;
-    file_public_id: string | null;
-    file_size_bytes: string | null;
-    stock: number | null;
-    created_at: Date;
-    updated_at: Date;
-}
-
-export interface ProductVariant {
-    id: string;
-    product_id: string;
-    title: string;
-    sku: string | null;
-    options: Record<string, string>;
-    price: string;
-    cost_price: string;
-    stock: number;
-    low_stock_at: number;
-    image_url: string | null;
-    is_active: boolean;
-}
-
-export interface ProductWithImages {
-    id: string;
-    org_id: string;
-    category_id: string;
-    category_name: string | null;
-    name: string;
-    slug: string;
-    sku: string | null;
-    description: string | null;
-    cost_price: string | null;
-    price: string;
-    compare_at_price: string | null;
-    badge: string | null;
-    sale_ends_at: Date | null;
-    status: "draft" | "published" | "archived";
-    created_at: Date;
-    updated_at: Date;
-    images: Array<{
-        image_url: string;
-        image_public_id: string;
-        sort_order: number;
-    }>;
-    variants: ProductVariant[];
-    formats: ProductFormatRow[];
-}
-
-export interface InventoryWithProduct {
-    id: string;
-    product_id: string;
-    product_name: string;
-    product_sku: string | null;
-    stock: number;
-    low_stock_at: number;
-    updated_at: Date;
-    variants_count: number;
-}
-
-export interface ListProductsOptions {
-    categoryId?: string;
-    searchQuery?: string;
-    badge?: string;
-    page: number;
-    limit: number;
-}
-
-export interface ListInventoryOptions {
-    lowStockOnly?: boolean;
-    page: number;
-    limit: number;
-}
-
-export interface CategoryRow {
-    id: string;
-    org_id: string;
-    name: string;
-    slug: string;
-    description: string | null;
-    is_featured: boolean;
-    sort_order: number;
-    created_at: Date;
-    product_count?: number;
-}
-
-export interface VariantInputData {
-    id?: string;
-    title: string;
-    sku?: string | null;
-    options?: Record<string, string>;
-    price: number;
-    cost_price?: number;
-    stock: number;
-    low_stock_at?: number;
-    image_url?: string | null;
-    is_active?: boolean;
-}
-
-function slugifyCategory(input: string): string {
-    const base = input
-        .toLowerCase()
-        .trim()
-        .replace(/[^a-z0-9\s-]/g, '')
-        .replace(/\s+/g, '-')
-        .replace(/-+/g, '-')
-        .replace(/^-|-$/g, '');
-    return base.length > 0 ? base : 'category';
-}
-
-export async function listCategories(orgId: string): Promise<CategoryRow[]> {
-    const result = await query<CategoryRow>(
-        `SELECT c.id, c.org_id, c.name, c.slug, c.description, c.is_featured, c.sort_order, c.created_at,
-                COALESCE((
-                    SELECT COUNT(*) 
-                    FROM products p 
-                    WHERE p.category_id = c.id AND p.deleted_at IS NULL
-                ), 0)::int AS product_count
-         FROM   categories c
-         WHERE  c.org_id = $1 
-         ORDER  BY c.is_featured DESC, c.sort_order ASC, c.name ASC`,
-        [orgId]
-    );
-    return result.rows;
-}
-
-// In soko/src/modules/products/products.queries.ts
-// Replace findOrCreateCategoryByName (lines 144-173):
-
-export async function findOrCreateCategoryByName(
-    client: PoolClient,
-    orgId: string,
-    name: string
-): Promise<string> {
-    const trimmedName = (name || 'General').trim();
-    const slug = slugifyCategory(trimmedName);
-
-    // 1. Check existing category (case-insensitive)
-    const checkResult = await client.query<{ id: string }>(
-        `SELECT id FROM categories 
-         WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) 
-         LIMIT 1`,
-        [orgId, trimmedName]
-    );
-
-    if (checkResult.rows.length > 0) {
-        return checkResult.rows[0].id;
-    }
-
-    // 2. Safe insert with fallback if concurrent insert occurred
-    try {
-        const insertResult = await client.query<{ id: string }>(
-            `INSERT INTO categories (org_id, name, slug) 
-             VALUES ($1, $2, $3) 
-             RETURNING id`,
-            [orgId, trimmedName, slug]
-        );
-        return insertResult.rows[0].id;
-    } catch {
-        const fallback = await client.query<{ id: string }>(
-            `SELECT id FROM categories 
-             WHERE org_id = $1 AND (LOWER(TRIM(name)) = LOWER(TRIM($2)) OR slug = $3) 
-             LIMIT 1`,
-            [orgId, trimmedName, slug]
-        );
-        return fallback.rows[0]?.id || checkResult.rows[0]?.id;
-    }
-}
-export async function createCategory(
-    orgId: string,
-    data: {
-        name: string;
-        description?: string | null;
-        isFeatured?: boolean;
-        sortOrder?: number;
-    }
-): Promise<CategoryRow> {
-    const trimmedName = data.name.trim();
-    const slug = slugifyCategory(trimmedName);
-
-    const result = await query<CategoryRow>(
-        `INSERT INTO categories (org_id, name, slug, description, is_featured, sort_order)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (org_id, LOWER(TRIM(name))) DO UPDATE SET
-             slug = EXCLUDED.slug,
-             description = COALESCE(EXCLUDED.description, categories.description),
-             is_featured = COALESCE(EXCLUDED.is_featured, categories.is_featured),
-             sort_order = COALESCE(EXCLUDED.sort_order, categories.sort_order)
-         RETURNING id, org_id, name, slug, description, is_featured, sort_order, created_at`,
-        [
-            orgId,
-            trimmedName,
-            slug,
-            data.description?.trim() || null,
-            data.isFeatured ?? false,
-            data.sortOrder ?? 0,
-        ]
-    );
-    return result.rows[0];
-}
-
-const PRODUCT_SELECT_FIELDS = `
-  p.id, p.org_id, p.category_id, p.name, p.slug, p.sku, p.description,
-  p.cost_price::text AS cost_price, p.price::text AS price,
-  p.compare_at_price::text AS compare_at_price, p.badge, p.sale_ends_at,
-  p.status, p.created_at, p.updated_at,
-  c.name AS category_name,
-  COALESCE(
-    (
-      SELECT json_agg(
-        json_build_object(
-          'image_url', pi.image_url,
-          'image_public_id', pi.image_public_id,
-          'sort_order', pi.sort_order
-        ) ORDER BY pi.sort_order ASC
-      )
-      FROM product_images pi
-      WHERE pi.product_id = p.id
-    ),
-    '[]'::json
-  ) AS images,
-  COALESCE(
-    (
-      SELECT json_agg(
-        json_build_object(
-          'id', pv.id,
-          'product_id', pv.product_id,
-          'title', pv.title,
-          'sku', pv.sku,
-          'options', pv.options,
-          'price', pv.price::text,
-          'cost_price', pv.cost_price::text,
-          'stock', pv.stock,
-          'low_stock_at', pv.low_stock_at,
-          'image_url', pv.image_url,
-          'is_active', pv.is_active
-        ) ORDER BY pv.created_at ASC
-      )
-      FROM product_variants pv
-      WHERE pv.product_id = p.id AND pv.is_active = TRUE
-    ),
-    '[]'::json
-  ) AS variants,
-  COALESCE(
-    (
-      SELECT json_agg(
-        json_build_object(
-          'id', pf.id,
-          'product_id', pf.product_id,
-          'format', pf.format,
-          'price', pf.price::text,
-          'compare_at_price', pf.compare_at_price::text,
-          'file_url', pf.file_url,
-          'file_public_id', pf.file_public_id,
-          'file_size_bytes', pf.file_size_bytes::text,
-          'stock', pf.stock,
-          'created_at', pf.created_at,
-          'updated_at', pf.updated_at
-        ) ORDER BY (
-          CASE pf.format
-            WHEN 'hardcopy' THEN 1
-            WHEN 'pdf' THEN 2
-            WHEN 'epub' THEN 3
-            ELSE 4
-          END
-        ) ASC
-      )
-      FROM product_formats pf
-      WHERE pf.product_id = p.id
-    ),
-    '[]'::json
-  ) AS formats
-`;
-
-export async function listProducts(
-    orgId: string,
-    options: ListProductsOptions
-): Promise<{ products: ProductWithImages[]; total: number }> {
-    const { categoryId, searchQuery, badge, page, limit } = options;
-    const offset = (page - 1) * limit;
-
-    const conditions: string[] = ["p.org_id = $1", "p.deleted_at IS NULL"];
-    const params: unknown[] = [orgId];
-    let paramIndex = 2;
-
-    if (categoryId) {
-        conditions.push(`p.category_id = $${paramIndex}`);
-        params.push(categoryId);
-        paramIndex++;
-    }
-
-    if (badge) {
-        conditions.push(`p.badge = $${paramIndex}`);
-        params.push(badge);
-        paramIndex++;
-    }
-
-    if (searchQuery && searchQuery.trim().length > 0) {
-        conditions.push(
-            `(p.name ILIKE $${paramIndex} OR p.sku ILIKE $${paramIndex} OR p.description ILIKE $${paramIndex})`
-        );
-        params.push(`%${searchQuery.trim()}%`);
-        paramIndex++;
-    }
-
-    const whereClause = conditions.join(" AND ");
-
-    const countResult = await query<{ count: string }>(
-        `SELECT COUNT(*) AS count 
-         FROM products p 
-         WHERE ${whereClause}`,
-        params
-    );
-    const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
-
-    if (total === 0) {
-        return { products: [], total: 0 };
-    }
-
-    const dataParams = [...params, limit, offset];
-    const dataResult = await query<ProductWithImages>(
-        `SELECT ${PRODUCT_SELECT_FIELDS}
-         FROM products p
-         LEFT JOIN categories c ON c.id = p.category_id
-         WHERE ${whereClause}
-         ORDER BY (CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, p.created_at DESC
-         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
-        dataParams
-    );
-
-    return { products: dataResult.rows, total };
-}
-
-export async function getProductById(
-    orgId: string,
-    productId: string
-): Promise<ProductWithImages | null> {
-    const result = await query<ProductWithImages>(
-        `SELECT ${PRODUCT_SELECT_FIELDS}
-         FROM products p
-         LEFT JOIN categories c ON c.id = p.category_id
-         WHERE p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL`,
-        [orgId, productId]
-    );
-    return result.rows[0] ?? null;
-}
-
-export async function updateProduct(
-    orgId: string,
-    productId: string,
-    fields: {
-        name?: string;
-        category_id?: string;
-        price?: number;
-        compare_at_price?: number | null;
-        cost_price?: number | null;
-        sku?: string | null;
-        badge?: string | null;
-        sale_ends_at?: string | null;
-        description?: string | null;
-        status?: "draft" | "published" | "archived";
-        variants?: VariantInputData[];
-        images?: Array<{ image_url: string; image_public_id?: string }>;
-    }
-): Promise<ProductWithImages | null> {
-    const client = await pool.connect();
-    try {
-        await client.query("BEGIN");
-
-        const setClauses: string[] = [];
-        const params: unknown[] = [orgId, productId];
-        let paramIndex = 3;
-
-        const { variants, images, sale_ends_at, ...directFields } = fields;
-
-        for (const [key, value] of Object.entries(directFields)) {
-            if (value !== undefined) {
-                setClauses.push(`${key} = $${paramIndex}`);
-                params.push(value);
-                paramIndex++;
-            }
-        }
-
-        if (sale_ends_at !== undefined) {
-            setClauses.push(`sale_ends_at = $${paramIndex}`);
-            params.push(sale_ends_at ? new Date(sale_ends_at) : null);
-            paramIndex++;
-        }
-
-        if (setClauses.length > 0) {
-            const updateQuery = `
-              UPDATE products
-              SET ${setClauses.join(", ")}, updated_at = NOW()
-              WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL
-            `;
-            await client.query(updateQuery, params);
-        }
-
-        if (images !== undefined) {
-            await client.query("DELETE FROM product_images WHERE product_id = $1", [productId]);
-            for (let s = 0; s < images.length; s++) {
-                if (images[s].image_url) {
-                    await insertProductImageTransactional(
-                        client,
-                        productId,
-                        images[s].image_url,
-                        images[s].image_public_id || 'cover_img',
-                        s
-                    );
-                }
-            }
-        }
-
-        if (variants !== undefined) {
-            await syncProductVariantsTransactional(client, orgId, productId, variants);
-        }
-
-        await client.query("COMMIT");
-        return getProductById(orgId, productId);
-    } catch (err) {
-        await client.query("ROLLBACK");
-        throw err;
-    } finally {
-        client.release();
-    }
-}
-
-export async function syncProductVariantsTransactional(
-    client: PoolClient,
-    orgId: string,
-    productId: string,
-    variants: VariantInputData[]
-): Promise<void> {
-    if (variants.length === 0) {
-        await client.query(
-            `UPDATE product_variants SET is_active = FALSE, updated_at = NOW() WHERE org_id = $1 AND product_id = $2`,
-            [orgId, productId]
-        );
-        return;
-    }
-
-    const keepVariantIds: string[] = [];
-
-    for (const v of variants) {
-        if (v.id) {
-            await client.query(
-                `UPDATE product_variants
-                 SET title        = $4,
-                     sku          = $5,
-                     options      = $6,
-                     price        = $7,
-                     cost_price   = $8,
-                     stock        = $9,
-                     low_stock_at = $10,
-                     image_url    = $11,
-                     is_active    = $12,
-                     updated_at   = NOW()
-                 WHERE id = $1 AND org_id = $2 AND product_id = $3`,
-                [
-                    v.id,
-                    orgId,
-                    productId,
-                    v.title.trim(),
-                    v.sku?.trim() || null,
-                    JSON.stringify(v.options || {}),
-                    v.price,
-                    v.cost_price ?? 0,
-                    v.stock,
-                    v.low_stock_at ?? 5,
-                    v.image_url || null,
-                    v.is_active ?? true
-                ]
-            );
-            keepVariantIds.push(v.id);
-        } else {
-            const inserted = await client.query<{ id: string }>(
-                `INSERT INTO product_variants (
-                   org_id, product_id, title, sku, options, price,
-                   cost_price, stock, low_stock_at, image_url, is_active
-                 )
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                 RETURNING id`,
-                [
-                    orgId,
-                    productId,
-                    v.title.trim(),
-                    v.sku?.trim() || null,
-                    JSON.stringify(v.options || {}),
-                    v.price,
-                    v.cost_price ?? 0,
-                    v.stock,
-                    v.low_stock_at ?? 5,
-                    v.image_url || null,
-                    v.is_active ?? true
-                ]
-            );
-            keepVariantIds.push(inserted.rows[0].id);
-        }
-    }
-
-    if (keepVariantIds.length > 0) {
-        await client.query(
-            `UPDATE product_variants
-             SET is_active = FALSE, updated_at = NOW()
-             WHERE org_id = $1 AND product_id = $2 AND NOT (id = ANY($3::uuid[]))`,
-            [orgId, productId, keepVariantIds]
-        );
-    }
-}
-
-export async function archiveProduct(
-    orgId: string,
-    productId: string
-): Promise<boolean> {
-    const result = await query(
-        `UPDATE products 
-         SET status = 'archived', updated_at = NOW() 
-         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
-        [orgId, productId]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function unarchiveProduct(
-    orgId: string,
-    productId: string
-): Promise<boolean> {
-    const result = await query(
-        `UPDATE products 
-         SET status = 'draft', updated_at = NOW() 
-         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
-        [orgId, productId]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function getProductOrderCount(
-    client: PoolClient,
-    orgId: string,
-    productId: string
-): Promise<number> {
-    const result = await client.query<{ count: string }>(
-        `SELECT COUNT(oi.id)::text AS count
-         FROM order_items oi
-         INNER JOIN orders o ON o.id = oi.order_id
-         WHERE o.org_id = $1 AND (
-           oi.product_id = $2 OR 
-           oi.format_id IN (SELECT id FROM product_formats WHERE product_id = $2)
-         )`,
-        [orgId, productId]
-    );
-    return parseInt(result.rows[0]?.count || '0', 10);
-}
-
-export async function softDeleteProductTransactional(
-    client: PoolClient,
-    orgId: string,
-    productId: string
-): Promise<void> {
-    const timestamp = Math.floor(Date.now() / 1000);
-    await client.query(
-        `UPDATE products
-         SET deleted_at = NOW(),
-             status     = 'archived',
-             slug       = slug || '-deleted-' || $3,
-             updated_at = NOW()
-         WHERE org_id = $1 AND id = $2`,
-        [orgId, productId, timestamp]
-    );
-}
-
-export async function hardDeleteProductTransactional(
-    client: PoolClient,
-    orgId: string,
-    productId: string
-): Promise<boolean> {
-    const result = await client.query(
-        `DELETE FROM products 
-         WHERE org_id = $1 AND id = $2`,
-        [orgId, productId]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function deleteProductPermanently(
-    orgId: string,
-    productId: string
-): Promise<boolean> {
-    const result = await query(
-        `DELETE FROM products 
-         WHERE org_id = $1 AND id = $2`,
-        [orgId, productId]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function setProductStatus(
-    orgId: string,
-    productId: string,
-    status: "draft" | "published" | "archived"
-): Promise<ProductWithImages | null> {
-    await query(
-        `UPDATE products 
-         SET status = $3, updated_at = NOW() 
-         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
-        [orgId, productId, status]
-    );
-    return getProductById(orgId, productId);
-}
-
-export async function listInventory(
-    orgId: string,
-    options: ListInventoryOptions
-): Promise<{ inventory: InventoryWithProduct[]; total: number }> {
-    const { lowStockOnly, page, limit } = options;
-    const offset = (page - 1) * limit;
-
-    const conditions: string[] = ["p.org_id = $1", "p.deleted_at IS NULL"];
-    const params: unknown[] = [orgId];
-    let paramIndex = 2;
-
-    if (lowStockOnly) {
-        conditions.push("i.stock <= i.low_stock_at");
-    }
-
-    const whereClause = conditions.join(" AND ");
-
-    const countResult = await query<{ count: string }>(
-        `SELECT COUNT(*) AS count 
-         FROM inventory i
-         INNER JOIN products p ON p.id = i.product_id
-         WHERE ${whereClause}`,
-        params
-    );
-    const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
-
-    if (total === 0) {
-        return { inventory: [], total: 0 };
-    }
-
-    const dataParams = [...params, limit, offset];
-    const dataResult = await query<InventoryWithProduct>(
-        `SELECT i.id, i.product_id, i.stock, i.low_stock_at, i.updated_at,
-                p.name AS product_name, p.sku AS product_sku,
-                COALESCE((SELECT COUNT(*) FROM product_variants pv WHERE pv.product_id = p.id AND pv.is_active = TRUE), 0)::int AS variants_count
-         FROM inventory i
-         INNER JOIN products p ON p.id = i.product_id
-         WHERE ${whereClause}
-         ORDER BY i.stock ASC, p.name ASC
-         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
-        dataParams
-    );
-
-    return { inventory: dataResult.rows, total };
-}
-
-export async function updateInventoryStock(
-    orgId: string,
-    productId: string,
-    stock: number
-): Promise<InventoryWithProduct | null> {
-    const result = await query<InventoryWithProduct>(
-        `UPDATE inventory i
-         SET stock = $3, updated_at = NOW()
-         FROM products p
-         WHERE p.id = i.product_id AND p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL
-         RETURNING i.id, i.product_id, i.stock, i.low_stock_at, i.updated_at,
-                   p.name AS product_name, p.sku AS product_sku,
-                   0::int AS variants_count`,
-        [orgId, productId, stock]
-    );
-    return result.rows[0] ?? null;
-}
-
-export async function checkCategoryExists(
-    client: PoolClient,
-    orgId: string,
-    categoryId: string
-): Promise<boolean> {
-    const result = await client.query(
-        "SELECT 1 FROM categories WHERE id = $1 AND org_id = $2",
-        [categoryId, orgId]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function checkSlugExists(
-    client: PoolClient,
-    orgId: string,
-    slug: string
-): Promise<boolean> {
-    const result = await client.query(
-        "SELECT 1 FROM products WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL",
-        [orgId, slug]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function insertProductTransactional(
-    client: PoolClient,
-    orgId: string,
-    data: {
-        category_id: string;
-        name: string;
-        slug: string;
-        sku: string | null;
-        description: string | null;
-        cost_price: number | null;
-        price: number;
-        compare_at_price?: number | null;
-        badge?: string | null;
-        sale_ends_at?: string | null;
-        status: "draft" | "published" | "archived";
-    }
-): Promise<string> {
-    const result = await client.query<{ id: string }>(
-        `INSERT INTO products 
-           (org_id, category_id, name, slug, sku, description, cost_price, price, compare_at_price, badge, sale_ends_at, status)
-         VALUES 
-           ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-         RETURNING id`,
-        [
-            orgId,
-            data.category_id,
-            data.name,
-            data.slug,
-            data.sku,
-            data.description,
-            data.cost_price,
-            data.price,
-            data.compare_at_price ?? null,
-            data.badge ?? null,
-            data.sale_ends_at ? new Date(data.sale_ends_at) : null,
-            data.status
-        ]
-    );
-    return result.rows[0].id;
-}
-
-export async function insertInventoryTransactional(
-    client: PoolClient,
-    productId: string,
-    stock: number
-): Promise<void> {
-    await client.query(
-        `INSERT INTO inventory (product_id, stock, low_stock_at)
-         VALUES ($1, $2, 5)`,
-        [productId, stock]
-    );
-}
-
-export async function insertProductImageTransactional(
-    client: PoolClient,
-    productId: string,
-    imageUrl: string,
-    imagePublicId: string,
-    sortOrder: number
-): Promise<void> {
-    await client.query(
-        `INSERT INTO product_images (product_id, image_url, image_public_id, sort_order)
-         VALUES ($1, $2, $3, $4)`,
-        [productId, imageUrl, imagePublicId, sortOrder]
-    );
-}
-
-export async function insertProductVariantTransactional(
-    client: PoolClient,
-    orgId: string,
-    productId: string,
-    variant: VariantInputData
-): Promise<string> {
-    const result = await client.query<{ id: string }>(
-        `INSERT INTO product_variants (
-           org_id, product_id, title, sku, options, price,
-           cost_price, stock, low_stock_at, image_url, is_active
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         RETURNING id`,
-        [
-            orgId,
-            productId,
-            variant.title.trim(),
-            variant.sku?.trim() || null,
-            JSON.stringify(variant.options || {}),
-            variant.price,
-            variant.cost_price ?? 0,
-            variant.stock,
-            variant.low_stock_at ?? 5,
-            variant.image_url || null,
-            variant.is_active ?? true
-        ]
-    );
-    return result.rows[0].id;
-}
 </file>
 
 <file path="src/modules/products/products.service.ts">
@@ -16813,6 +16073,820 @@ export async function findBestBookCover(
     "tsx": "^4.11.0",
     "typescript": "^5.4.5"
   }
+}
+</file>
+
+<file path="src/modules/products/products.queries.ts">
+// =============================================================================
+// soko-api/src/modules/products/products.queries.ts
+// Product and Category catalog queries with slugification, badges, and smart deletes.
+// =============================================================================
+
+import { PoolClient } from "pg";
+import { query, pool } from "../../config/db";
+
+export type FormatType = 'pdf' | 'epub' | 'hardcopy';
+
+export interface ProductFormatRow {
+    id: string;
+    product_id: string;
+    format: FormatType;
+    price: string;
+    compare_at_price: string | null;
+    file_url: string | null;
+    file_public_id: string | null;
+    file_size_bytes: string | null;
+    stock: number | null;
+    created_at: Date;
+    updated_at: Date;
+}
+
+export interface ProductVariant {
+    id: string;
+    product_id: string;
+    title: string;
+    sku: string | null;
+    options: Record<string, string>;
+    price: string;
+    cost_price: string;
+    stock: number;
+    low_stock_at: number;
+    image_url: string | null;
+    is_active: boolean;
+}
+
+export interface ProductWithImages {
+    id: string;
+    org_id: string;
+    category_id: string;
+    category_name: string | null;
+    name: string;
+    slug: string;
+    sku: string | null;
+    description: string | null;
+    cost_price: string | null;
+    price: string;
+    compare_at_price: string | null;
+    badge: string | null;
+    sale_ends_at: Date | null;
+    status: "draft" | "published" | "archived";
+    created_at: Date;
+    updated_at: Date;
+    images: Array<{
+        image_url: string;
+        image_public_id: string;
+        sort_order: number;
+    }>;
+    variants: ProductVariant[];
+    formats: ProductFormatRow[];
+}
+
+export interface InventoryWithProduct {
+    id: string;
+    product_id: string;
+    product_name: string;
+    product_sku: string | null;
+    stock: number;
+    low_stock_at: number;
+    updated_at: Date;
+    variants_count: number;
+}
+
+export interface ListProductsOptions {
+    categoryId?: string;
+    searchQuery?: string;
+    badge?: string;
+    page: number;
+    limit: number;
+}
+
+export interface ListInventoryOptions {
+    lowStockOnly?: boolean;
+    page: number;
+    limit: number;
+}
+
+export interface CategoryRow {
+    id: string;
+    org_id: string;
+    name: string;
+    slug: string;
+    description: string | null;
+    is_featured: boolean;
+    sort_order: number;
+    created_at: Date;
+    product_count?: number;
+}
+
+export interface VariantInputData {
+    id?: string;
+    title: string;
+    sku?: string | null;
+    options?: Record<string, string>;
+    price: number;
+    cost_price?: number;
+    stock: number;
+    low_stock_at?: number;
+    image_url?: string | null;
+    is_active?: boolean;
+}
+
+function slugifyCategory(input: string): string {
+    const base = input
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+    return base.length > 0 ? base : 'category';
+}
+
+export async function listCategories(orgId: string): Promise<CategoryRow[]> {
+    const result = await query<CategoryRow>(
+        `SELECT c.id, c.org_id, c.name, c.slug, c.description, c.is_featured, c.sort_order, c.created_at,
+                COALESCE((
+                    SELECT COUNT(*) 
+                    FROM products p 
+                    WHERE p.category_id = c.id AND p.deleted_at IS NULL
+                ), 0)::int AS product_count
+         FROM   categories c
+         WHERE  c.org_id = $1 
+         ORDER  BY c.is_featured DESC, c.sort_order ASC, c.name ASC`,
+        [orgId]
+    );
+    return result.rows;
+}
+
+// In soko/src/modules/products/products.queries.ts
+// Replace findOrCreateCategoryByName (lines 144-173):
+
+export async function findOrCreateCategoryByName(
+    client: PoolClient,
+    orgId: string,
+    name: string
+): Promise<string> {
+    const trimmedName = (name || 'General').trim();
+    const slug = slugifyCategory(trimmedName);
+
+    // 1. Check existing category (case-insensitive)
+    const checkResult = await client.query<{ id: string }>(
+        `SELECT id FROM categories 
+         WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) 
+         LIMIT 1`,
+        [orgId, trimmedName]
+    );
+
+    if (checkResult.rows.length > 0) {
+        return checkResult.rows[0].id;
+    }
+
+    // 2. Safe insert with fallback if concurrent insert occurred
+    try {
+        const insertResult = await client.query<{ id: string }>(
+            `INSERT INTO categories (org_id, name, slug) 
+             VALUES ($1, $2, $3) 
+             RETURNING id`,
+            [orgId, trimmedName, slug]
+        );
+        return insertResult.rows[0].id;
+    } catch {
+        const fallback = await client.query<{ id: string }>(
+            `SELECT id FROM categories 
+             WHERE org_id = $1 AND (LOWER(TRIM(name)) = LOWER(TRIM($2)) OR slug = $3) 
+             LIMIT 1`,
+            [orgId, trimmedName, slug]
+        );
+        return fallback.rows[0]?.id || checkResult.rows[0]?.id;
+    }
+}
+export async function createCategory(
+    orgId: string,
+    data: {
+        name: string;
+        description?: string | null;
+        isFeatured?: boolean;
+        sortOrder?: number;
+    }
+): Promise<CategoryRow> {
+    const trimmedName = data.name.trim();
+    const slug = slugifyCategory(trimmedName);
+
+    const result = await query<CategoryRow>(
+        `INSERT INTO categories (org_id, name, slug, description, is_featured, sort_order)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (org_id, LOWER(TRIM(name))) DO UPDATE SET
+             slug = EXCLUDED.slug,
+             description = COALESCE(EXCLUDED.description, categories.description),
+             is_featured = COALESCE(EXCLUDED.is_featured, categories.is_featured),
+             sort_order = COALESCE(EXCLUDED.sort_order, categories.sort_order)
+         RETURNING id, org_id, name, slug, description, is_featured, sort_order, created_at`,
+        [
+            orgId,
+            trimmedName,
+            slug,
+            data.description?.trim() || null,
+            data.isFeatured ?? false,
+            data.sortOrder ?? 0,
+        ]
+    );
+    return result.rows[0];
+}
+
+const PRODUCT_SELECT_FIELDS = `
+  p.id, p.org_id, p.category_id, p.name, p.slug, p.sku, p.description,
+  p.cost_price::text AS cost_price, p.price::text AS price,
+  p.compare_at_price::text AS compare_at_price, p.badge, p.sale_ends_at,
+  p.status, p.created_at, p.updated_at,
+  c.name AS category_name,
+  COALESCE(
+    (
+      SELECT json_agg(
+        json_build_object(
+          'image_url', pi.image_url,
+          'image_public_id', pi.image_public_id,
+          'sort_order', pi.sort_order
+        ) ORDER BY pi.sort_order ASC
+      )
+      FROM product_images pi
+      WHERE pi.product_id = p.id
+    ),
+    '[]'::json
+  ) AS images,
+  COALESCE(
+    (
+      SELECT json_agg(
+        json_build_object(
+          'id', pv.id,
+          'product_id', pv.product_id,
+          'title', pv.title,
+          'sku', pv.sku,
+          'options', pv.options,
+          'price', pv.price::text,
+          'cost_price', pv.cost_price::text,
+          'stock', pv.stock,
+          'low_stock_at', pv.low_stock_at,
+          'image_url', pv.image_url,
+          'is_active', pv.is_active
+        ) ORDER BY pv.created_at ASC
+      )
+      FROM product_variants pv
+      WHERE pv.product_id = p.id AND pv.is_active = TRUE
+    ),
+    '[]'::json
+  ) AS variants,
+  COALESCE(
+    (
+      SELECT json_agg(
+        json_build_object(
+          'id', pf.id,
+          'product_id', pf.product_id,
+          'format', pf.format,
+          'price', pf.price::text,
+          'compare_at_price', pf.compare_at_price::text,
+          'file_url', pf.file_url,
+          'file_public_id', pf.file_public_id,
+          'file_size_bytes', pf.file_size_bytes::text,
+          'stock', pf.stock,
+          'created_at', pf.created_at,
+          'updated_at', pf.updated_at
+        ) ORDER BY (
+          CASE pf.format
+            WHEN 'hardcopy' THEN 1
+            WHEN 'pdf' THEN 2
+            WHEN 'epub' THEN 3
+            ELSE 4
+          END
+        ) ASC
+      )
+      FROM product_formats pf
+      WHERE pf.product_id = p.id
+    ),
+    '[]'::json
+  ) AS formats
+`;
+
+export async function listProducts(
+    orgId: string,
+    options: ListProductsOptions
+): Promise<{ products: ProductWithImages[]; total: number }> {
+    const { categoryId, searchQuery, badge, page, limit } = options;
+    const offset = (page - 1) * limit;
+
+    const conditions: string[] = ["p.org_id = $1", "p.deleted_at IS NULL"];
+    const params: unknown[] = [orgId];
+    let paramIndex = 2;
+
+    if (categoryId) {
+        conditions.push(`p.category_id = $${paramIndex}`);
+        params.push(categoryId);
+        paramIndex++;
+    }
+
+    if (badge) {
+        conditions.push(`p.badge = $${paramIndex}`);
+        params.push(badge);
+        paramIndex++;
+    }
+
+    // Spot-on database search across title, SKU/ISBN, description/author, and category
+    if (searchQuery && searchQuery.trim().length > 0) {
+        conditions.push(
+            `(p.name ILIKE $${paramIndex} OR p.sku ILIKE $${paramIndex} OR p.description ILIKE $${paramIndex} OR c.name ILIKE $${paramIndex})`
+        );
+        params.push(`%${searchQuery.trim()}%`);
+        paramIndex++;
+    }
+
+    const whereClause = conditions.join(" AND ");
+
+    const countResult = await query<{ count: string }>(
+        `SELECT COUNT(p.id) AS count 
+         FROM products p 
+         LEFT JOIN categories c ON c.id = p.category_id
+         WHERE ${whereClause}`,
+        params
+    );
+    const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
+
+    if (total === 0) {
+        return { products: [], total: 0 };
+    }
+
+    const dataParams = [...params, limit, offset];
+    const dataResult = await query<ProductWithImages>(
+        `SELECT ${PRODUCT_SELECT_FIELDS}
+         FROM products p
+         LEFT JOIN categories c ON c.id = p.category_id
+         WHERE ${whereClause}
+         ORDER BY (CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, p.created_at DESC
+         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+        dataParams
+    );
+
+    return { products: dataResult.rows, total };
+}
+
+export async function getProductById(
+    orgId: string,
+    productId: string
+): Promise<ProductWithImages | null> {
+    const result = await query<ProductWithImages>(
+        `SELECT ${PRODUCT_SELECT_FIELDS}
+         FROM products p
+         LEFT JOIN categories c ON c.id = p.category_id
+         WHERE p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL`,
+        [orgId, productId]
+    );
+    return result.rows[0] ?? null;
+}
+
+export async function updateProduct(
+    orgId: string,
+    productId: string,
+    fields: {
+        name?: string;
+        category_id?: string;
+        price?: number;
+        compare_at_price?: number | null;
+        cost_price?: number | null;
+        sku?: string | null;
+        badge?: string | null;
+        sale_ends_at?: string | null;
+        description?: string | null;
+        status?: "draft" | "published" | "archived";
+        variants?: VariantInputData[];
+        images?: Array<{ image_url: string; image_public_id?: string }>;
+    }
+): Promise<ProductWithImages | null> {
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+
+        const setClauses: string[] = [];
+        const params: unknown[] = [orgId, productId];
+        let paramIndex = 3;
+
+        const { variants, images, sale_ends_at, ...directFields } = fields;
+
+        for (const [key, value] of Object.entries(directFields)) {
+            if (value !== undefined) {
+                setClauses.push(`${key} = $${paramIndex}`);
+                params.push(value);
+                paramIndex++;
+            }
+        }
+
+        if (sale_ends_at !== undefined) {
+            setClauses.push(`sale_ends_at = $${paramIndex}`);
+            params.push(sale_ends_at ? new Date(sale_ends_at) : null);
+            paramIndex++;
+        }
+
+        if (setClauses.length > 0) {
+            const updateQuery = `
+              UPDATE products
+              SET ${setClauses.join(", ")}, updated_at = NOW()
+              WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL
+            `;
+            await client.query(updateQuery, params);
+        }
+
+        if (images !== undefined) {
+            await client.query("DELETE FROM product_images WHERE product_id = $1", [productId]);
+            for (let s = 0; s < images.length; s++) {
+                if (images[s].image_url) {
+                    await insertProductImageTransactional(
+                        client,
+                        productId,
+                        images[s].image_url,
+                        images[s].image_public_id || 'cover_img',
+                        s
+                    );
+                }
+            }
+        }
+
+        if (variants !== undefined) {
+            await syncProductVariantsTransactional(client, orgId, productId, variants);
+        }
+
+        await client.query("COMMIT");
+        return getProductById(orgId, productId);
+    } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+    } finally {
+        client.release();
+    }
+}
+
+export async function syncProductVariantsTransactional(
+    client: PoolClient,
+    orgId: string,
+    productId: string,
+    variants: VariantInputData[]
+): Promise<void> {
+    if (variants.length === 0) {
+        await client.query(
+            `UPDATE product_variants SET is_active = FALSE, updated_at = NOW() WHERE org_id = $1 AND product_id = $2`,
+            [orgId, productId]
+        );
+        return;
+    }
+
+    const keepVariantIds: string[] = [];
+
+    for (const v of variants) {
+        if (v.id) {
+            await client.query(
+                `UPDATE product_variants
+                 SET title        = $4,
+                     sku          = $5,
+                     options      = $6,
+                     price        = $7,
+                     cost_price   = $8,
+                     stock        = $9,
+                     low_stock_at = $10,
+                     image_url    = $11,
+                     is_active    = $12,
+                     updated_at   = NOW()
+                 WHERE id = $1 AND org_id = $2 AND product_id = $3`,
+                [
+                    v.id,
+                    orgId,
+                    productId,
+                    v.title.trim(),
+                    v.sku?.trim() || null,
+                    JSON.stringify(v.options || {}),
+                    v.price,
+                    v.cost_price ?? 0,
+                    v.stock,
+                    v.low_stock_at ?? 5,
+                    v.image_url || null,
+                    v.is_active ?? true
+                ]
+            );
+            keepVariantIds.push(v.id);
+        } else {
+            const inserted = await client.query<{ id: string }>(
+                `INSERT INTO product_variants (
+                   org_id, product_id, title, sku, options, price,
+                   cost_price, stock, low_stock_at, image_url, is_active
+                 )
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                 RETURNING id`,
+                [
+                    orgId,
+                    productId,
+                    v.title.trim(),
+                    v.sku?.trim() || null,
+                    JSON.stringify(v.options || {}),
+                    v.price,
+                    v.cost_price ?? 0,
+                    v.stock,
+                    v.low_stock_at ?? 5,
+                    v.image_url || null,
+                    v.is_active ?? true
+                ]
+            );
+            keepVariantIds.push(inserted.rows[0].id);
+        }
+    }
+
+    if (keepVariantIds.length > 0) {
+        await client.query(
+            `UPDATE product_variants
+             SET is_active = FALSE, updated_at = NOW()
+             WHERE org_id = $1 AND product_id = $2 AND NOT (id = ANY($3::uuid[]))`,
+            [orgId, productId, keepVariantIds]
+        );
+    }
+}
+
+export async function archiveProduct(
+    orgId: string,
+    productId: string
+): Promise<boolean> {
+    const result = await query(
+        `UPDATE products 
+         SET status = 'archived', updated_at = NOW() 
+         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
+        [orgId, productId]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
+}
+
+export async function unarchiveProduct(
+    orgId: string,
+    productId: string
+): Promise<boolean> {
+    const result = await query(
+        `UPDATE products 
+         SET status = 'draft', updated_at = NOW() 
+         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
+        [orgId, productId]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
+}
+
+export async function getProductOrderCount(
+    client: PoolClient,
+    orgId: string,
+    productId: string
+): Promise<number> {
+    const result = await client.query<{ count: string }>(
+        `SELECT COUNT(oi.id)::text AS count
+         FROM order_items oi
+         INNER JOIN orders o ON o.id = oi.order_id
+         WHERE o.org_id = $1 AND (
+           oi.product_id = $2 OR 
+           oi.format_id IN (SELECT id FROM product_formats WHERE product_id = $2)
+         )`,
+        [orgId, productId]
+    );
+    return parseInt(result.rows[0]?.count || '0', 10);
+}
+
+export async function softDeleteProductTransactional(
+    client: PoolClient,
+    orgId: string,
+    productId: string
+): Promise<void> {
+    const timestamp = Math.floor(Date.now() / 1000);
+    await client.query(
+        `UPDATE products
+         SET deleted_at = NOW(),
+             status     = 'archived',
+             slug       = slug || '-deleted-' || $3,
+             updated_at = NOW()
+         WHERE org_id = $1 AND id = $2`,
+        [orgId, productId, timestamp]
+    );
+}
+
+export async function hardDeleteProductTransactional(
+    client: PoolClient,
+    orgId: string,
+    productId: string
+): Promise<boolean> {
+    const result = await client.query(
+        `DELETE FROM products 
+         WHERE org_id = $1 AND id = $2`,
+        [orgId, productId]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
+}
+
+export async function deleteProductPermanently(
+    orgId: string,
+    productId: string
+): Promise<boolean> {
+    const result = await query(
+        `DELETE FROM products 
+         WHERE org_id = $1 AND id = $2`,
+        [orgId, productId]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
+}
+
+export async function setProductStatus(
+    orgId: string,
+    productId: string,
+    status: "draft" | "published" | "archived"
+): Promise<ProductWithImages | null> {
+    await query(
+        `UPDATE products 
+         SET status = $3, updated_at = NOW() 
+         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
+        [orgId, productId, status]
+    );
+    return getProductById(orgId, productId);
+}
+
+export async function listInventory(
+    orgId: string,
+    options: ListInventoryOptions
+): Promise<{ inventory: InventoryWithProduct[]; total: number }> {
+    const { lowStockOnly, page, limit } = options;
+    const offset = (page - 1) * limit;
+
+    const conditions: string[] = ["p.org_id = $1", "p.deleted_at IS NULL"];
+    const params: unknown[] = [orgId];
+    let paramIndex = 2;
+
+    if (lowStockOnly) {
+        conditions.push("i.stock <= i.low_stock_at");
+    }
+
+    const whereClause = conditions.join(" AND ");
+
+    const countResult = await query<{ count: string }>(
+        `SELECT COUNT(*) AS count 
+         FROM inventory i
+         INNER JOIN products p ON p.id = i.product_id
+         WHERE ${whereClause}`,
+        params
+    );
+    const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
+
+    if (total === 0) {
+        return { inventory: [], total: 0 };
+    }
+
+    const dataParams = [...params, limit, offset];
+    const dataResult = await query<InventoryWithProduct>(
+        `SELECT i.id, i.product_id, i.stock, i.low_stock_at, i.updated_at,
+                p.name AS product_name, p.sku AS product_sku,
+                COALESCE((SELECT COUNT(*) FROM product_variants pv WHERE pv.product_id = p.id AND pv.is_active = TRUE), 0)::int AS variants_count
+         FROM inventory i
+         INNER JOIN products p ON p.id = i.product_id
+         WHERE ${whereClause}
+         ORDER BY i.stock ASC, p.name ASC
+         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+        dataParams
+    );
+
+    return { inventory: dataResult.rows, total };
+}
+
+export async function updateInventoryStock(
+    orgId: string,
+    productId: string,
+    stock: number
+): Promise<InventoryWithProduct | null> {
+    const result = await query<InventoryWithProduct>(
+        `UPDATE inventory i
+         SET stock = $3, updated_at = NOW()
+         FROM products p
+         WHERE p.id = i.product_id AND p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL
+         RETURNING i.id, i.product_id, i.stock, i.low_stock_at, i.updated_at,
+                   p.name AS product_name, p.sku AS product_sku,
+                   0::int AS variants_count`,
+        [orgId, productId, stock]
+    );
+    return result.rows[0] ?? null;
+}
+
+export async function checkCategoryExists(
+    client: PoolClient,
+    orgId: string,
+    categoryId: string
+): Promise<boolean> {
+    const result = await client.query(
+        "SELECT 1 FROM categories WHERE id = $1 AND org_id = $2",
+        [categoryId, orgId]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
+}
+
+export async function checkSlugExists(
+    client: PoolClient,
+    orgId: string,
+    slug: string
+): Promise<boolean> {
+    const result = await client.query(
+        "SELECT 1 FROM products WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL",
+        [orgId, slug]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
+}
+
+export async function insertProductTransactional(
+    client: PoolClient,
+    orgId: string,
+    data: {
+        category_id: string;
+        name: string;
+        slug: string;
+        sku: string | null;
+        description: string | null;
+        cost_price: number | null;
+        price: number;
+        compare_at_price?: number | null;
+        badge?: string | null;
+        sale_ends_at?: string | null;
+        status: "draft" | "published" | "archived";
+    }
+): Promise<string> {
+    const result = await client.query<{ id: string }>(
+        `INSERT INTO products 
+           (org_id, category_id, name, slug, sku, description, cost_price, price, compare_at_price, badge, sale_ends_at, status)
+         VALUES 
+           ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING id`,
+        [
+            orgId,
+            data.category_id,
+            data.name,
+            data.slug,
+            data.sku,
+            data.description,
+            data.cost_price,
+            data.price,
+            data.compare_at_price ?? null,
+            data.badge ?? null,
+            data.sale_ends_at ? new Date(data.sale_ends_at) : null,
+            data.status
+        ]
+    );
+    return result.rows[0].id;
+}
+
+export async function insertInventoryTransactional(
+    client: PoolClient,
+    productId: string,
+    stock: number
+): Promise<void> {
+    await client.query(
+        `INSERT INTO inventory (product_id, stock, low_stock_at)
+         VALUES ($1, $2, 5)`,
+        [productId, stock]
+    );
+}
+
+export async function insertProductImageTransactional(
+    client: PoolClient,
+    productId: string,
+    imageUrl: string,
+    imagePublicId: string,
+    sortOrder: number
+): Promise<void> {
+    await client.query(
+        `INSERT INTO product_images (product_id, image_url, image_public_id, sort_order)
+         VALUES ($1, $2, $3, $4)`,
+        [productId, imageUrl, imagePublicId, sortOrder]
+    );
+}
+
+export async function insertProductVariantTransactional(
+    client: PoolClient,
+    orgId: string,
+    productId: string,
+    variant: VariantInputData
+): Promise<string> {
+    const result = await client.query<{ id: string }>(
+        `INSERT INTO product_variants (
+           org_id, product_id, title, sku, options, price,
+           cost_price, stock, low_stock_at, image_url, is_active
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         RETURNING id`,
+        [
+            orgId,
+            productId,
+            variant.title.trim(),
+            variant.sku?.trim() || null,
+            JSON.stringify(variant.options || {}),
+            variant.price,
+            variant.cost_price ?? 0,
+            variant.stock,
+            variant.low_stock_at ?? 5,
+            variant.image_url || null,
+            variant.is_active ?? true
+        ]
+    );
+    return result.rows[0].id;
 }
 </file>
 
@@ -17786,7 +17860,7 @@ export async function getCashReconciliationSummary(
 <file path="src/modules/public/public.queries.ts">
 // =============================================================================
 // soko-api/src/modules/public/public.queries.ts
-// Strict Tenant-Isolated Public Storefront Queries with Promotion & Ticker Fields
+// Strict Tenant-Isolated Public Storefront Queries with Search & Pagination
 // =============================================================================
 
 import { query } from '../../config/db';
@@ -17883,6 +17957,21 @@ export interface LocalEstateRow {
   lng: string;
 }
 
+export interface ListStoreProductsOptions {
+  searchQuery?: string;
+  category?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface PaginatedPublicProducts {
+  products: PublicProductRow[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
 export async function searchEstatesLocal(searchQuery: string): Promise<LocalEstateRow[]> {
   const result = await query<LocalEstateRow>(
     `SELECT id, name, city, lat::text AS lat, lng::text AS lng
@@ -17918,8 +18007,82 @@ export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow
   return result.rows[0] ?? null;
 }
 
-export async function getProductsByStoreOrgIdPublic(orgId: string): Promise<PublicProductRow[]> {
-  const result = await query<PublicProductRow>(
+export async function getProductsByStoreOrgIdPublic(
+  orgId: string,
+  options: ListStoreProductsOptions = {}
+): Promise<PaginatedPublicProducts> {
+  const page = Math.max(1, options.page || 1);
+  const limit = Math.min(100, Math.max(1, options.limit || 50));
+  const offset = (page - 1) * limit;
+
+  const conditions: string[] = [
+    'p.org_id = $1',
+    "p.status = 'published'",
+    'p.deleted_at IS NULL',
+  ];
+  const params: unknown[] = [orgId];
+  let paramIndex = 2;
+
+  // Category filter
+  if (
+    options.category &&
+    !['general', 'all', 'all books'].includes(options.category.toLowerCase().trim())
+  ) {
+    const cleanCat = options.category.trim();
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanCat)) {
+      conditions.push(`p.category_id = $${paramIndex}`);
+      params.push(cleanCat);
+      paramIndex++;
+    } else {
+      conditions.push(`(
+        LOWER(TRIM(c.name)) = LOWER(TRIM($${paramIndex})) OR
+        c.slug = LOWER(TRIM($${paramIndex})) OR
+        c.name ILIKE $${paramIndex + 1}
+      )`);
+      params.push(cleanCat, `%${cleanCat}%`);
+      paramIndex += 2;
+    }
+  }
+
+  // Spot-on Search across title, description/author, SKU/ISBN, category name
+  if (options.searchQuery && options.searchQuery.trim().length > 0) {
+    const searchPattern = `%${options.searchQuery.trim()}%`;
+    conditions.push(`(
+      p.name ILIKE $${paramIndex} OR
+      p.description ILIKE $${paramIndex} OR
+      p.sku ILIKE $${paramIndex} OR
+      c.name ILIKE $${paramIndex}
+    )`);
+    params.push(searchPattern);
+    paramIndex++;
+  }
+
+  const whereClause = conditions.join(' AND ');
+
+  // Count total matching items across the entire database
+  const countResult = await query<{ count: string }>(
+    `SELECT COUNT(p.id) AS count
+     FROM   products p
+     LEFT JOIN categories c ON c.id = p.category_id
+     WHERE  ${whereClause}`,
+    params
+  );
+
+  const total = parseInt(countResult.rows[0]?.count ?? '0', 10);
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+
+  if (total === 0) {
+    return {
+      products: [],
+      total: 0,
+      page,
+      limit,
+      totalPages: 1,
+    };
+  }
+
+  const dataParams = [...params, limit, offset];
+  const dataResult = await query<PublicProductRow>(
     `SELECT p.id,
             p.org_id,
             p.category_id,
@@ -17979,13 +18142,19 @@ export async function getProductsByStoreOrgIdPublic(orgId: string): Promise<Publ
      FROM   products p
      LEFT JOIN categories c ON c.id = p.category_id
      LEFT JOIN inventory i  ON i.product_id = p.id
-     WHERE  p.org_id     = $1
-       AND  p.status     = 'published'
-       AND  p.deleted_at IS NULL
-     ORDER  BY p.created_at DESC`,
-    [orgId]
+     WHERE  ${whereClause}
+     ORDER  BY p.created_at DESC
+     LIMIT  $${paramIndex} OFFSET $${paramIndex + 1}`,
+    dataParams
   );
-  return result.rows;
+
+  return {
+    products: dataResult.rows,
+    total,
+    page,
+    limit,
+    totalPages,
+  };
 }
 
 export async function getProductBySlugPublic(
@@ -18093,827 +18262,6 @@ export async function getPublicOrderItems(orderId: string): Promise<PublicOrderI
     [orderId]
   );
   return result.rows;
-}
-</file>
-
-<file path="src/modules/public/public.service.ts">
-// =============================================================================
-// soko-api/src/modules/public/public.service.ts
-// Storefront API with phone-gated downloads, email capture, promo expiration,
-// and in-place payment recovery retries.
-// =============================================================================
-
-import axios from 'axios';
-import { z } from 'zod';
-import { pool } from '../../config/db';
-import { env } from '../../config/env';
-import { AppError } from '../../utils/error';
-import { computeHaversineDistanceKm, calculateDeliveryFee } from '../../utils/geo';
-import { generateDeliveryConfirmationCode } from '../../utils/crypto';
-import * as publicQueries from './public.queries';
-import * as ordersQueries from '../orders/orders.queries';
-import { getCredentialsRowByOrgId, getDecryptedCredentials } from '../mpesa-credentials/mpesa-credentials.queries';
-import * as darajaService from '../../services/daraja.service';
-import { createPendingMpesaTransaction, findRecentPendingMpesaTransaction } from '../payments/payments.queries';
-
-export interface LocationSearchResult {
-  name: string;
-  lat: number;
-  lng: number;
-  source: 'local_list' | 'nominatim';
-  city?: string;
-}
-
-const nominatimCache = new Map<string, { data: LocationSearchResult[]; expiresAt: number }>();
-const CACHE_TTL_MS = 60 * 60 * 1000;
-let lastNominatimCallTime = 0;
-const NOMINATIM_MIN_INTERVAL_MS = 1000;
-
-function normalizeCustomerPhone(input: string): string {
-  const digits = (input || '').replace(/\D/g, '');
-  if (digits.startsWith('254') && digits.length === 12) {
-    return `0${digits.slice(3)}`;
-  }
-  if ((digits.startsWith('7') || digits.startsWith('1')) && digits.length === 9) {
-    return `0${digits}`;
-  }
-  return digits.slice(0, 10);
-}
-
-async function fetchNominatimWithRateLimit(searchQuery: string): Promise<LocationSearchResult[]> {
-  const cacheKey = searchQuery.trim().toLowerCase();
-  const cached = nominatimCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.data;
-  }
-
-  const now = Date.now();
-  const elapsed = now - lastNominatimCallTime;
-  if (elapsed < NOMINATIM_MIN_INTERVAL_MS) {
-    await new Promise((resolve) => setTimeout(resolve, NOMINATIM_MIN_INTERVAL_MS - elapsed));
-  }
-  lastNominatimCallTime = Date.now();
-
-  try {
-    const response = await axios.get<Array<{ display_name: string; lat: string; lon: string }>>(
-      'https://nominatim.openstreetmap.org/search',
-      {
-        params: {
-          q: searchQuery,
-          countrycodes: 'ke',
-          format: 'json',
-          limit: 5,
-          addressdetails: 1,
-        },
-        headers: {
-          'User-Agent': 'SokoApp-EACheckout/1.0 (support@soko.app)',
-        },
-        timeout: 5000,
-      }
-    );
-
-    const results: LocationSearchResult[] = (response.data || [])
-      .map((item) => ({
-        name: item.display_name,
-        lat: parseFloat(item.lat),
-        lng: parseFloat(item.lon),
-        source: 'nominatim' as const,
-      }))
-      .filter((r) => !isNaN(r.lat) && !isNaN(r.lng));
-
-    nominatimCache.set(cacheKey, {
-      data: results,
-      expiresAt: Date.now() + CACHE_TTL_MS,
-    });
-
-    return results;
-  } catch {
-    return [];
-  }
-}
-
-export async function searchDeliveryLocations(rawQuery: unknown): Promise<LocationSearchResult[]> {
-  const schema = z.object({
-    q: z.string().min(1, 'Search query is required').max(100),
-  });
-
-  const parsed = schema.safeParse(rawQuery);
-  if (!parsed.success) {
-    return [];
-  }
-
-  const queryText = parsed.data.q.trim();
-  const localEstates = await publicQueries.searchEstatesLocal(queryText);
-  if (localEstates.length > 0) {
-    return localEstates.map((estate: publicQueries.LocalEstateRow) => ({
-      name: `${estate.name}, ${estate.city}`,
-      lat: parseFloat(estate.lat),
-      lng: parseFloat(estate.lng),
-      city: estate.city,
-      source: 'local_list' as const,
-    }));
-  }
-
-  return fetchNominatimWithRateLimit(queryText);
-}
-
-export const CheckoutSchema = z.object({
-  customerName: z.string().min(1, 'Name is required').max(200),
-  customerPhone: z.string().min(1, 'Phone is required').max(20),
-  customerEmail: z
-    .string()
-    .email('Invalid email')
-    .nullable()
-    .optional()
-    .or(z.literal(''))
-    .transform((v) => (v === '' ? null : v)),
-  deliveryLocation: z.string().min(1, 'Delivery location is required').max(500),
-  notes: z.string().max(1000).nullable().optional(),
-  mpesaCode: z.string().max(50).nullable().optional(),
-  paymentMethod: z.string().min(1, 'Payment method selection is required'),
-  deliveryType: z.enum(['delivery', 'pickup']).default('delivery'),
-  customerLat: z.number().nullable().optional(),
-  customerLng: z.number().nullable().optional(),
-  locationSource: z.enum(['gps', 'local_list', 'nominatim', 'manual_text']).optional(),
-  locationAccuracyM: z.number().nullable().optional(),
-  items: z
-    .array(
-      z.object({
-        product_id: z.string().uuid(),
-        format_id: z.string().uuid().nullable().optional(),
-        variant_id: z.string().uuid().nullable().optional(),
-        quantity: z.number().int().positive('Quantity must be greater than zero'),
-        delivery_method: z.enum(['digital', 'pickup', 'delivery']).optional(),
-      })
-    )
-    .min(1, 'Cannot checkout with an empty cart'),
-});
-
-export interface PublicStoreDto {
-  name: string;
-  description: string | null;
-  logo_url: string | null;
-  cover_image_url: string | null;
-  contact_phone: string | null;
-  contact_email: string | null;
-  location: string | null;
-  delivery_info: string | null;
-  hero_layout: string;
-  hero_headline: string | null;
-  hero_subheadline: string | null;
-  hero_cta_label: string | null;
-  mpesa_verified: boolean;
-}
-
-export interface PublicFormatDto {
-  id: string;
-  product_id: string;
-  format: 'pdf' | 'epub' | 'hardcopy';
-  price: number;
-  compare_at_price: number | null;
-  file_url: string | null;
-  file_public_id: string | null;
-  file_size_bytes: number | null;
-  stock: number | null;
-}
-
-export interface PublicProductDto {
-  id: string;
-  org_id: string;
-  category_id: string;
-  category_name: string;
-  name: string;
-  slug: string;
-  sku: string | null;
-  author: string | null;
-  description: string | null;
-  price: number;
-  compare_at_price: number | null;
-  badge: string | null;
-  sale_ends_at: string | null;
-  stock: number;
-  images: Array<{ image_url: string; image_public_id?: string; sort_order?: number }>;
-  formats: PublicFormatDto[];
-  created_at: string;
-  updated_at: string;
-}
-
-export interface PublicOrderConfirmation {
-  orderId: string;
-  customerName: string;
-  total: number;
-  status: 'pending' | 'confirmed' | 'assigned' | 'out_for_delivery' | 'delivered' | 'cancelled';
-  paymentMethod: string;
-  paymentStatus: 'pending' | 'paid' | 'failed';
-  paymentReference: string | null;
-  mpesaReceiptNumber: string | null;
-  checkoutRequestId?: string | null;
-  deliveryType: 'delivery' | 'pickup';
-  deliveryFee: number;
-  deliveryFeeStatus: 'known' | 'needs_merchant_confirmation';
-  deliveryConfirmationCode: string | null;
-  deliveryLocation: string;
-  items: Array<{
-    productName: string;
-    variantTitle?: string | null;
-    unitPrice: number;
-    quantity: number;
-    subtotal: number;
-  }>;
-}
-
-function toPublicStoreDto(row: publicQueries.PublicStoreRow, mpesaVerified: boolean): PublicStoreDto {
-  return {
-    name: row.name,
-    description: row.description,
-    logo_url: row.logo_url,
-    cover_image_url: row.cover_image_url,
-    contact_phone: row.contact_phone,
-    contact_email: row.contact_email,
-    location: row.location,
-    delivery_info: row.delivery_info,
-    hero_layout: row.hero_layout ?? 'editorial',
-    hero_headline: row.hero_headline,
-    hero_subheadline: row.hero_subheadline,
-    hero_cta_label: row.hero_cta_label,
-    mpesa_verified: mpesaVerified,
-  };
-}
-
-function toPublicProductDto(row: publicQueries.PublicProductRow): PublicProductDto {
-  const isSaleExpired = Boolean(
-    row.sale_ends_at && new Date(row.sale_ends_at).getTime() < Date.now()
-  );
-
-  const formats: PublicFormatDto[] = (row.formats || []).map((f) => ({
-    id: f.id,
-    product_id: f.product_id,
-    format: f.format,
-    price: parseFloat(f.price),
-    compare_at_price: f.compare_at_price && !isSaleExpired ? parseFloat(f.compare_at_price) : null,
-    file_url: f.file_url,
-    file_public_id: f.file_public_id,
-    file_size_bytes: f.file_size_bytes ? parseInt(f.file_size_bytes, 10) : null,
-    stock: f.stock,
-  }));
-
-  const hardcopyFormat = formats.find((f) => f.format === 'hardcopy');
-  const totalStock = hardcopyFormat ? (hardcopyFormat.stock ?? 0) : row.stock;
-
-  const normalizedImages = (row.images || [])
-    .map((img: any, idx: number) => {
-      if (typeof img === 'string') return { image_url: img, image_public_id: `img_${idx}`, sort_order: idx };
-      if (img && typeof img === 'object' && img.image_url) return img;
-      return null;
-    })
-    .filter(Boolean);
-
-  let author: string | null = null;
-  if (row.description && row.description.startsWith('By ')) {
-    const match = row.description.match(/^By\s+([^<\n]+)/);
-    author = match ? match[1].trim() : null;
-  }
-
-  return {
-    id: row.id,
-    org_id: row.org_id,
-    category_id: row.category_id,
-    category_name: row.category_name || 'General',
-    name: row.name,
-    slug: row.slug,
-    sku: row.sku,
-    author,
-    description: row.description,
-    price: parseFloat(row.price),
-    compare_at_price: row.compare_at_price && !isSaleExpired ? parseFloat(row.compare_at_price) : null,
-    badge: isSaleExpired ? null : (row.badge || null),
-    sale_ends_at: row.sale_ends_at ? new Date(row.sale_ends_at).toISOString() : null,
-    stock: totalStock,
-    images: normalizedImages,
-    formats,
-    created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
-    updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
-  };
-}
-
-export async function getStoreMetadata(storeSlug: string): Promise<PublicStoreDto> {
-  const normalizedSlug = (storeSlug || '').trim().toLowerCase();
-  const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
-  if (!store) throw new AppError('Store not found', 404);
-
-  let mpesaVerified = false;
-  try {
-    const creds = await getCredentialsRowByOrgId(store.org_id);
-    mpesaVerified = creds?.status === 'verified';
-  } catch {
-    mpesaVerified = false;
-  }
-
-  return toPublicStoreDto(store, mpesaVerified);
-}
-
-export async function listStoreProducts(storeSlug: string): Promise<PublicProductDto[]> {
-  const normalizedSlug = (storeSlug || '').trim().toLowerCase();
-  const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
-  if (!store) throw new AppError('Store not found', 404);
-  const products = await publicQueries.getProductsByStoreOrgIdPublic(store.org_id);
-  return products.map(toPublicProductDto);
-}
-
-export async function getProductDetails(storeSlug: string, productSlug: string): Promise<PublicProductDto> {
-  const normalizedSlug = (storeSlug || '').trim().toLowerCase();
-  const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
-  if (!store) throw new AppError('Store not found', 404);
-  const product = await publicQueries.getProductBySlugPublic(store.org_id, productSlug);
-  if (!product) throw new AppError('Product not found', 404);
-  return toPublicProductDto(product);
-}
-
-export async function placeOrder(
-  storeSlug: string,
-  rawBody: unknown
-): Promise<{ orderId: string; checkoutRequestId?: string }> {
-  const parsed = CheckoutSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid checkout information', 400);
-  }
-
-  const { items, mpesaCode, ...customerData } = parsed.data;
-  const normalizedSlug = (storeSlug || '').trim().toLowerCase();
-  const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
-  if (!store) {
-    throw new AppError('Store not found', 404);
-  }
-
-  const isAutomatedDaraja = customerData.paymentMethod === 'mpesa' || customerData.paymentMethod === 'mpesa_direct';
-
-  if (isAutomatedDaraja) {
-    const creds = await getCredentialsRowByOrgId(store.org_id);
-    if (!creds || creds.status !== 'verified') {
-      throw new AppError("This store hasn't finished setting up automated payments yet", 503);
-    }
-  }
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    const cleanPhone = normalizeCustomerPhone(customerData.customerPhone);
-
-    const existingCustomer = await client.query<{ id: string }>(
-      `SELECT id FROM customers WHERE org_id = $1 AND phone = $2 AND deleted_at IS NULL LIMIT 1`,
-      [store.org_id, cleanPhone]
-    );
-
-    if (existingCustomer.rows.length === 0) {
-      await client.query(
-        `INSERT INTO customers (org_id, name, phone, email, address)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [
-          store.org_id,
-          customerData.customerName.trim(),
-          cleanPhone,
-          customerData.customerEmail?.trim() || null,
-          customerData.deliveryLocation || null,
-        ]
-      );
-    }
-
-    let calculatedProductsSubtotal = 0;
-    let hasPhysicalItem = false;
-    const itemsToInsert = [];
-
-    for (const cartItem of items) {
-      const productRes = await client.query<{
-        id: string;
-        name: string;
-        price: string;
-        cost_price: string | null;
-        status: string;
-        stock: number;
-      }>(
-        `SELECT p.id, p.name, p.price::text AS price, p.cost_price::text AS cost_price, p.status, i.stock
-         FROM   products p
-         INNER  JOIN inventory i ON i.product_id = p.id
-         WHERE  p.id = $1 AND p.org_id = $2 AND p.deleted_at IS NULL`,
-        [cartItem.product_id, store.org_id]
-      );
-
-      const product = productRes.rows[0];
-      if (!product || product.status !== 'published') {
-        throw new AppError('One of the products in your cart is no longer available.', 400);
-      }
-
-      let unitPrice = parseFloat(product.price);
-      let costPrice = parseFloat(product.cost_price || '0');
-      let variantTitle: string | null = null;
-      let deliveryMethod: string = cartItem.delivery_method || 'delivery';
-      let isPhysical = false;
-
-      if (cartItem.format_id) {
-        const formatRes = await client.query<{
-          id: string;
-          format: 'pdf' | 'epub' | 'hardcopy';
-          price: string;
-          stock: number | null;
-        }>(
-          `SELECT id, format, price::text AS price, stock
-           FROM   product_formats
-           WHERE  id = $1 AND product_id = $2`,
-          [cartItem.format_id, product.id]
-        );
-
-        const formatRow = formatRes.rows[0];
-        if (!formatRow) {
-          throw new AppError(`Selected format for "${product.name}" is no longer available.`, 400);
-        }
-
-        unitPrice = parseFloat(formatRow.price);
-        variantTitle = formatRow.format.toUpperCase();
-
-        if (formatRow.format === 'hardcopy') {
-          hasPhysicalItem = true;
-          isPhysical = true;
-          deliveryMethod = customerData.deliveryType || 'delivery';
-          if (formatRow.stock !== null && formatRow.stock < cartItem.quantity) {
-            throw new AppError(
-              `Insufficient stock for "${product.name}". Only ${formatRow.stock} physical copies left.`,
-              409
-            );
-          }
-        } else {
-          deliveryMethod = 'digital';
-          isPhysical = false;
-        }
-      } else {
-        hasPhysicalItem = true;
-        isPhysical = true;
-        deliveryMethod = customerData.deliveryType || 'delivery';
-        if (product.stock < cartItem.quantity) {
-          throw new AppError(`Insufficient stock for "${product.name}". Only ${product.stock} left.`, 409);
-        }
-      }
-
-      const subtotal = Math.round(unitPrice * cartItem.quantity * 100) / 100;
-      calculatedProductsSubtotal += subtotal;
-
-      itemsToInsert.push({
-        productId: product.id,
-        formatId: cartItem.format_id || null,
-        variantId: cartItem.variant_id || null,
-        variantTitle,
-        productName: product.name,
-        unitPrice,
-        costPrice,
-        quantity: cartItem.quantity,
-        subtotal,
-        deliveryMethod,
-        isPhysical,
-      });
-    }
-
-    calculatedProductsSubtotal = Math.round(calculatedProductsSubtotal * 100) / 100;
-
-    const isDelivery = hasPhysicalItem && customerData.deliveryType !== 'pickup';
-    let deliveryFee = 0;
-    let deliveryFeeStatus: 'known' | 'needs_merchant_confirmation' = 'known';
-    let confirmationCode: string | null = null;
-
-    if (isDelivery) {
-      confirmationCode = generateDeliveryConfirmationCode();
-
-      if (
-        customerData.customerLat !== null &&
-        customerData.customerLat !== undefined &&
-        customerData.customerLng !== null &&
-        customerData.customerLng !== undefined
-      ) {
-        const merchantLoc = await ordersQueries.getMerchantLocationTransactional(client, store.org_id);
-        if (merchantLoc) {
-          const merchantLat = parseFloat(merchantLoc.lat);
-          const merchantLng = parseFloat(merchantLoc.lng);
-          const distanceKm = computeHaversineDistanceKm(
-            merchantLat,
-            merchantLng,
-            customerData.customerLat,
-            customerData.customerLng
-          );
-
-          const feeCalc = calculateDeliveryFee(distanceKm, {
-            baseFee: parseFloat(merchantLoc.base_delivery_fee),
-            feePerKm: parseFloat(merchantLoc.fee_per_km),
-            maxDeliveryRadiusKm: parseFloat(merchantLoc.max_delivery_radius_km),
-          });
-
-          deliveryFee = feeCalc.fee;
-          deliveryFeeStatus = feeCalc.status;
-        } else {
-          deliveryFee = 0;
-          deliveryFeeStatus = 'needs_merchant_confirmation';
-        }
-      } else {
-        deliveryFee = 0;
-        deliveryFeeStatus = 'needs_merchant_confirmation';
-      }
-    } else {
-      deliveryFee = 0;
-      deliveryFeeStatus = 'known';
-      confirmationCode = null;
-    }
-
-    const finalOrderTotal = Math.round((calculatedProductsSubtotal + deliveryFee) * 100) / 100;
-
-    const orderId = await ordersQueries.insertOrderTransactional(client, {
-      orgId: store.org_id,
-      storeId: store.id,
-      customerName: customerData.customerName.trim(),
-      customerPhone: cleanPhone,
-      customerEmail: customerData.customerEmail?.trim() || null,
-      deliveryLocation: customerData.deliveryLocation,
-      notes: customerData.notes?.trim() || null,
-      paymentMethod: customerData.paymentMethod,
-      paymentReference: mpesaCode?.trim().toUpperCase() || null,
-      total: finalOrderTotal,
-      status: customerData.paymentMethod === 'mpesa_cash' ? 'confirmed' : 'pending',
-      deliveryType: hasPhysicalItem ? customerData.deliveryType : 'delivery',
-      customerLat: customerData.customerLat,
-      customerLng: customerData.customerLng,
-      locationSource: customerData.locationSource,
-      locationAccuracyM: customerData.locationAccuracyM,
-      deliveryFee,
-      deliveryFeeStatus,
-      deliveryConfirmationCode: confirmationCode,
-    });
-
-    await ordersQueries.insertOrderStatusHistoryTransactional(
-      client,
-      orderId,
-      customerData.paymentMethod === 'mpesa_cash' ? 'confirmed' : 'pending',
-      'system'
-    );
-
-    for (const item of itemsToInsert) {
-      await ordersQueries.insertOrderItemTransactional(client, orderId, {
-        productId: item.productId,
-        productName: item.productName,
-        unitPrice: item.unitPrice,
-        costPrice: item.costPrice,
-        quantity: item.quantity,
-        subtotal: item.subtotal,
-        variantId: item.variantId,
-        variantTitle: item.variantTitle,
-        formatId: item.formatId,
-        deliveryMethod: item.deliveryMethod,
-      });
-
-      if (item.isPhysical) {
-        if (item.formatId) {
-          const decFormatRes = await client.query(
-            `UPDATE product_formats
-             SET stock = stock - $1, updated_at = NOW()
-             WHERE id = $2 AND format = 'hardcopy' AND (stock IS NULL OR stock >= $1)`,
-            [item.quantity, item.formatId]
-          );
-          if (decFormatRes.rowCount === 0) {
-            throw new AppError(`The hardcopy edition of "${item.productName}" was just sold out.`, 409);
-          }
-          await ordersQueries.decrementStockTransactional(client, item.productId, item.quantity);
-        } else {
-          await ordersQueries.decrementStockTransactional(client, item.productId, item.quantity);
-        }
-      }
-    }
-
-    let checkoutRequestId: string | undefined;
-
-    if (isAutomatedDaraja) {
-      const recentPending = await findRecentPendingMpesaTransaction(orderId, 60);
-
-      if (recentPending) {
-        checkoutRequestId = recentPending.checkout_request_id;
-      } else {
-        const decryptedCreds = await getDecryptedCredentials(store.org_id);
-        if (decryptedCreds) {
-          const callbackUrl = `${env.API_PUBLIC_URL.replace(/\/$/, '')}/api/v1/payments/mpesa/callback`;
-          const stkResult = await darajaService.stkPush({
-            credentials: decryptedCreds,
-            phone: cleanPhone,
-            amount: finalOrderTotal,
-            accountReference: orderId,
-            transactionDesc: `Order ${orderId.slice(0, 8)}`,
-            callbackUrl,
-          });
-
-          checkoutRequestId = stkResult.checkoutRequestId;
-
-          await createPendingMpesaTransaction(client, {
-            orgId: store.org_id,
-            checkoutRequestId: stkResult.checkoutRequestId,
-            merchantRequestId: stkResult.merchantRequestId,
-            phone: cleanPhone,
-            amount: finalOrderTotal,
-            accountReference: orderId,
-            transactionDesc: `Order ${orderId.slice(0, 8)}`,
-          });
-        }
-      }
-    }
-
-    await client.query('COMMIT');
-    return { orderId, checkoutRequestId };
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-export async function getPublicOrderDetails(
-  storeSlug: string,
-  orderId: string,
-  verifyingPhone?: string
-): Promise<
-  PublicOrderConfirmation & {
-    downloads: any[];
-    isVerifiedCustomer: boolean;
-    notes: string | null;
-  }
-> {
-  const normalizedSlug = (storeSlug || '').trim().toLowerCase();
-  const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
-  if (!store) {
-    throw new AppError('Store not found', 404);
-  }
-
-  const orderRes = await pool.query<publicQueries.PublicOrderDetailsRow & { notes: string | null }>(
-    `SELECT o.id, o.customer_name, o.customer_phone, o.total::text AS total, o.status,
-            o.payment_method, o.payment_status, o.payment_reference, o.notes,
-            o.delivery_type, o.delivery_fee::text AS delivery_fee,
-            o.delivery_fee_status, o.delivery_confirmation_code,
-            o.delivery_location,
-            mt.mpesa_receipt_number, mt.checkout_request_id
-     FROM   orders o
-     LEFT JOIN mpesa_transactions mt 
-            ON mt.account_reference = o.id::text 
-           AND mt.status = 'completed'
-     WHERE  o.id = $1 AND o.org_id = $2
-     ORDER BY mt.created_at DESC
-     LIMIT 1`,
-    [orderId, store.org_id]
-  );
-
-  const order = orderRes.rows[0];
-  if (!order) {
-    throw new AppError('Order confirmation details not found', 404);
-  }
-
-  const items = await publicQueries.getPublicOrderItems(order.id);
-
-  const cleanVerifying = verifyingPhone ? normalizeCustomerPhone(verifyingPhone) : null;
-  const isVerifiedCustomer = Boolean(
-    cleanVerifying && cleanVerifying === normalizeCustomerPhone(order.customer_phone)
-  );
-
-  let downloads: any[] = [];
-
-  if (order.payment_status === 'paid' && isVerifiedCustomer) {
-    const downloadsRes = await pool.query<{
-      token: string;
-      max_downloads: number;
-      download_count: number;
-      expires_at: Date;
-      format: string;
-      book_title: string;
-    }>(
-      `SELECT dd.download_token AS token,
-              dd.max_downloads,
-              dd.download_count,
-              dd.expires_at,
-              COALESCE(dd.format, pf.format, 'pdf') AS format,
-              COALESCE(dd.book_title, p.name, 'Book') AS book_title
-       FROM digital_downloads dd
-       LEFT JOIN product_formats pf ON pf.id = dd.format_id
-       LEFT JOIN products p ON p.id = pf.product_id
-       INNER JOIN order_items oi ON oi.id = dd.order_item_id
-       WHERE oi.order_id = $1`,
-      [order.id]
-    );
-
-    downloads = downloadsRes.rows.map((d) => ({
-      bookTitle: d.book_title,
-      format: d.format,
-      token: d.token,
-      downloadUrl: `/api/v1/books/download/${d.token}?redirect=true`,
-      expiresAt: d.expires_at.toISOString(),
-      maxDownloads: d.max_downloads,
-      downloadCount: d.download_count,
-    }));
-  }
-
-  return {
-    orderId: order.id,
-    customerName: order.customer_name,
-    total: parseFloat(order.total),
-    status: order.status,
-    paymentMethod: order.payment_method,
-    paymentStatus: order.payment_status,
-    paymentReference: order.payment_reference || null,
-    mpesaReceiptNumber: order.mpesa_receipt_number,
-    checkoutRequestId: order.checkout_request_id,
-    deliveryType: order.delivery_type,
-    deliveryFee: parseFloat(order.delivery_fee || '0'),
-    deliveryFeeStatus: order.delivery_fee_status,
-    deliveryConfirmationCode: order.delivery_confirmation_code,
-    deliveryLocation: order.delivery_location,
-    notes: order.notes,
-    items: items.map((row: publicQueries.PublicOrderItemRow) => ({
-      productName: row.product_name,
-      variantTitle: row.variant_title || null,
-      unitPrice: parseFloat(row.unit_price),
-      quantity: row.quantity,
-      subtotal: parseFloat(row.subtotal),
-    })),
-    downloads,
-    isVerifiedCustomer,
-  };
-}
-
-export async function retryOrderPayment(
-  storeSlug: string,
-  orderId: string,
-  rawBody: unknown
-): Promise<{ success: boolean; checkoutRequestId?: string }> {
-  const schema = z.object({
-    paymentMethod: z.enum(['mpesa', 'mpesa_manual', 'mpesa_cash']),
-    phone: z.string().optional(),
-    mpesaCode: z.string().nullable().optional(),
-  });
-
-  const parsed = schema.safeParse(rawBody);
-  if (!parsed.success) {
-    throw new AppError(parsed.error.issues[0]?.message || 'Invalid retry payload', 400);
-  }
-
-  const store = await publicQueries.getStoreBySlugPublic(storeSlug);
-  if (!store) throw new AppError('Store not found', 404);
-
-  const orderRes = await pool.query<{ id: string; total: string; customer_phone: string }>(
-    `SELECT id, total::text AS total, customer_phone FROM orders WHERE id = $1 AND org_id = $2`,
-    [orderId, store.org_id]
-  );
-  const order = orderRes.rows[0];
-  if (!order) throw new AppError('Order not found', 404);
-
-  const cleanPhone = parsed.data.phone ? normalizeCustomerPhone(parsed.data.phone) : order.customer_phone;
-  const paymentRef = parsed.data.mpesaCode ? parsed.data.mpesaCode.trim().toUpperCase() : null;
-
-  await pool.query(
-    `UPDATE orders 
-     SET payment_method = $3,
-         payment_reference = COALESCE($4, payment_reference),
-         payment_status = 'pending',
-         updated_at = NOW()
-     WHERE id = $1 AND org_id = $2`,
-    [orderId, store.org_id, parsed.data.paymentMethod, paymentRef]
-  );
-
-  let checkoutRequestId: string | undefined;
-
-  if (parsed.data.paymentMethod === 'mpesa') {
-    const creds = await getDecryptedCredentials(store.org_id);
-    if (creds) {
-      const callbackUrl = `${env.API_PUBLIC_URL.replace(/\/$/, '')}/api/v1/payments/mpesa/callback`;
-      const stkResult = await darajaService.stkPush({
-        credentials: creds,
-        phone: cleanPhone,
-        amount: parseFloat(order.total),
-        accountReference: orderId,
-        transactionDesc: `Order ${orderId.slice(0, 8)}`,
-        callbackUrl,
-      });
-
-      checkoutRequestId = stkResult.checkoutRequestId;
-
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        await createPendingMpesaTransaction(client, {
-          orgId: store.org_id,
-          checkoutRequestId: stkResult.checkoutRequestId,
-          merchantRequestId: stkResult.merchantRequestId,
-          phone: cleanPhone,
-          amount: parseFloat(order.total),
-          accountReference: orderId,
-          transactionDesc: `Order ${orderId.slice(0, 8)}`,
-        });
-        await client.query('COMMIT');
-      } finally {
-        client.release();
-      }
-    }
-  }
-
-  return { success: true, checkoutRequestId };
 }
 </file>
 
@@ -19636,6 +18984,843 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
 app.use(errorHandler);
 
 export default app;
+</file>
+
+<file path="src/modules/public/public.service.ts">
+// =============================================================================
+// soko-api/src/modules/public/public.service.ts
+// Storefront API with phone-gated downloads, email capture, promo expiration,
+// and in-place payment recovery retries.
+// =============================================================================
+
+import axios from 'axios';
+import { z } from 'zod';
+import { pool } from '../../config/db';
+import { env } from '../../config/env';
+import { AppError } from '../../utils/error';
+import { computeHaversineDistanceKm, calculateDeliveryFee } from '../../utils/geo';
+import { generateDeliveryConfirmationCode } from '../../utils/crypto';
+import * as publicQueries from './public.queries';
+import * as ordersQueries from '../orders/orders.queries';
+import { getCredentialsRowByOrgId, getDecryptedCredentials } from '../mpesa-credentials/mpesa-credentials.queries';
+import * as darajaService from '../../services/daraja.service';
+import { createPendingMpesaTransaction, findRecentPendingMpesaTransaction } from '../payments/payments.queries';
+
+export interface LocationSearchResult {
+  name: string;
+  lat: number;
+  lng: number;
+  source: 'local_list' | 'nominatim';
+  city?: string;
+}
+
+const nominatimCache = new Map<string, { data: LocationSearchResult[]; expiresAt: number }>();
+const CACHE_TTL_MS = 60 * 60 * 1000;
+let lastNominatimCallTime = 0;
+const NOMINATIM_MIN_INTERVAL_MS = 1000;
+
+function normalizeCustomerPhone(input: string): string {
+  const digits = (input || '').replace(/\D/g, '');
+  if (digits.startsWith('254') && digits.length === 12) {
+    return `0${digits.slice(3)}`;
+  }
+  if ((digits.startsWith('7') || digits.startsWith('1')) && digits.length === 9) {
+    return `0${digits}`;
+  }
+  return digits.slice(0, 10);
+}
+
+async function fetchNominatimWithRateLimit(searchQuery: string): Promise<LocationSearchResult[]> {
+  const cacheKey = searchQuery.trim().toLowerCase();
+  const cached = nominatimCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+
+  const now = Date.now();
+  const elapsed = now - lastNominatimCallTime;
+  if (elapsed < NOMINATIM_MIN_INTERVAL_MS) {
+    await new Promise((resolve) => setTimeout(resolve, NOMINATIM_MIN_INTERVAL_MS - elapsed));
+  }
+  lastNominatimCallTime = Date.now();
+
+  try {
+    const response = await axios.get<Array<{ display_name: string; lat: string; lon: string }>>(
+      'https://nominatim.openstreetmap.org/search',
+      {
+        params: {
+          q: searchQuery,
+          countrycodes: 'ke',
+          format: 'json',
+          limit: 5,
+          addressdetails: 1,
+        },
+        headers: {
+          'User-Agent': 'SokoApp-EACheckout/1.0 (support@soko.app)',
+        },
+        timeout: 5000,
+      }
+    );
+
+    const results: LocationSearchResult[] = (response.data || [])
+      .map((item) => ({
+        name: item.display_name,
+        lat: parseFloat(item.lat),
+        lng: parseFloat(item.lon),
+        source: 'nominatim' as const,
+      }))
+      .filter((r) => !isNaN(r.lat) && !isNaN(r.lng));
+
+    nominatimCache.set(cacheKey, {
+      data: results,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    });
+
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+export async function searchDeliveryLocations(rawQuery: unknown): Promise<LocationSearchResult[]> {
+  const schema = z.object({
+    q: z.string().min(1, 'Search query is required').max(100),
+  });
+
+  const parsed = schema.safeParse(rawQuery);
+  if (!parsed.success) {
+    return [];
+  }
+
+  const queryText = parsed.data.q.trim();
+  const localEstates = await publicQueries.searchEstatesLocal(queryText);
+  if (localEstates.length > 0) {
+    return localEstates.map((estate: publicQueries.LocalEstateRow) => ({
+      name: `${estate.name}, ${estate.city}`,
+      lat: parseFloat(estate.lat),
+      lng: parseFloat(estate.lng),
+      city: estate.city,
+      source: 'local_list' as const,
+    }));
+  }
+
+  return fetchNominatimWithRateLimit(queryText);
+}
+
+export const CheckoutSchema = z.object({
+  customerName: z.string().min(1, 'Name is required').max(200),
+  customerPhone: z.string().min(1, 'Phone is required').max(20),
+  customerEmail: z
+    .string()
+    .email('Invalid email')
+    .nullable()
+    .optional()
+    .or(z.literal(''))
+    .transform((v) => (v === '' ? null : v)),
+  deliveryLocation: z.string().min(1, 'Delivery location is required').max(500),
+  notes: z.string().max(1000).nullable().optional(),
+  mpesaCode: z.string().max(50).nullable().optional(),
+  paymentMethod: z.string().min(1, 'Payment method selection is required'),
+  deliveryType: z.enum(['delivery', 'pickup']).default('delivery'),
+  customerLat: z.number().nullable().optional(),
+  customerLng: z.number().nullable().optional(),
+  locationSource: z.enum(['gps', 'local_list', 'nominatim', 'manual_text']).optional(),
+  locationAccuracyM: z.number().nullable().optional(),
+  items: z
+    .array(
+      z.object({
+        product_id: z.string().uuid(),
+        format_id: z.string().uuid().nullable().optional(),
+        variant_id: z.string().uuid().nullable().optional(),
+        quantity: z.number().int().positive('Quantity must be greater than zero'),
+        delivery_method: z.enum(['digital', 'pickup', 'delivery']).optional(),
+      })
+    )
+    .min(1, 'Cannot checkout with an empty cart'),
+});
+
+export interface PublicStoreDto {
+  name: string;
+  description: string | null;
+  logo_url: string | null;
+  cover_image_url: string | null;
+  contact_phone: string | null;
+  contact_email: string | null;
+  location: string | null;
+  delivery_info: string | null;
+  hero_layout: string;
+  hero_headline: string | null;
+  hero_subheadline: string | null;
+  hero_cta_label: string | null;
+  mpesa_verified: boolean;
+}
+
+export interface PublicFormatDto {
+  id: string;
+  product_id: string;
+  format: 'pdf' | 'epub' | 'hardcopy';
+  price: number;
+  compare_at_price: number | null;
+  file_url: string | null;
+  file_public_id: string | null;
+  file_size_bytes: number | null;
+  stock: number | null;
+}
+
+export interface PublicProductDto {
+  id: string;
+  org_id: string;
+  category_id: string;
+  category_name: string;
+  name: string;
+  slug: string;
+  sku: string | null;
+  author: string | null;
+  description: string | null;
+  price: number;
+  compare_at_price: number | null;
+  badge: string | null;
+  sale_ends_at: string | null;
+  stock: number;
+  images: Array<{ image_url: string; image_public_id?: string; sort_order?: number }>;
+  formats: PublicFormatDto[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PublicOrderConfirmation {
+  orderId: string;
+  customerName: string;
+  total: number;
+  status: 'pending' | 'confirmed' | 'assigned' | 'out_for_delivery' | 'delivered' | 'cancelled';
+  paymentMethod: string;
+  paymentStatus: 'pending' | 'paid' | 'failed';
+  paymentReference: string | null;
+  mpesaReceiptNumber: string | null;
+  checkoutRequestId?: string | null;
+  deliveryType: 'delivery' | 'pickup';
+  deliveryFee: number;
+  deliveryFeeStatus: 'known' | 'needs_merchant_confirmation';
+  deliveryConfirmationCode: string | null;
+  deliveryLocation: string;
+  items: Array<{
+    productName: string;
+    variantTitle?: string | null;
+    unitPrice: number;
+    quantity: number;
+    subtotal: number;
+  }>;
+}
+
+function toPublicStoreDto(row: publicQueries.PublicStoreRow, mpesaVerified: boolean): PublicStoreDto {
+  return {
+    name: row.name,
+    description: row.description,
+    logo_url: row.logo_url,
+    cover_image_url: row.cover_image_url,
+    contact_phone: row.contact_phone,
+    contact_email: row.contact_email,
+    location: row.location,
+    delivery_info: row.delivery_info,
+    hero_layout: row.hero_layout ?? 'editorial',
+    hero_headline: row.hero_headline,
+    hero_subheadline: row.hero_subheadline,
+    hero_cta_label: row.hero_cta_label,
+    mpesa_verified: mpesaVerified,
+  };
+}
+
+function toPublicProductDto(row: publicQueries.PublicProductRow): PublicProductDto {
+  const isSaleExpired = Boolean(
+    row.sale_ends_at && new Date(row.sale_ends_at).getTime() < Date.now()
+  );
+
+  const formats: PublicFormatDto[] = (row.formats || []).map((f) => ({
+    id: f.id,
+    product_id: f.product_id,
+    format: f.format,
+    price: parseFloat(f.price),
+    compare_at_price: f.compare_at_price && !isSaleExpired ? parseFloat(f.compare_at_price) : null,
+    file_url: f.file_url,
+    file_public_id: f.file_public_id,
+    file_size_bytes: f.file_size_bytes ? parseInt(f.file_size_bytes, 10) : null,
+    stock: f.stock,
+  }));
+
+  const hardcopyFormat = formats.find((f) => f.format === 'hardcopy');
+  const totalStock = hardcopyFormat ? (hardcopyFormat.stock ?? 0) : row.stock;
+
+  const normalizedImages = (row.images || [])
+    .map((img: any, idx: number) => {
+      if (typeof img === 'string') return { image_url: img, image_public_id: `img_${idx}`, sort_order: idx };
+      if (img && typeof img === 'object' && img.image_url) return img;
+      return null;
+    })
+    .filter(Boolean);
+
+  let author: string | null = null;
+  if (row.description && row.description.startsWith('By ')) {
+    const match = row.description.match(/^By\s+([^<\n]+)/);
+    author = match ? match[1].trim() : null;
+  }
+
+  return {
+    id: row.id,
+    org_id: row.org_id,
+    category_id: row.category_id,
+    category_name: row.category_name || 'General',
+    name: row.name,
+    slug: row.slug,
+    sku: row.sku,
+    author,
+    description: row.description,
+    price: parseFloat(row.price),
+    compare_at_price: row.compare_at_price && !isSaleExpired ? parseFloat(row.compare_at_price) : null,
+    badge: isSaleExpired ? null : (row.badge || null),
+    sale_ends_at: row.sale_ends_at ? new Date(row.sale_ends_at).toISOString() : null,
+    stock: totalStock,
+    images: normalizedImages,
+    formats,
+    created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+    updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
+  };
+}
+
+export async function getStoreMetadata(storeSlug: string): Promise<PublicStoreDto> {
+  const normalizedSlug = (storeSlug || '').trim().toLowerCase();
+  const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
+  if (!store) throw new AppError('Store not found', 404);
+
+  let mpesaVerified = false;
+  try {
+    const creds = await getCredentialsRowByOrgId(store.org_id);
+    mpesaVerified = creds?.status === 'verified';
+  } catch {
+    mpesaVerified = false;
+  }
+
+  return toPublicStoreDto(store, mpesaVerified);
+}
+
+export async function listStoreProducts(
+  storeSlug: string,
+  options: publicQueries.ListStoreProductsOptions = {}
+): Promise<{
+  products: PublicProductDto[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}> {
+  const normalizedSlug = (storeSlug || '').trim().toLowerCase();
+  const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
+  if (!store) throw new AppError('Store not found', 404);
+
+  const result = await publicQueries.getProductsByStoreOrgIdPublic(store.org_id, options);
+  return {
+    products: result.products.map(toPublicProductDto),
+    total: result.total,
+    page: result.page,
+    limit: result.limit,
+    totalPages: result.totalPages,
+  };
+}
+
+export async function getProductDetails(storeSlug: string, productSlug: string): Promise<PublicProductDto> {
+  const normalizedSlug = (storeSlug || '').trim().toLowerCase();
+  const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
+  if (!store) throw new AppError('Store not found', 404);
+  const product = await publicQueries.getProductBySlugPublic(store.org_id, productSlug);
+  if (!product) throw new AppError('Product not found', 404);
+  return toPublicProductDto(product);
+}
+
+export async function placeOrder(
+  storeSlug: string,
+  rawBody: unknown
+): Promise<{ orderId: string; checkoutRequestId?: string }> {
+  const parsed = CheckoutSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid checkout information', 400);
+  }
+
+  const { items, mpesaCode, ...customerData } = parsed.data;
+  const normalizedSlug = (storeSlug || '').trim().toLowerCase();
+  const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
+  if (!store) {
+    throw new AppError('Store not found', 404);
+  }
+
+  const isAutomatedDaraja = customerData.paymentMethod === 'mpesa' || customerData.paymentMethod === 'mpesa_direct';
+
+  if (isAutomatedDaraja) {
+    const creds = await getCredentialsRowByOrgId(store.org_id);
+    if (!creds || creds.status !== 'verified') {
+      throw new AppError("This store hasn't finished setting up automated payments yet", 503);
+    }
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const cleanPhone = normalizeCustomerPhone(customerData.customerPhone);
+
+    const existingCustomer = await client.query<{ id: string }>(
+      `SELECT id FROM customers WHERE org_id = $1 AND phone = $2 AND deleted_at IS NULL LIMIT 1`,
+      [store.org_id, cleanPhone]
+    );
+
+    if (existingCustomer.rows.length === 0) {
+      await client.query(
+        `INSERT INTO customers (org_id, name, phone, email, address)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          store.org_id,
+          customerData.customerName.trim(),
+          cleanPhone,
+          customerData.customerEmail?.trim() || null,
+          customerData.deliveryLocation || null,
+        ]
+      );
+    }
+
+    let calculatedProductsSubtotal = 0;
+    let hasPhysicalItem = false;
+    const itemsToInsert = [];
+
+    for (const cartItem of items) {
+      const productRes = await client.query<{
+        id: string;
+        name: string;
+        price: string;
+        cost_price: string | null;
+        status: string;
+        stock: number;
+      }>(
+        `SELECT p.id, p.name, p.price::text AS price, p.cost_price::text AS cost_price, p.status, i.stock
+         FROM   products p
+         INNER  JOIN inventory i ON i.product_id = p.id
+         WHERE  p.id = $1 AND p.org_id = $2 AND p.deleted_at IS NULL`,
+        [cartItem.product_id, store.org_id]
+      );
+
+      const product = productRes.rows[0];
+      if (!product || product.status !== 'published') {
+        throw new AppError('One of the products in your cart is no longer available.', 400);
+      }
+
+      let unitPrice = parseFloat(product.price);
+      let costPrice = parseFloat(product.cost_price || '0');
+      let variantTitle: string | null = null;
+      let deliveryMethod: string = cartItem.delivery_method || 'delivery';
+      let isPhysical = false;
+
+      if (cartItem.format_id) {
+        const formatRes = await client.query<{
+          id: string;
+          format: 'pdf' | 'epub' | 'hardcopy';
+          price: string;
+          stock: number | null;
+        }>(
+          `SELECT id, format, price::text AS price, stock
+           FROM   product_formats
+           WHERE  id = $1 AND product_id = $2`,
+          [cartItem.format_id, product.id]
+        );
+
+        const formatRow = formatRes.rows[0];
+        if (!formatRow) {
+          throw new AppError(`Selected format for "${product.name}" is no longer available.`, 400);
+        }
+
+        unitPrice = parseFloat(formatRow.price);
+        variantTitle = formatRow.format.toUpperCase();
+
+        if (formatRow.format === 'hardcopy') {
+          hasPhysicalItem = true;
+          isPhysical = true;
+          deliveryMethod = customerData.deliveryType || 'delivery';
+          if (formatRow.stock !== null && formatRow.stock < cartItem.quantity) {
+            throw new AppError(
+              `Insufficient stock for "${product.name}". Only ${formatRow.stock} physical copies left.`,
+              409
+            );
+          }
+        } else {
+          deliveryMethod = 'digital';
+          isPhysical = false;
+        }
+      } else {
+        hasPhysicalItem = true;
+        isPhysical = true;
+        deliveryMethod = customerData.deliveryType || 'delivery';
+        if (product.stock < cartItem.quantity) {
+          throw new AppError(`Insufficient stock for "${product.name}". Only ${product.stock} left.`, 409);
+        }
+      }
+
+      const subtotal = Math.round(unitPrice * cartItem.quantity * 100) / 100;
+      calculatedProductsSubtotal += subtotal;
+
+      itemsToInsert.push({
+        productId: product.id,
+        formatId: cartItem.format_id || null,
+        variantId: cartItem.variant_id || null,
+        variantTitle,
+        productName: product.name,
+        unitPrice,
+        costPrice,
+        quantity: cartItem.quantity,
+        subtotal,
+        deliveryMethod,
+        isPhysical,
+      });
+    }
+
+    calculatedProductsSubtotal = Math.round(calculatedProductsSubtotal * 100) / 100;
+
+    const isDelivery = hasPhysicalItem && customerData.deliveryType !== 'pickup';
+    let deliveryFee = 0;
+    let deliveryFeeStatus: 'known' | 'needs_merchant_confirmation' = 'known';
+    let confirmationCode: string | null = null;
+
+    if (isDelivery) {
+      confirmationCode = generateDeliveryConfirmationCode();
+
+      if (
+        customerData.customerLat !== null &&
+        customerData.customerLat !== undefined &&
+        customerData.customerLng !== null &&
+        customerData.customerLng !== undefined
+      ) {
+        const merchantLoc = await ordersQueries.getMerchantLocationTransactional(client, store.org_id);
+        if (merchantLoc) {
+          const merchantLat = parseFloat(merchantLoc.lat);
+          const merchantLng = parseFloat(merchantLoc.lng);
+          const distanceKm = computeHaversineDistanceKm(
+            merchantLat,
+            merchantLng,
+            customerData.customerLat,
+            customerData.customerLng
+          );
+
+          const feeCalc = calculateDeliveryFee(distanceKm, {
+            baseFee: parseFloat(merchantLoc.base_delivery_fee),
+            feePerKm: parseFloat(merchantLoc.fee_per_km),
+            maxDeliveryRadiusKm: parseFloat(merchantLoc.max_delivery_radius_km),
+          });
+
+          deliveryFee = feeCalc.fee;
+          deliveryFeeStatus = feeCalc.status;
+        } else {
+          deliveryFee = 0;
+          deliveryFeeStatus = 'needs_merchant_confirmation';
+        }
+      } else {
+        deliveryFee = 0;
+        deliveryFeeStatus = 'needs_merchant_confirmation';
+      }
+    } else {
+      deliveryFee = 0;
+      deliveryFeeStatus = 'known';
+      confirmationCode = null;
+    }
+
+    const finalOrderTotal = Math.round((calculatedProductsSubtotal + deliveryFee) * 100) / 100;
+
+    const orderId = await ordersQueries.insertOrderTransactional(client, {
+      orgId: store.org_id,
+      storeId: store.id,
+      customerName: customerData.customerName.trim(),
+      customerPhone: cleanPhone,
+      customerEmail: customerData.customerEmail?.trim() || null,
+      deliveryLocation: customerData.deliveryLocation,
+      notes: customerData.notes?.trim() || null,
+      paymentMethod: customerData.paymentMethod,
+      paymentReference: mpesaCode?.trim().toUpperCase() || null,
+      total: finalOrderTotal,
+      status: customerData.paymentMethod === 'mpesa_cash' ? 'confirmed' : 'pending',
+      deliveryType: hasPhysicalItem ? customerData.deliveryType : 'delivery',
+      customerLat: customerData.customerLat,
+      customerLng: customerData.customerLng,
+      locationSource: customerData.locationSource,
+      locationAccuracyM: customerData.locationAccuracyM,
+      deliveryFee,
+      deliveryFeeStatus,
+      deliveryConfirmationCode: confirmationCode,
+    });
+
+    await ordersQueries.insertOrderStatusHistoryTransactional(
+      client,
+      orderId,
+      customerData.paymentMethod === 'mpesa_cash' ? 'confirmed' : 'pending',
+      'system'
+    );
+
+    for (const item of itemsToInsert) {
+      await ordersQueries.insertOrderItemTransactional(client, orderId, {
+        productId: item.productId,
+        productName: item.productName,
+        unitPrice: item.unitPrice,
+        costPrice: item.costPrice,
+        quantity: item.quantity,
+        subtotal: item.subtotal,
+        variantId: item.variantId,
+        variantTitle: item.variantTitle,
+        formatId: item.formatId,
+        deliveryMethod: item.deliveryMethod,
+      });
+
+      if (item.isPhysical) {
+        if (item.formatId) {
+          const decFormatRes = await client.query(
+            `UPDATE product_formats
+             SET stock = stock - $1, updated_at = NOW()
+             WHERE id = $2 AND format = 'hardcopy' AND (stock IS NULL OR stock >= $1)`,
+            [item.quantity, item.formatId]
+          );
+          if (decFormatRes.rowCount === 0) {
+            throw new AppError(`The hardcopy edition of "${item.productName}" was just sold out.`, 409);
+          }
+          await ordersQueries.decrementStockTransactional(client, item.productId, item.quantity);
+        } else {
+          await ordersQueries.decrementStockTransactional(client, item.productId, item.quantity);
+        }
+      }
+    }
+
+    let checkoutRequestId: string | undefined;
+
+    if (isAutomatedDaraja) {
+      const recentPending = await findRecentPendingMpesaTransaction(orderId, 60);
+
+      if (recentPending) {
+        checkoutRequestId = recentPending.checkout_request_id;
+      } else {
+        const decryptedCreds = await getDecryptedCredentials(store.org_id);
+        if (decryptedCreds) {
+          const callbackUrl = `${env.API_PUBLIC_URL.replace(/\/$/, '')}/api/v1/payments/mpesa/callback`;
+          const stkResult = await darajaService.stkPush({
+            credentials: decryptedCreds,
+            phone: cleanPhone,
+            amount: finalOrderTotal,
+            accountReference: orderId,
+            transactionDesc: `Order ${orderId.slice(0, 8)}`,
+            callbackUrl,
+          });
+
+          checkoutRequestId = stkResult.checkoutRequestId;
+
+          await createPendingMpesaTransaction(client, {
+            orgId: store.org_id,
+            checkoutRequestId: stkResult.checkoutRequestId,
+            merchantRequestId: stkResult.merchantRequestId,
+            phone: cleanPhone,
+            amount: finalOrderTotal,
+            accountReference: orderId,
+            transactionDesc: `Order ${orderId.slice(0, 8)}`,
+          });
+        }
+      }
+    }
+
+    await client.query('COMMIT');
+    return { orderId, checkoutRequestId };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+export async function getPublicOrderDetails(
+  storeSlug: string,
+  orderId: string,
+  verifyingPhone?: string
+): Promise<
+  PublicOrderConfirmation & {
+    downloads: any[];
+    isVerifiedCustomer: boolean;
+    notes: string | null;
+  }
+> {
+  const normalizedSlug = (storeSlug || '').trim().toLowerCase();
+  const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
+  if (!store) {
+    throw new AppError('Store not found', 404);
+  }
+
+  const orderRes = await pool.query<publicQueries.PublicOrderDetailsRow & { notes: string | null }>(
+    `SELECT o.id, o.customer_name, o.customer_phone, o.total::text AS total, o.status,
+            o.payment_method, o.payment_status, o.payment_reference, o.notes,
+            o.delivery_type, o.delivery_fee::text AS delivery_fee,
+            o.delivery_fee_status, o.delivery_confirmation_code,
+            o.delivery_location,
+            mt.mpesa_receipt_number, mt.checkout_request_id
+     FROM   orders o
+     LEFT JOIN mpesa_transactions mt 
+            ON mt.account_reference = o.id::text 
+           AND mt.status = 'completed'
+     WHERE  o.id = $1 AND o.org_id = $2
+     ORDER BY mt.created_at DESC
+     LIMIT 1`,
+    [orderId, store.org_id]
+  );
+
+  const order = orderRes.rows[0];
+  if (!order) {
+    throw new AppError('Order confirmation details not found', 404);
+  }
+
+  const items = await publicQueries.getPublicOrderItems(order.id);
+
+  const cleanVerifying = verifyingPhone ? normalizeCustomerPhone(verifyingPhone) : null;
+  const isVerifiedCustomer = Boolean(
+    cleanVerifying && cleanVerifying === normalizeCustomerPhone(order.customer_phone)
+  );
+
+  let downloads: any[] = [];
+
+  if (order.payment_status === 'paid' && isVerifiedCustomer) {
+    const downloadsRes = await pool.query<{
+      token: string;
+      max_downloads: number;
+      download_count: number;
+      expires_at: Date;
+      format: string;
+      book_title: string;
+    }>(
+      `SELECT dd.download_token AS token,
+              dd.max_downloads,
+              dd.download_count,
+              dd.expires_at,
+              COALESCE(dd.format, pf.format, 'pdf') AS format,
+              COALESCE(dd.book_title, p.name, 'Book') AS book_title
+       FROM digital_downloads dd
+       LEFT JOIN product_formats pf ON pf.id = dd.format_id
+       LEFT JOIN products p ON p.id = pf.product_id
+       INNER JOIN order_items oi ON oi.id = dd.order_item_id
+       WHERE oi.order_id = $1`,
+      [order.id]
+    );
+
+    downloads = downloadsRes.rows.map((d) => ({
+      bookTitle: d.book_title,
+      format: d.format,
+      token: d.token,
+      downloadUrl: `/api/v1/books/download/${d.token}?redirect=true`,
+      expiresAt: d.expires_at.toISOString(),
+      maxDownloads: d.max_downloads,
+      downloadCount: d.download_count,
+    }));
+  }
+
+  return {
+    orderId: order.id,
+    customerName: order.customer_name,
+    total: parseFloat(order.total),
+    status: order.status,
+    paymentMethod: order.payment_method,
+    paymentStatus: order.payment_status,
+    paymentReference: order.payment_reference || null,
+    mpesaReceiptNumber: order.mpesa_receipt_number,
+    checkoutRequestId: order.checkout_request_id,
+    deliveryType: order.delivery_type,
+    deliveryFee: parseFloat(order.delivery_fee || '0'),
+    deliveryFeeStatus: order.delivery_fee_status,
+    deliveryConfirmationCode: order.delivery_confirmation_code,
+    deliveryLocation: order.delivery_location,
+    notes: order.notes,
+    items: items.map((row: publicQueries.PublicOrderItemRow) => ({
+      productName: row.product_name,
+      variantTitle: row.variant_title || null,
+      unitPrice: parseFloat(row.unit_price),
+      quantity: row.quantity,
+      subtotal: parseFloat(row.subtotal),
+    })),
+    downloads,
+    isVerifiedCustomer,
+  };
+}
+
+export async function retryOrderPayment(
+  storeSlug: string,
+  orderId: string,
+  rawBody: unknown
+): Promise<{ success: boolean; checkoutRequestId?: string }> {
+  const schema = z.object({
+    paymentMethod: z.enum(['mpesa', 'mpesa_manual', 'mpesa_cash']),
+    phone: z.string().optional(),
+    mpesaCode: z.string().nullable().optional(),
+  });
+
+  const parsed = schema.safeParse(rawBody);
+  if (!parsed.success) {
+    throw new AppError(parsed.error.issues[0]?.message || 'Invalid retry payload', 400);
+  }
+
+  const store = await publicQueries.getStoreBySlugPublic(storeSlug);
+  if (!store) throw new AppError('Store not found', 404);
+
+  const orderRes = await pool.query<{ id: string; total: string; customer_phone: string }>(
+    `SELECT id, total::text AS total, customer_phone FROM orders WHERE id = $1 AND org_id = $2`,
+    [orderId, store.org_id]
+  );
+  const order = orderRes.rows[0];
+  if (!order) throw new AppError('Order not found', 404);
+
+  const cleanPhone = parsed.data.phone ? normalizeCustomerPhone(parsed.data.phone) : order.customer_phone;
+  const paymentRef = parsed.data.mpesaCode ? parsed.data.mpesaCode.trim().toUpperCase() : null;
+
+  await pool.query(
+    `UPDATE orders 
+     SET payment_method = $3,
+         payment_reference = COALESCE($4, payment_reference),
+         payment_status = 'pending',
+         updated_at = NOW()
+     WHERE id = $1 AND org_id = $2`,
+    [orderId, store.org_id, parsed.data.paymentMethod, paymentRef]
+  );
+
+  let checkoutRequestId: string | undefined;
+
+  if (parsed.data.paymentMethod === 'mpesa') {
+    const creds = await getDecryptedCredentials(store.org_id);
+    if (creds) {
+      const callbackUrl = `${env.API_PUBLIC_URL.replace(/\/$/, '')}/api/v1/payments/mpesa/callback`;
+      const stkResult = await darajaService.stkPush({
+        credentials: creds,
+        phone: cleanPhone,
+        amount: parseFloat(order.total),
+        accountReference: orderId,
+        transactionDesc: `Order ${orderId.slice(0, 8)}`,
+        callbackUrl,
+      });
+
+      checkoutRequestId = stkResult.checkoutRequestId;
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await createPendingMpesaTransaction(client, {
+          orgId: store.org_id,
+          checkoutRequestId: stkResult.checkoutRequestId,
+          merchantRequestId: stkResult.merchantRequestId,
+          phone: cleanPhone,
+          amount: parseFloat(order.total),
+          accountReference: orderId,
+          transactionDesc: `Order ${orderId.slice(0, 8)}`,
+        });
+        await client.query('COMMIT');
+      } finally {
+        client.release();
+      }
+    }
+  }
+
+  return { success: true, checkoutRequestId };
+}
 </file>
 
 </files>

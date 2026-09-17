@@ -1,10 +1,11 @@
 // =============================================================================
 // soko-api/src/modules/products/products.queries.ts
-// Product and Category catalog queries with slugification, badges, and smart deletes.
+// Product and Category catalog queries with Trigram Fuzzy Search support.
 // =============================================================================
 
 import { PoolClient } from "pg";
 import { query, pool } from "../../config/db";
+import { buildFuzzySearchQuery } from "../../utils/search";
 
 export type FormatType = 'pdf' | 'epub' | 'hardcopy';
 
@@ -139,9 +140,6 @@ export async function listCategories(orgId: string): Promise<CategoryRow[]> {
     return result.rows;
 }
 
-// In soko/src/modules/products/products.queries.ts
-// Replace findOrCreateCategoryByName (lines 144-173):
-
 export async function findOrCreateCategoryByName(
     client: PoolClient,
     orgId: string,
@@ -150,7 +148,6 @@ export async function findOrCreateCategoryByName(
     const trimmedName = (name || 'General').trim();
     const slug = slugifyCategory(trimmedName);
 
-    // 1. Check existing category (case-insensitive)
     const checkResult = await client.query<{ id: string }>(
         `SELECT id FROM categories 
          WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) 
@@ -162,7 +159,6 @@ export async function findOrCreateCategoryByName(
         return checkResult.rows[0].id;
     }
 
-    // 2. Safe insert with fallback if concurrent insert occurred
     try {
         const insertResult = await client.query<{ id: string }>(
             `INSERT INTO categories (org_id, name, slug) 
@@ -181,6 +177,7 @@ export async function findOrCreateCategoryByName(
         return fallback.rows[0]?.id || checkResult.rows[0]?.id;
     }
 }
+
 export async function createCategory(
     orgId: string,
     data: {
@@ -310,13 +307,27 @@ export async function listProducts(
         paramIndex++;
     }
 
-    // Spot-on database search across title, SKU/ISBN, description/author, and category
+    let relevanceOrderClause = `(CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, p.created_at DESC`;
+
     if (searchQuery && searchQuery.trim().length > 0) {
-        conditions.push(
-            `(p.name ILIKE $${paramIndex} OR p.sku ILIKE $${paramIndex} OR p.description ILIKE $${paramIndex} OR c.name ILIKE $${paramIndex})`
-        );
-        params.push(`%${searchQuery.trim()}%`);
-        paramIndex++;
+        const fuzzy = buildFuzzySearchQuery({
+            searchTerm: searchQuery,
+            startParamIndex: paramIndex,
+            similarityThreshold: 0.28,
+            fields: [
+                { column: 'p.name', weight: 1.8 },
+                { column: 'p.sku', weight: 1.3 },
+                { column: 'p.description', weight: 0.8 },
+                { column: 'c.name', weight: 0.7 },
+            ],
+        });
+
+        if (fuzzy) {
+            conditions.push(fuzzy.conditionSql);
+            params.push(...fuzzy.params);
+            paramIndex = fuzzy.nextParamIndex;
+            relevanceOrderClause = `(CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, ${fuzzy.relevanceSql} DESC, p.created_at DESC`;
+        }
     }
 
     const whereClause = conditions.join(" AND ");
@@ -340,7 +351,7 @@ export async function listProducts(
          FROM products p
          LEFT JOIN categories c ON c.id = p.category_id
          WHERE ${whereClause}
-         ORDER BY (CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, p.created_at DESC
+         ORDER BY ${relevanceOrderClause}
          LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
         dataParams
     );
@@ -779,7 +790,6 @@ export async function insertProductImageTransactional(
         [productId, imageUrl, imagePublicId, sortOrder]
     );
 }
-
 export async function insertProductVariantTransactional(
     client: PoolClient,
     orgId: string,

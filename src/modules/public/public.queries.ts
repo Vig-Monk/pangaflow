@@ -1,9 +1,10 @@
 // =============================================================================
 // soko-api/src/modules/public/public.queries.ts
-// Strict Tenant-Isolated Public Storefront Queries with Search & Pagination
+// Strict Tenant-Isolated Public Storefront Queries with DB-Native Fuzzy Search
 // =============================================================================
 
 import { query } from '../../config/db';
+import { buildFuzzySearchQuery } from '../../utils/search';
 
 export interface PublicStoreRow {
   id: string;
@@ -163,7 +164,7 @@ export async function getProductsByStoreOrgIdPublic(
   const params: unknown[] = [orgId];
   let paramIndex = 2;
 
-  // Category filter
+  // 1. Category Filter
   if (
     options.category &&
     !['general', 'all', 'all books'].includes(options.category.toLowerCase().trim())
@@ -184,22 +185,33 @@ export async function getProductsByStoreOrgIdPublic(
     }
   }
 
-  // Spot-on Search across title, description/author, SKU/ISBN, category name
+  // 2. Database-Level Native Trigram Fuzzy Matcher
+  let relevanceOrderClause = 'p.created_at DESC';
+
   if (options.searchQuery && options.searchQuery.trim().length > 0) {
-    const searchPattern = `%${options.searchQuery.trim()}%`;
-    conditions.push(`(
-      p.name ILIKE $${paramIndex} OR
-      p.description ILIKE $${paramIndex} OR
-      p.sku ILIKE $${paramIndex} OR
-      c.name ILIKE $${paramIndex}
-    )`);
-    params.push(searchPattern);
-    paramIndex++;
+    const fuzzy = buildFuzzySearchQuery({
+      searchTerm: options.searchQuery,
+      startParamIndex: paramIndex,
+      similarityThreshold: 0.28,
+      fields: [
+        { column: 'p.name', weight: 1.8 },
+        { column: 'p.sku', weight: 1.3, exactOnly: false },
+        { column: 'p.description', weight: 0.8 },
+        { column: 'c.name', weight: 0.7 },
+      ],
+    });
+
+    if (fuzzy) {
+      conditions.push(fuzzy.conditionSql);
+      params.push(...fuzzy.params);
+      paramIndex = fuzzy.nextParamIndex;
+      relevanceOrderClause = `${fuzzy.relevanceSql} DESC, p.created_at DESC`;
+    }
   }
 
   const whereClause = conditions.join(' AND ');
 
-  // Count total matching items across the entire database
+  // Count total matching items across the whole catalog
   const countResult = await query<{ count: string }>(
     `SELECT COUNT(p.id) AS count
      FROM   products p
@@ -283,7 +295,7 @@ export async function getProductsByStoreOrgIdPublic(
      LEFT JOIN categories c ON c.id = p.category_id
      LEFT JOIN inventory i  ON i.product_id = p.id
      WHERE  ${whereClause}
-     ORDER  BY p.created_at DESC
+     ORDER  BY ${relevanceOrderClause}
      LIMIT  $${paramIndex} OFFSET $${paramIndex + 1}`,
     dataParams
   );
