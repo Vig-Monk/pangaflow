@@ -1,11 +1,20 @@
 // =============================================================================
 // soko-api/src/modules/public/public.controller.ts
-// Public HTTP controller handling catalog, orders, and payment recovery.
+// Public HTTP Controller: Catalog Ingestion with First-Added-First Default Sort
 // =============================================================================
 
 import { Request, Response, NextFunction } from 'express';
 import { success } from '../../utils/response';
 import * as publicService from './public.service';
+import type { ProductSortOption } from './public.queries';
+
+const VALID_SORT_OPTIONS: ProductSortOption[] = [
+  'first_added',
+  'newest',
+  'price_asc',
+  'price_desc',
+  'title_asc',
+];
 
 export async function searchDeliveryLocationsHandler(
   req: Request,
@@ -46,11 +55,21 @@ export async function listStoreProductsHandler(
       ? req.query.category.trim()
       : (typeof req.query.category_id === 'string' ? req.query.category_id.trim() : undefined);
 
+    // Default to 'first_added' (FIFO) so foundational titles and verified covers show first
+    let sort: ProductSortOption = 'first_added';
+    if (typeof req.query.sort === 'string') {
+      const candidate = req.query.sort.trim().toLowerCase() as ProductSortOption;
+      if (VALID_SORT_OPTIONS.includes(candidate)) {
+        sort = candidate;
+      }
+    }
+
     const result = await publicService.listStoreProducts(req.params.storeSlug, {
       page,
       limit,
       searchQuery,
       category,
+      sort,
     });
 
     success(res, result, {

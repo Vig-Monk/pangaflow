@@ -32,7 +32,7 @@ The content is organized as follows:
 <notes>
 - Some files may have been excluded based on .gitignore rules and Repomix's configuration
 - Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
-- Files matching these patterns are excluded: soko-frontend, node_modules
+- Files matching these patterns are excluded: node_modules, soko-frontend
 - Files matching patterns in .gitignore are excluded
 - Files matching default ignore patterns are excluded
 - Files are sorted by Git change count (files with more changes are at the bottom)
@@ -88,6 +88,7 @@ src/
     030_seed_ebookreads.sql
     031_org_smtp.sql
     032_fuzzy_search_trgm.sql
+    033_shared_catalog.sql
     run.ts
   modules/
     admin/
@@ -1787,6 +1788,65 @@ CREATE INDEX IF NOT EXISTS idx_products_description_trgm
   WHERE deleted_at IS NULL AND description IS NOT NULL;
 </file>
 
+<file path="src/migrations/033_shared_catalog.sql">
+-- =============================================================================
+-- Migration: 033_shared_catalog.sql
+-- Soko Platform — Master Catalog Distribution & Channel Tenancy Decoupling
+-- =============================================================================
+-- Enables multiple storefront channels (e.g., Sunrise Bookstore and EbookReads)
+-- to share a single master catalog (titles, descriptions, R2 keys, covers)
+-- while maintaining 100% sovereign multi-tenant isolation for:
+--  - Orders & Order Items
+--  - Customers & Debt Ledgers
+--  - M-Pesa Credentials & Callbacks
+--  - SMTP Mailers & Sender Identities
+--  - Promotional Banners & Tickers
+-- =============================================================================
+
+-- ---------------------------------------------------------------------------
+-- 1. Add Catalog Source Pointer to Organizations
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE organizations
+  ADD COLUMN IF NOT EXISTS catalog_source_org_id UUID REFERENCES organizations(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_organizations_catalog_source
+  ON organizations(catalog_source_org_id)
+  WHERE catalog_source_org_id IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- 2. Link EbookReads to Master Catalog (Flemela / Sunrise Flagship)
+-- ---------------------------------------------------------------------------
+
+DO $$
+DECLARE
+  master_catalog_id UUID := 'a0000000-0000-0000-0000-000000000001';
+  ebookreads_id     UUID := 'a0000000-0000-0000-0000-000000000002';
+BEGIN
+  -- Verify master catalog organization exists before binding
+  IF EXISTS (SELECT 1 FROM organizations WHERE id = master_catalog_id) THEN
+    UPDATE organizations
+    SET catalog_source_org_id = master_catalog_id,
+        settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{digital_only}', 'true'::jsonb, true),
+        updated_at = NOW()
+    WHERE id = ebookreads_id;
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- 3. Composite Indexing for Accelerated Shared Catalog Queries
+-- ---------------------------------------------------------------------------
+
+-- Fast shared catalog lookups across published products
+CREATE INDEX IF NOT EXISTS idx_products_shared_catalog
+  ON products(org_id, status)
+  WHERE deleted_at IS NULL AND status = 'published';
+
+-- Composite index for category lookups across catalog bounds
+CREATE INDEX IF NOT EXISTS idx_categories_shared_lookup
+  ON categories(org_id, LOWER(TRIM(name)));
+</file>
+
 <file path="src/migrations/run.ts">
 /**
  * src/migrations/run.ts
@@ -3365,302 +3425,6 @@ export async function verifyCredentials(
     testTransporter.close();
   }
 }
-</file>
-
-<file path="src/scripts/heal-system.ts">
-// =============================================================================
-// soko-api/src/scripts/heal-system.ts
-// Single-Run Master System Repair: Foreign Key Cascades & Multi-Tenant Isolation
-// Run via: npx tsx src/scripts/heal-system.ts
-// =============================================================================
-
-import bcrypt from 'bcryptjs';
-import dotenv from 'dotenv';
-import { pool } from '../config/db';
-
-dotenv.config();
-
-const ADMIN_EMAIL = (process.env.FLEMELA_ADMIN_EMAIL || 'admin@flemela.co.ke').trim().toLowerCase();
-const ADMIN_PASSWORD = process.env.FLEMELA_ADMIN_PASSWORD || 'AdminPassword123!';
-const STORE_SLUG = (process.env.NUXT_PUBLIC_STORE_SLUG || 'flemela').trim().toLowerCase();
-
-async function healSystem(): Promise<void> {
-  console.log('================================================================');
-  console.log('       KAUNTAOS & FLEMELA: MASTER SYSTEM REPAIR & MIGRATION     ');
-  console.log('================================================================\n');
-
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN');
-
-    // -------------------------------------------------------------------------
-    // 1. Enforce Safe Foreign Key Constraints (CASCADE + SET NULL)
-    // -------------------------------------------------------------------------
-    console.log('1. Fortifying database foreign key constraints...');
-
-    // A. Product Images
-    await client.query(`
-      ALTER TABLE product_images DROP CONSTRAINT IF EXISTS product_images_product_id_fkey;
-      ALTER TABLE product_images ADD CONSTRAINT product_images_product_id_fkey 
-        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE;
-    `);
-
-    // B. Inventory
-    await client.query(`
-      ALTER TABLE inventory DROP CONSTRAINT IF EXISTS inventory_product_id_fkey;
-      ALTER TABLE inventory ADD CONSTRAINT inventory_product_id_fkey 
-        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE;
-    `);
-
-    // C. Product Formats
-    await client.query(`
-      ALTER TABLE product_formats DROP CONSTRAINT IF EXISTS product_formats_product_id_fkey;
-      ALTER TABLE product_formats ADD CONSTRAINT product_formats_product_id_fkey 
-        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE;
-    `);
-
-    // D. Product Variants
-    await client.query(`
-      ALTER TABLE product_variants DROP CONSTRAINT IF EXISTS product_variants_product_id_fkey;
-      ALTER TABLE product_variants ADD CONSTRAINT product_variants_product_id_fkey 
-        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE;
-    `);
-
-    // E. Order Items (Allow NULL product_id and set NULL on delete to preserve past sales)
-    await client.query(`
-      ALTER TABLE order_items ALTER COLUMN product_id DROP NOT NULL;
-      ALTER TABLE order_items DROP CONSTRAINT IF EXISTS order_items_product_id_fkey;
-      ALTER TABLE order_items ADD CONSTRAINT order_items_product_id_fkey 
-        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL;
-
-      ALTER TABLE order_items DROP CONSTRAINT IF EXISTS order_items_format_id_fkey;
-      ALTER TABLE order_items ADD CONSTRAINT order_items_format_id_fkey 
-        FOREIGN KEY (format_id) REFERENCES product_formats(id) ON DELETE SET NULL;
-
-      ALTER TABLE order_items DROP CONSTRAINT IF EXISTS order_items_variant_id_fkey;
-      ALTER TABLE order_items ADD CONSTRAINT order_items_variant_id_fkey 
-        FOREIGN KEY (variant_id) REFERENCES product_variants(id) ON DELETE SET NULL;
-    `);
-    console.log('   ✓ ON DELETE CASCADE and ON DELETE SET NULL constraints active.\n');
-
-    // -------------------------------------------------------------------------
-    // 2. Ensure Flagship Organization & Storefront
-    // -------------------------------------------------------------------------
-    console.log('2. Syncing Flagship Organization & Storefront...');
-    const orgRes = await client.query<{ id: string }>(
-      `INSERT INTO organizations (name, slug, business_type, plan, plan_expires_at)
-       VALUES ('Flemela Bookstore', $1, 'books', 'lifetime', NULL)
-       ON CONFLICT (slug) DO UPDATE SET
-         business_type = 'books',
-         plan = 'lifetime',
-         deleted_at = NULL,
-         updated_at = NOW()
-       RETURNING id`,
-      [STORE_SLUG]
-    );
-    const flagshipOrgId = orgRes.rows[0].id;
-    console.log(`   ✓ Organization confirmed: [ID: ${flagshipOrgId}, Slug: "${STORE_SLUG}"]`);
-
-    // Storefront record
-    await client.query(
-      `INSERT INTO stores (
-         org_id, slug, name, description, location, delivery_info,
-         status, hero_layout, hero_headline, hero_subheadline, hero_cta_label
-       )
-       VALUES (
-         $1, $2, 'Flemela Bookstore',
-         'Books that inspire. Knowledge that transforms.',
-         'Sarit Centre, Westlands, Nairobi',
-         'Free delivery across Nairobi on orders above KSh 2,500',
-         'published', 'editorial',
-         'Books that change the way you think.',
-         'Discover handpicked literature, timeless philosophy, and rigorous business knowledge.',
-         'Explore Catalog'
-       )
-       ON CONFLICT (org_id) DO UPDATE SET
-         slug = $2,
-         status = 'published',
-         updated_at = NOW()`,
-      [flagshipOrgId, STORE_SLUG]
-    );
-    console.log(`   ✓ Storefront active and published.\n`);
-
-    // -------------------------------------------------------------------------
-    // 3. Ensure Admin User with Validated bcryptjs Hash
-    // -------------------------------------------------------------------------
-    console.log('3. Provisioning Admin User & Owner Membership...');
-    const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, 12);
-
-    const userRes = await client.query<{ id: string }>(
-      `INSERT INTO users (email, password_hash, name)
-       VALUES ($1, $2, 'Flemela Store Administrator')
-       ON CONFLICT (email) DO UPDATE SET
-         password_hash = EXCLUDED.password_hash,
-         deleted_at = NULL,
-         updated_at = NOW()
-       RETURNING id`,
-      [ADMIN_EMAIL, passwordHash]
-    );
-    const userId = userRes.rows[0].id;
-
-    // Membership link
-    await client.query(
-      `INSERT INTO org_members (org_id, user_id, role)
-       VALUES ($1, $2, 'owner')
-       ON CONFLICT (org_id, user_id) DO UPDATE SET
-         role = 'owner'`,
-      [flagshipOrgId, userId]
-    );
-    console.log(`   ✓ User "${ADMIN_EMAIL}" linked as owner of Flemela.\n`);
-
-    // -------------------------------------------------------------------------
-    // 4. Multi-Tenant Category & Product Isolation
-    // -------------------------------------------------------------------------
-    console.log('4. Restoring Multi-Tenant Boundaries & Categories...');
-
-    // Seed Canonical Bookstore Categories for Flemela
-    const canonicalCategories = [
-      'Business & Finance',
-      'Psychology & Self-Help',
-      'Self-Help',
-      'Fiction & Literature',
-      'Christian Books',
-      'Education & Textbooks',
-      'Biographies & Memoir',
-      'General',
-    ];
-
-    for (const catName of canonicalCategories) {
-      await client.query(
-        `INSERT INTO categories (org_id, name)
-         VALUES ($1, $2)
-         ON CONFLICT (org_id, name) DO NOTHING`,
-        [flagshipOrgId, catName]
-      );
-    }
-
-    const bookCategoryRows = await client.query<{ id: string; name: string }>(
-      `SELECT id, name FROM categories WHERE org_id = $1`,
-      [flagshipOrgId]
-    );
-    const categoryMap = new Map<string, string>();
-    bookCategoryRows.rows.forEach((r) => categoryMap.set(r.name.toLowerCase(), r.id));
-    const generalCatId = categoryMap.get('general') || bookCategoryRows.rows[0]?.id;
-
-    if (!generalCatId) {
-      throw new Error('Failed to resolve default category for Flemela bookstore.');
-    }
-
-    // Re-link book products to Flemela and clean category pointers
-    const bookProducts = await client.query<{ id: string; name: string; category_id: string; slug: string }>(
-      `SELECT DISTINCT p.id, p.name, p.category_id, p.slug
-       FROM products p
-       LEFT JOIN product_formats pf ON pf.product_id = p.id
-       WHERE pf.id IS NOT NULL OR p.org_id = $1`,
-      [flagshipOrgId]
-    );
-
-    console.log(`   ✓ Found ${bookProducts.rows.length} bookstore title(s).`);
-
-    for (const prod of bookProducts.rows) {
-      // Avoid slug collisions on flagship org
-      const existingSlug = await client.query(
-        `SELECT id FROM products WHERE org_id = $1 AND LOWER(slug) = LOWER($2) AND id != $3`,
-        [flagshipOrgId, prod.slug, prod.id]
-      );
-
-      const finalSlug = existingSlug.rows.length > 0
-        ? `${prod.slug}-${prod.id.slice(0, 4)}`
-        : prod.slug;
-
-      await client.query(
-        `UPDATE products 
-         SET org_id = $1, 
-             slug = $2,
-             category_id = COALESCE((
-               SELECT id FROM categories WHERE org_id = $1 AND id = $3
-             ), $4)
-         WHERE id = $5`,
-        [flagshipOrgId, finalSlug, prod.category_id, generalCatId, prod.id]
-      );
-    }
-
-    // Identify non-bookstore organizations in system
-    const otherOrgs = await client.query<{ id: string; name: string; slug: string; business_type: string }>(
-      `SELECT id, name, slug, business_type FROM organizations WHERE id != $1 AND deleted_at IS NULL`,
-      [flagshipOrgId]
-    );
-
-    if (otherOrgs.rows.length > 0) {
-      console.log(`\n   ✓ Multi-Tenancy Preserved: ${otherOrgs.rows.length} other organization(s) protected:`);
-      for (const o of otherOrgs.rows) {
-        const countRes = await client.query<{ count: string }>(
-          `SELECT COUNT(*) AS count FROM products WHERE org_id = $1 AND deleted_at IS NULL`,
-          [o.id]
-        );
-        console.log(`     - [${o.slug}] "${o.name}" (Type: ${o.business_type}) ➔ ${countRes.rows[0].count} product(s)`);
-      }
-    }
-    console.log('');
-
-    // -------------------------------------------------------------------------
-    // 5. Verification Probe: Test Deletion & Cascade (With Valid category_id)
-    // -------------------------------------------------------------------------
-    console.log('5. Executing live cascade deletion probe test...');
-    const probeRes = await client.query<{ id: string }>(
-      `INSERT INTO products (org_id, category_id, name, slug, price, status)
-       VALUES ($1, $2, 'DELETE_PROBE_TEST', 'delete-probe-test', 999, 'draft')
-       RETURNING id`,
-      [flagshipOrgId, generalCatId]
-    );
-    const probeId = probeRes.rows[0].id;
-
-    await client.query(`INSERT INTO inventory (product_id, stock) VALUES ($1, 5)`, [probeId]);
-    await client.query(`INSERT INTO product_images (product_id, image_url, image_public_id, sort_order) VALUES ($1, 'https://test.jpg', 'test', 0)`, [probeId]);
-    await client.query(`INSERT INTO product_formats (product_id, format, price, stock) VALUES ($1, 'hardcopy', 999, 5)`, [probeId]);
-
-    // Test cascade delete
-    const deleteTest = await client.query(
-      `DELETE FROM products WHERE org_id = $1 AND id = $2`,
-      [flagshipOrgId, probeId]
-    );
-
-    if (deleteTest.rowCount !== 1) {
-      throw new Error('Deletion probe failed.');
-    }
-    console.log('   ✓ Single and Bulk Deletion engine verified: 100% operational.\n');
-
-    await client.query('COMMIT');
-
-    // -------------------------------------------------------------------------
-    // 6. Summary Report
-    // -------------------------------------------------------------------------
-    const finalBookCount = await pool.query<{ count: string }>(
-      `SELECT COUNT(*) AS count FROM products WHERE org_id = $1 AND deleted_at IS NULL`,
-      [flagshipOrgId]
-    );
-
-    console.log('================================================================');
-    console.log('                      SYSTEM HEAL COMPLETE                      ');
-    console.log('================================================================');
-    console.log(`  ✓ Flagship Org:         Flemela Bookstore [Slug: "${STORE_SLUG}"]`);
-    console.log(`  ✓ Admin Login:          ${ADMIN_EMAIL}`);
-    console.log(`  ✓ Admin Password:       ${ADMIN_PASSWORD}`);
-    console.log(`  ✓ Total Visible Books:  ${finalBookCount.rows[0].count}`);
-    console.log(`  ✓ Foreign Keys:         ON DELETE CASCADE (Active)`);
-    console.log('================================================================\n');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('\n❌ Repair failed with error:', err);
-    process.exit(1);
-  } finally {
-    client.release();
-    await pool.end();
-  }
-}
-
-healSystem();
 </file>
 
 <file path="src/scripts/restore-tenant-boundaries.ts">
@@ -7311,6 +7075,233 @@ router.get('/full', fullDashboardHandler);
 export default router;
 </file>
 
+<file path="src/scripts/heal-system.ts">
+// =============================================================================
+// soko-api/src/scripts/heal-system.ts
+// Master System Repair: Shared Catalog Fortification & Multi-Tenant Preservation
+// Run via: npx tsx src/scripts/heal-system.ts
+// =============================================================================
+
+import bcrypt from 'bcryptjs';
+import dotenv from 'dotenv';
+import { pool } from '../config/db';
+
+dotenv.config();
+
+const FLEMELA_ORG_ID = 'a0000000-0000-0000-0000-000000000001';
+const EBOOKREADS_ORG_ID = 'a0000000-0000-0000-0000-000000000002';
+
+const FLEMELA_ADMIN_EMAIL = (process.env.FLEMELA_ADMIN_EMAIL || 'admin@flemela.co.ke').trim().toLowerCase();
+const FLEMELA_ADMIN_PASSWORD = process.env.FLEMELA_ADMIN_PASSWORD || 'AdminPassword123!';
+
+async function healSystem(): Promise<void> {
+  console.log('================================================================');
+  console.log('       KAUNTAOS: SHARED CATALOG & MULTI-TENANT REPAIR           ');
+  console.log('================================================================\n');
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // -------------------------------------------------------------------------
+    // 1. Enforce Safe Foreign Key Constraints (CASCADE + SET NULL)
+    // -------------------------------------------------------------------------
+    console.log('1. Fortifying database constraints and historical order preservation...');
+
+    await client.query(`
+      ALTER TABLE product_images DROP CONSTRAINT IF EXISTS product_images_product_id_fkey;
+      ALTER TABLE product_images ADD CONSTRAINT product_images_product_id_fkey 
+        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE;
+
+      ALTER TABLE inventory DROP CONSTRAINT IF EXISTS inventory_product_id_fkey;
+      ALTER TABLE inventory ADD CONSTRAINT inventory_product_id_fkey 
+        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE;
+
+      ALTER TABLE product_formats DROP CONSTRAINT IF EXISTS product_formats_product_id_fkey;
+      ALTER TABLE product_formats ADD CONSTRAINT product_formats_product_id_fkey 
+        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE;
+
+      ALTER TABLE product_variants DROP CONSTRAINT IF EXISTS product_variants_product_id_fkey;
+      ALTER TABLE product_variants ADD CONSTRAINT product_variants_product_id_fkey 
+        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE;
+
+      ALTER TABLE order_items ALTER COLUMN product_id DROP NOT NULL;
+      ALTER TABLE order_items DROP CONSTRAINT IF EXISTS order_items_product_id_fkey;
+      ALTER TABLE order_items ADD CONSTRAINT order_items_product_id_fkey 
+        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL;
+
+      ALTER TABLE order_items DROP CONSTRAINT IF EXISTS order_items_format_id_fkey;
+      ALTER TABLE order_items ADD CONSTRAINT order_items_format_id_fkey 
+        FOREIGN KEY (format_id) REFERENCES product_formats(id) ON DELETE SET NULL;
+
+      ALTER TABLE order_items DROP CONSTRAINT IF EXISTS order_items_variant_id_fkey;
+      ALTER TABLE order_items ADD CONSTRAINT order_items_variant_id_fkey 
+        FOREIGN KEY (variant_id) REFERENCES product_variants(id) ON DELETE SET NULL;
+    `);
+    console.log('   ✓ Constraints verified: ON DELETE CASCADE and historical SET NULL active.\n');
+
+    // -------------------------------------------------------------------------
+    // 2. Fortify Master Catalog Organization (Sunrise / Flemela Flagship)
+    // -------------------------------------------------------------------------
+    console.log('2. Syncing Master Catalog Host (The Sunrise Bookstore / Flemela)...');
+    await client.query(
+      `INSERT INTO organizations (id, name, slug, business_type, plan, plan_expires_at)
+       VALUES ($1, 'The Sunrise Bookstore', 'flemela', 'books', 'lifetime', NULL)
+       ON CONFLICT (id) DO UPDATE SET
+         name = 'The Sunrise Bookstore',
+         slug = 'flemela',
+         business_type = 'books',
+         plan = 'lifetime',
+         deleted_at = NULL,
+         updated_at = NOW()`,
+      [FLEMELA_ORG_ID]
+    );
+
+    await client.query(
+      `INSERT INTO stores (
+         org_id, slug, name, description, location, delivery_info,
+         status, hero_layout, hero_headline, hero_subheadline, hero_cta_label
+       )
+       VALUES (
+         $1, 'flemela', 'The Sunrise Bookstore',
+         'Books that inspire. Knowledge that transforms.',
+         'Diamond Mall / Diamond Plaza, 4th Parklands Ave, Nairobi',
+         'Free delivery across Nairobi on orders above KSh 2,500',
+         'published', 'editorial',
+         'Books that change the way you think.',
+         'Discover handpicked literature, timeless philosophy, and rigorous business knowledge.',
+         'Explore Catalog'
+       )
+       ON CONFLICT (org_id) DO UPDATE SET
+         slug = 'flemela',
+         name = 'The Sunrise Bookstore',
+         status = 'published',
+         updated_at = NOW()`,
+      [FLEMELA_ORG_ID]
+    );
+    console.log('   ✓ Master Catalog Organization & Storefront active.\n');
+
+    // -------------------------------------------------------------------------
+    // 3. Fortify Shared Catalog Subscriber (EbookReads)
+    // -------------------------------------------------------------------------
+    console.log('3. Syncing Shared Catalog Subscriber (EbookReads)...');
+    await client.query(
+      `INSERT INTO organizations (
+         id, name, slug, business_type, plan, plan_expires_at,
+         catalog_source_org_id, settings
+       )
+       VALUES (
+         $1, 'EbookReads', 'ebookreads', 'books', 'lifetime', NULL,
+         $2, '{"currency": "KES", "primary_color": "#E50914", "dark_color": "#111315", "digital_only": true}'::jsonb
+       )
+       ON CONFLICT (id) DO UPDATE SET
+         name                  = 'EbookReads',
+         slug                  = 'ebookreads',
+         business_type         = 'books',
+         plan                  = 'lifetime',
+         catalog_source_org_id = $2,
+         settings              = '{"currency": "KES", "primary_color": "#E50914", "dark_color": "#111315", "digital_only": true}'::jsonb,
+         deleted_at            = NULL,
+         updated_at            = NOW()`,
+      [EBOOKREADS_ORG_ID, FLEMELA_ORG_ID]
+    );
+
+    await client.query(
+      `INSERT INTO stores (
+         org_id, slug, name, description, location, delivery_info,
+         status, hero_layout, hero_headline, hero_subheadline, hero_cta_label
+       )
+       VALUES (
+         $1, 'ebookreads', 'EbookReads',
+         'Discover Your Next Great Book. Instant digital downloads and curated reading collections.',
+         'Diamond Mall / Diamond Plaza, 4th Parklands Ave, Nairobi',
+         'Instant PDF digital download links delivered directly to your device upon M-Pesa payment.',
+         'published', 'editorial',
+         'Discover Your Next Great Book',
+         'Thousands of ebooks. Endless possibilities. Read, learn, and grow — all in one place.',
+         'Browse Ebooks'
+       )
+       ON CONFLICT (org_id) DO UPDATE SET
+         slug             = 'ebookreads',
+         name             = 'EbookReads',
+         status           = 'published',
+         updated_at       = NOW()`,
+      [EBOOKREADS_ORG_ID]
+    );
+    console.log('   ✓ EbookReads bound to Master Catalog with digital-only constraints active.\n');
+
+    // -------------------------------------------------------------------------
+    // 4. Provision Master Admin User
+    // -------------------------------------------------------------------------
+    console.log('4. Provisioning Admin Authentication...');
+    const passwordHash = await bcrypt.hash(FLEMELA_ADMIN_PASSWORD, 12);
+
+    const userRes = await client.query<{ id: string }>(
+      `INSERT INTO users (email, password_hash, name)
+       VALUES ($1, $2, 'Store Administrator')
+       ON CONFLICT (email) DO UPDATE SET
+         password_hash = EXCLUDED.password_hash,
+         deleted_at = NULL,
+         updated_at = NOW()
+       RETURNING id`,
+      [FLEMELA_ADMIN_EMAIL, passwordHash]
+    );
+    const userId = userRes.rows[0].id;
+
+    await client.query(
+      `INSERT INTO org_members (org_id, user_id, role)
+       VALUES ($1, $2, 'owner')
+       ON CONFLICT (org_id, user_id) DO UPDATE SET
+         role = 'owner'`,
+      [FLEMELA_ORG_ID, userId]
+    );
+    console.log(`   ✓ Admin "${FLEMELA_ADMIN_EMAIL}" linked as owner.\n`);
+
+    // -------------------------------------------------------------------------
+    // 5. Verification & Telemetry Inspection
+    // -------------------------------------------------------------------------
+    console.log('5. Auditing Catalog & Tenant Isolation Boundaries...');
+
+    const sharedBooksRes = await client.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM products WHERE org_id = $1 AND deleted_at IS NULL`,
+      [FLEMELA_ORG_ID]
+    );
+
+    const otherOrgsRes = await client.query<{ id: string; name: string; slug: string; catalog_source: string | null }>(
+      `SELECT id, name, slug, catalog_source_org_id::text AS catalog_source 
+       FROM organizations 
+       WHERE id != $1 AND deleted_at IS NULL`,
+      [FLEMELA_ORG_ID]
+    );
+
+    await client.query('COMMIT');
+
+    console.log('================================================================');
+    console.log('               HEAL & ARCHITECTURAL SYNC COMPLETE               ');
+    console.log('================================================================');
+    console.log(`  ✓ Master Catalog Org:   The Sunrise Bookstore [ID: ${FLEMELA_ORG_ID}]`);
+    console.log(`  ✓ Master Book Count:    ${sharedBooksRes.rows[0].count} titles`);
+    console.log(`  ✓ Shared Subscriber:    EbookReads [Points to: ${FLEMELA_ORG_ID}]`);
+    console.log(`  ✓ Sovereign Tenants:    ${otherOrgsRes.rows.length} total organization(s) protected:`);
+    for (const o of otherOrgsRes.rows) {
+      const isLinked = o.catalog_source === FLEMELA_ORG_ID;
+      console.log(`     - [${o.slug}] "${o.name}" ➔ ${isLinked ? 'Subscribed to Master Catalog' : '100% Isolated Private Catalog'}`);
+    }
+    console.log('================================================================\n');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('\n❌ Repair failed with error:', err);
+    process.exit(1);
+  } finally {
+    client.release();
+    await pool.end();
+  }
+}
+
+healSystem();
+</file>
+
 <file path="src/scripts/seed-admin.ts">
 // =============================================================================
 // soko-api/src/scripts/seed-admin.ts
@@ -8102,102 +8093,6 @@ router.post('/google-sheet', startGoogleSheetImportHandler);
 router.get('/:id', getImportStatusHandler);
 
 export default router;
-</file>
-
-<file path="src/verticals/books/books.controller.ts">
-// =============================================================================
-// src/verticals/books/books.controller.ts
-// Administrative controller for Cloudflare R2 uploads and bookstore telemetry.
-// =============================================================================
-
-import { Request, Response, NextFunction } from 'express';
-import { z } from 'zod';
-import { success } from '../../utils/response';
-import { AppError } from '../../utils/error';
-import { query } from '../../config/db';
-import { generatePresignedUploadUrl } from '../../services/r2.service';
-
-function requireOrgId(req: Request): string {
-  if (!req.orgId) {
-    throw new AppError('Unauthorized access', 401, true, { code: 'UNAUTHORIZED' });
-  }
-  return req.orgId;
-}
-
-const PresignedUploadSchema = z.object({
-  filename: z
-    .string()
-    .min(1, 'Filename is required')
-    .max(255, 'Filename cannot exceed 255 characters'),
-  format: z.enum(['pdf', 'epub']).default('pdf'),
-  contentType: z.string().optional(),
-});
-
-export async function getPresignedR2UploadUrlHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-    const parsed = PresignedUploadSchema.safeParse(req.body);
-
-    if (!parsed.success) {
-      throw new AppError(
-        parsed.error.issues[0]?.message ?? 'Invalid upload payload specification',
-        400,
-        true,
-        { code: 'VALIDATION_FAILED', details: parsed.error.format() }
-      );
-    }
-
-    const mime =
-      parsed.data.contentType ||
-      (parsed.data.format === 'pdf' ? 'application/pdf' : 'application/epub+zip');
-
-    const result = await generatePresignedUploadUrl(orgId, parsed.data.filename, mime);
-
-    success(res, result, undefined, 200);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function getBookstoreStorageStatsHandler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const orgId = requireOrgId(req);
-
-    const result = await query<{
-      total_bytes: string;
-      digital_books_count: string;
-    }>(
-      `SELECT
-         COALESCE(SUM(pf.file_size_bytes), 0)::text AS total_bytes,
-         COUNT(DISTINCT pf.product_id)::text AS digital_books_count
-       FROM product_formats pf
-       INNER JOIN products p ON p.id = pf.product_id
-       WHERE p.org_id = $1 AND p.deleted_at IS NULL AND pf.file_url IS NOT NULL`,
-      [orgId]
-    );
-
-    const row = result.rows[0];
-    const totalBytes = parseInt(row?.total_bytes || '0', 10);
-    const totalMb = Math.round((totalBytes / (1024 * 1024)) * 10) / 10;
-    const digitalBooksCount = parseInt(row?.digital_books_count || '0', 10);
-
-    success(res, {
-      totalBytes,
-      totalMb,
-      digitalBooksCount,
-    });
-  } catch (err) {
-    next(err);
-  }
-}
 </file>
 
 <file path="src/server.ts">
@@ -10147,273 +10042,6 @@ router.patch('/:id/status', updateOrderStatusHandler);
 router.patch('/:id/payment-status', updateOrderPaymentStatusHandler);
 
 export default router;
-</file>
-
-<file path="src/modules/product-formats/product-formats.service.ts">
-// =============================================================================
-// soko-api/src/modules/product-formats/product-formats.service.ts
-// Format management with retroactive download fulfillment triggers.
-// =============================================================================
-
-import { z } from 'zod';
-import { AppError } from '../../utils/error';
-import * as formatQueries from './product-formats.queries';
-import type { FormatType, ProductFormatRow } from './product-formats.queries';
-import { reconcilePendingDownloadsForFormat } from '../../verticals/books/delivery.service';
-
-const UUID_SCHEMA = z.string().uuid('Must be a valid UUID');
-
-export const CreateProductFormatSchema = z
-  .object({
-    format: z.enum(['pdf', 'epub', 'hardcopy']),
-    price: z.number().nonnegative('Price must be greater than or equal to zero'),
-    file_url: z
-      .string()
-      .max(1000)
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    file_public_id: z
-      .string()
-      .max(500)
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    file_size_bytes: z.number().int().nonnegative().nullable().optional(),
-    stock: z.number().int().nonnegative().nullable().optional(),
-  })
-  .superRefine((data, ctx) => {
-    if (data.format === 'pdf' || data.format === 'epub') {
-      if (data.stock !== undefined && data.stock !== null) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['stock'],
-          message: 'Stock count is not allowed for digital formats',
-        });
-      }
-    }
-
-    if (data.format === 'hardcopy') {
-      if (data.file_url) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['file_url'],
-          message: 'file_url is not allowed for hardcopy format',
-        });
-      }
-      if (data.file_public_id) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['file_public_id'],
-          message: 'file_public_id is not allowed for hardcopy format',
-        });
-      }
-    }
-  });
-
-export const UpdateProductFormatSchema = z.object({
-  price: z.number().nonnegative('Price must be greater than or equal to zero').optional(),
-  file_url: z
-    .string()
-    .max(1000)
-    .nullable()
-    .optional()
-    .or(z.literal(''))
-    .transform((v) => (v === '' ? null : v)),
-  file_public_id: z
-    .string()
-    .max(500)
-    .nullable()
-    .optional()
-    .or(z.literal(''))
-    .transform((v) => (v === '' ? null : v)),
-  file_size_bytes: z.number().int().nonnegative().nullable().optional(),
-  stock: z.number().int().nonnegative().nullable().optional(),
-});
-
-export interface ProductFormatDto {
-  id: string;
-  product_id: string;
-  format: FormatType;
-  price: number;
-  file_url: string | null;
-  file_public_id: string | null;
-  file_size_bytes: number | null;
-  stock: number | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export function toFormatDto(row: ProductFormatRow): ProductFormatDto {
-  return {
-    id: row.id,
-    product_id: row.product_id,
-    format: row.format,
-    price: parseFloat(row.price),
-    file_url: row.file_url,
-    file_public_id: row.file_public_id,
-    file_size_bytes: row.file_size_bytes ? parseInt(row.file_size_bytes, 10) : null,
-    stock: row.stock !== null ? row.stock : null,
-    created_at: row.created_at.toISOString(),
-    updated_at: row.updated_at.toISOString(),
-  };
-}
-
-function validateUuid(id: string, name = 'ID'): string {
-  const parsed = UUID_SCHEMA.safeParse(id);
-  if (!parsed.success) {
-    throw new AppError(`Invalid ${name} format`, 400);
-  }
-  return parsed.data;
-}
-
-export async function listFormats(
-  orgId: string,
-  rawProductId: string
-): Promise<ProductFormatDto[]> {
-  const productId = validateUuid(rawProductId, 'productId');
-
-  const productExists = await formatQueries.checkProductBelongsToOrg(orgId, productId);
-  if (!productExists) {
-    throw new AppError('Product not found', 404);
-  }
-
-  const rows = await formatQueries.getFormatsByProductId(orgId, productId);
-  return rows.map(toFormatDto);
-}
-
-export async function getFormat(
-  orgId: string,
-  rawProductId: string,
-  rawFormatId: string
-): Promise<ProductFormatDto> {
-  const productId = validateUuid(rawProductId, 'productId');
-  const formatId = validateUuid(rawFormatId, 'formatId');
-
-  const row = await formatQueries.getFormatById(orgId, productId, formatId);
-  if (!row) {
-    throw new AppError('Product format not found', 404);
-  }
-
-  return toFormatDto(row);
-}
-
-export async function createFormat(
-  orgId: string,
-  rawProductId: string,
-  rawBody: unknown
-): Promise<ProductFormatDto> {
-  const productId = validateUuid(rawProductId, 'productId');
-
-  const productExists = await formatQueries.checkProductBelongsToOrg(orgId, productId);
-  if (!productExists) {
-    throw new AppError('Product not found', 404);
-  }
-
-  const parsed = CreateProductFormatSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    const message = parsed.error.issues[0]?.message ?? 'Invalid format payload';
-    throw new AppError(message, 400);
-  }
-
-  const row = await formatQueries.createProductFormat(orgId, productId, {
-    format: parsed.data.format,
-    price: parsed.data.price,
-    fileUrl: parsed.data.file_url ?? parsed.data.file_public_id,
-    filePublicId: parsed.data.file_public_id,
-    fileSizeBytes: parsed.data.file_size_bytes,
-    stock: parsed.data.stock,
-  });
-
-  if (!row) {
-    throw new AppError('Failed to create format', 500, false);
-  }
-
-  return toFormatDto(row);
-}
-
-export async function updateFormat(
-  orgId: string,
-  rawProductId: string,
-  rawFormatId: string,
-  rawBody: unknown
-): Promise<ProductFormatDto> {
-  const productId = validateUuid(rawProductId, 'productId');
-  const formatId = validateUuid(rawFormatId, 'formatId');
-
-  const existing = await formatQueries.getFormatById(orgId, productId, formatId);
-  if (!existing) {
-    throw new AppError('Product format not found', 404);
-  }
-
-  const parsed = UpdateProductFormatSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    const message = parsed.error.issues[0]?.message ?? 'Invalid format update payload';
-    throw new AppError(message, 400);
-  }
-
-  const isDigital = existing.format === 'pdf' || existing.format === 'epub';
-  const isHardcopy = existing.format === 'hardcopy';
-
-  if (isDigital && parsed.data.stock !== undefined && parsed.data.stock !== null) {
-    throw new AppError('Stock count is not allowed for digital formats', 400);
-  }
-
-  if (isHardcopy && (parsed.data.file_url || parsed.data.file_public_id)) {
-    throw new AppError('File attachments are not allowed for hardcopy format', 400);
-  }
-
-  const row = await formatQueries.updateProductFormat(orgId, productId, formatId, {
-    price: parsed.data.price,
-    fileUrl: parsed.data.file_url ?? parsed.data.file_public_id,
-    filePublicId: parsed.data.file_public_id,
-    fileSizeBytes: parsed.data.file_size_bytes,
-    stock: parsed.data.stock,
-  });
-
-  if (!row) {
-    throw new AppError('Product format not found', 404);
-  }
-
-  // If a digital file was just uploaded, trigger retroactive fulfillment for pending orders
-  if (isDigital && (row.file_url || row.file_public_id) && (!existing.file_url && !existing.file_public_id)) {
-    setImmediate(async () => {
-      try {
-        await reconcilePendingDownloadsForFormat(formatId);
-      } catch (e) {
-        console.error('Retroactive format fulfillment error:', e);
-      }
-    });
-  }
-
-  return toFormatDto(row);
-}
-
-export async function deleteFormat(
-  orgId: string,
-  rawProductId: string,
-  rawFormatId: string
-): Promise<void> {
-  const productId = validateUuid(rawProductId, 'productId');
-  const formatId = validateUuid(rawFormatId, 'formatId');
-
-  try {
-    const deleted = await formatQueries.deleteProductFormat(orgId, productId, formatId);
-    if (!deleted) {
-      throw new AppError('Product format not found', 404);
-    }
-  } catch (err: any) {
-    if (err.code === '23503') {
-      throw new AppError(
-        'Cannot remove this format because active customer digital downloads depend on it.',
-        409
-      );
-    }
-    throw err;
-  }
-}
 </file>
 
 <file path="src/modules/products/products.routes.ts">
@@ -12618,197 +12246,116 @@ export async function getJobStatus(
 }
 </file>
 
-<file path="src/verticals/books/delivery.service.ts">
+<file path="src/verticals/books/books.controller.ts">
 // =============================================================================
-// soko-api/src/verticals/books/delivery.service.ts
-// Digital fulfillment engine for books: snapshots assets and dispatches emails.
+// src/verticals/books/books.controller.ts
+// Administrative Controller for Cloudflare R2 Uploads & Storage Telemetry
 // =============================================================================
 
-import crypto from 'crypto';
-import { PoolClient } from 'pg';
-import { pool } from '../../config/db';
-import { sendOrderConfirmationEmail } from '../../services/email.service';
-import pino from 'pino';
+import { Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
+import { success } from '../../utils/response';
+import { AppError } from '../../utils/error';
+import { query } from '../../config/db';
+import { generatePresignedUploadUrl } from '../../services/r2.service';
+import { getEffectiveCatalogOrgId } from '../../modules/products/products.queries';
 
-const logger = pino();
-
-export interface DigitalFulfillmentItem {
-  order_item_id: string;
-  format_id: string | null;
-  file_url: string;
-  file_public_id: string | null;
-  file_size_bytes: string | null;
-  format: 'pdf' | 'epub';
-  book_title: string;
+function requireOrgId(req: Request): string {
+  if (!req.orgId) {
+    throw new AppError('Unauthorized access', 401, true, { code: 'UNAUTHORIZED' });
+  }
+  return req.orgId;
 }
 
-export function generateDownloadToken(): string {
-  return crypto.randomBytes(32).toString('hex');
-}
+const PresignedUploadSchema = z.object({
+  filename: z
+    .string()
+    .min(1, 'Filename is required')
+    .max(255, 'Filename cannot exceed 255 characters'),
+  format: z.enum(['pdf', 'epub']).default('pdf'),
+  contentType: z.string().optional(),
+});
 
 /**
- * Fulfills all digital items for an order:
- * 1. Snapshots book title, format, and R2 key into digital_downloads.
- * 2. Sets 90-day TTL and 15 download attempts.
- * 3. Resolves tenant org_id and dispatches email via tenant-specific SMTP.
+ * Generates an authorized presigned PUT upload URL to Cloudflare R2.
+ * Resolves to the effective catalog organization so both Sunrise and EbookReads
+ * store and share master digital eBook files in the unified asset vault.
  */
-export async function fulfillDigitalItems(
-  orderId: string,
-  existingClient?: PoolClient
+export async function getPresignedR2UploadUrlHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
 ): Promise<void> {
-  const runner = existingClient || (await pool.connect());
-  const shouldManageTxn = !existingClient;
-
   try {
-    if (shouldManageTxn) {
-      await runner.query('BEGIN');
+    const orgId = requireOrgId(req);
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
+
+    const parsed = PresignedUploadSchema.safeParse(req.body);
+
+    if (!parsed.success) {
+      throw new AppError(
+        parsed.error.issues[0]?.message ?? 'Invalid upload payload specification',
+        400,
+        true,
+        { code: 'VALIDATION_FAILED', details: parsed.error.format() }
+      );
     }
 
-    // 1. Resolve digital line items with format file links
-    const itemsRes = await runner.query<DigitalFulfillmentItem>(
-      `SELECT oi.id AS order_item_id,
-              oi.format_id,
-              COALESCE(pf.file_url, pf.file_public_id) AS file_url,
-              pf.file_public_id,
-              pf.file_size_bytes::text AS file_size_bytes,
-              COALESCE(pf.format, 'pdf') AS format,
-              p.name AS book_title
-       FROM order_items oi
-       LEFT JOIN product_formats pf ON pf.id = oi.format_id
-       LEFT JOIN products p ON p.id = pf.product_id OR p.id = oi.product_id
-       WHERE oi.order_id = $1
-         AND (oi.delivery_method = 'digital' OR pf.format IN ('pdf', 'epub'))
-         AND (pf.file_url IS NOT NULL OR pf.file_public_id IS NOT NULL)`,
-      [orderId]
+    const mime =
+      parsed.data.contentType ||
+      (parsed.data.format === 'pdf' ? 'application/pdf' : 'application/epub+zip');
+
+    const result = await generatePresignedUploadUrl(
+      effectiveCatalogOrgId,
+      parsed.data.filename,
+      mime
     );
 
-    const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000); // 90-Day Access Window
-    const generatedTokens: Array<{ bookTitle: string; format: string; token: string }> = [];
-
-    for (const item of itemsRes.rows) {
-      const existing = await runner.query<{ id: string; download_token: string }>(
-        `SELECT id, download_token FROM digital_downloads WHERE order_item_id = $1`,
-        [item.order_item_id]
-      );
-
-      if (existing.rows.length === 0) {
-        const token = generateDownloadToken();
-
-        await runner.query(
-          `INSERT INTO digital_downloads (
-             order_item_id, format_id, download_token, max_downloads, download_count,
-             expires_at, book_title, format, file_url, file_public_id, file_size_bytes
-           )
-           VALUES ($1, $2, $3, 15, 0, $4, $5, $6, $7, $8, $9)`,
-          [
-            item.order_item_id,
-            item.format_id,
-            token,
-            expiresAt,
-            item.book_title,
-            item.format,
-            item.file_url,
-            item.file_public_id,
-            item.file_size_bytes ? parseInt(item.file_size_bytes, 10) : null,
-          ]
-        );
-
-        generatedTokens.push({
-          bookTitle: item.book_title,
-          format: item.format,
-          token,
-        });
-      } else {
-        generatedTokens.push({
-          bookTitle: item.book_title,
-          format: item.format,
-          token: existing.rows[0].download_token,
-        });
-      }
-    }
-
-    if (shouldManageTxn) {
-      await runner.query('COMMIT');
-    }
-
-    // 2. Asynchronously Dispatch Out-of-Band Email with org_id binding
-    setImmediate(async () => {
-      try {
-        const orderInfo = await pool.query<{
-          id: string;
-          org_id: string;
-          customer_name: string;
-          customer_email: string | null;
-          customer_phone: string;
-          total: string;
-          delivery_type: 'delivery' | 'pickup';
-          delivery_confirmation_code: string | null;
-          delivery_location: string;
-        }>(
-          `SELECT id, org_id, customer_name, customer_email, customer_phone,
-                  total::text AS total, delivery_type, delivery_confirmation_code, delivery_location
-           FROM orders
-           WHERE id = $1`,
-          [orderId]
-        );
-
-        const order = orderInfo.rows[0];
-        if (order && order.customer_email && order.customer_email.includes('@')) {
-          await sendOrderConfirmationEmail({
-            orgId: order.org_id, // Pass tenant org_id to resolve tenant-specific SMTP
-            toEmail: order.customer_email,
-            customerName: order.customer_name,
-            customerPhone: order.customer_phone,
-            orderId: order.id,
-            total: parseFloat(order.total),
-            downloads: generatedTokens,
-            deliveryType: order.delivery_type,
-            deliveryConfirmationCode: order.delivery_confirmation_code,
-            deliveryLocation: order.delivery_location,
-          });
-        }
-      } catch (emailErr: any) {
-        logger.error({ err: emailErr.message, orderId }, 'Background email trigger error');
-      }
-    });
+    success(res, result, undefined, 200);
   } catch (err) {
-    if (shouldManageTxn) {
-      await runner.query('ROLLBACK');
-    }
-    throw err;
-  } finally {
-    if (shouldManageTxn) {
-      runner.release();
-    }
+    next(err);
   }
 }
 
 /**
- * Sweeps and retroactively fulfills orders when an admin uploads a file to an existing format.
+ * Returns digital storage telemetry across the shared catalog for the requesting organization.
  */
-export async function reconcilePendingDownloadsForFormat(formatId: string): Promise<number> {
-  const client = await pool.connect();
+export async function getBookstoreStorageStatsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
   try {
-    const unfulfilled = await client.query<{ order_id: string }>(
-      `SELECT DISTINCT oi.order_id
-       FROM order_items oi
-       JOIN orders o ON o.id = oi.order_id
-       LEFT JOIN digital_downloads dd ON dd.order_item_id = oi.id
-       WHERE oi.format_id = $1
-         AND o.payment_status = 'paid'
-         AND dd.id IS NULL`,
-      [formatId]
+    const orgId = requireOrgId(req);
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
+
+    const result = await query<{
+      total_bytes: string;
+      digital_books_count: string;
+    }>(
+      `SELECT
+         COALESCE(SUM(pf.file_size_bytes), 0)::text AS total_bytes,
+         COUNT(DISTINCT pf.product_id)::text AS digital_books_count
+       FROM product_formats pf
+       INNER JOIN products p ON p.id = pf.product_id
+       WHERE (p.org_id = $1 OR p.org_id = $2)
+         AND p.deleted_at IS NULL 
+         AND (pf.file_url IS NOT NULL OR pf.file_public_id IS NOT NULL)`,
+      [orgId, effectiveCatalogOrgId]
     );
 
-    let fulfilledCount = 0;
-    for (const row of unfulfilled.rows) {
-      await fulfillDigitalItems(row.order_id, client);
-      fulfilledCount++;
-    }
+    const row = result.rows[0];
+    const totalBytes = parseInt(row?.total_bytes || '0', 10);
+    const totalMb = Math.round((totalBytes / (1024 * 1024)) * 10) / 10;
+    const digitalBooksCount = parseInt(row?.digital_books_count || '0', 10);
 
-    return fulfilledCount;
-  } finally {
-    client.release();
+    success(res, {
+      totalBytes,
+      totalMb,
+      digitalBooksCount,
+    });
+  } catch (err) {
+    next(err);
   }
 }
 </file>
@@ -13360,252 +12907,276 @@ export async function recordClick(bannerId: string): Promise<void> {
 }
 </file>
 
-<file path="src/modules/product-formats/product-formats.queries.ts">
+<file path="src/modules/product-formats/product-formats.service.ts">
 // =============================================================================
-// soko-api/src/modules/product-formats/product-formats.queries.ts
-// Database access layer for product formats with unambiguous UPDATE scope.
+// soko-api/src/modules/product-formats/product-formats.service.ts
+// Format Management with Cross-Channel Shared Catalog Resolution
 // =============================================================================
 
-import { query } from '../../config/db';
+import { z } from 'zod';
+import { AppError } from '../../utils/error';
+import * as formatQueries from './product-formats.queries';
+import type { FormatType, ProductFormatRow } from './product-formats.queries';
+import { reconcilePendingDownloadsForFormat } from '../../verticals/books/delivery.service';
 
-export type FormatType = 'pdf' | 'epub' | 'hardcopy';
+const UUID_SCHEMA = z.string().uuid('Must be a valid UUID');
 
-export interface ProductFormatRow {
+export const CreateProductFormatSchema = z
+  .object({
+    format: z.enum(['pdf', 'epub', 'hardcopy']),
+    price: z.number().nonnegative('Price must be greater than or equal to zero'),
+    compare_at_price: z.number().positive().nullable().optional(),
+    file_url: z
+      .string()
+      .max(1000)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    file_public_id: z
+      .string()
+      .max(500)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    file_size_bytes: z.number().int().nonnegative().nullable().optional(),
+    stock: z.number().int().nonnegative().nullable().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.format === 'pdf' || data.format === 'epub') {
+      if (data.stock !== undefined && data.stock !== null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['stock'],
+          message: 'Stock count is not allowed for digital formats',
+        });
+      }
+    }
+
+    if (data.format === 'hardcopy') {
+      if (data.file_url) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['file_url'],
+          message: 'file_url is not allowed for hardcopy format',
+        });
+      }
+      if (data.file_public_id) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['file_public_id'],
+          message: 'file_public_id is not allowed for hardcopy format',
+        });
+      }
+    }
+  });
+
+export const UpdateProductFormatSchema = z.object({
+  price: z.number().nonnegative('Price must be greater than or equal to zero').optional(),
+  compare_at_price: z.number().positive().nullable().optional(),
+  file_url: z
+    .string()
+    .max(1000)
+    .nullable()
+    .optional()
+    .or(z.literal(''))
+    .transform((v) => (v === '' ? null : v)),
+  file_public_id: z
+    .string()
+    .max(500)
+    .nullable()
+    .optional()
+    .or(z.literal(''))
+    .transform((v) => (v === '' ? null : v)),
+  file_size_bytes: z.number().int().nonnegative().nullable().optional(),
+  stock: z.number().int().nonnegative().nullable().optional(),
+});
+
+export interface ProductFormatDto {
   id: string;
   product_id: string;
   format: FormatType;
-  price: string;
-  compare_at_price: string | null;
+  price: number;
+  compare_at_price: number | null;
   file_url: string | null;
   file_public_id: string | null;
-  file_size_bytes: string | null;
+  file_size_bytes: number | null;
   stock: number | null;
-  created_at: Date;
-  updated_at: Date;
+  created_at: string;
+  updated_at: string;
 }
 
-export interface CreateFormatInput {
-  format: FormatType;
-  price: number;
-  compareAtPrice?: number | null;
-  fileUrl?: string | null;
-  filePublicId?: string | null;
-  fileSizeBytes?: number | null;
-  stock?: number | null;
+export function toFormatDto(row: ProductFormatRow): ProductFormatDto {
+  return {
+    id: row.id,
+    product_id: row.product_id,
+    format: row.format,
+    price: parseFloat(row.price),
+    compare_at_price: row.compare_at_price ? parseFloat(row.compare_at_price) : null,
+    file_url: row.file_url,
+    file_public_id: row.file_public_id,
+    file_size_bytes: row.file_size_bytes ? parseInt(row.file_size_bytes, 10) : null,
+    stock: row.stock !== null ? row.stock : null,
+    created_at: row.created_at.toISOString(),
+    updated_at: row.updated_at.toISOString(),
+  };
 }
 
-export interface UpdateFormatInput {
-  price?: number;
-  compareAtPrice?: number | null;
-  fileUrl?: string | null;
-  filePublicId?: string | null;
-  fileSizeBytes?: number | null;
-  stock?: number | null;
+function validateUuid(id: string, name = 'ID'): string {
+  const parsed = UUID_SCHEMA.safeParse(id);
+  if (!parsed.success) {
+    throw new AppError(`Invalid ${name} format`, 400);
+  }
+  return parsed.data;
 }
 
-// Fields for SELECT queries joining product_formats as pf
-const FORMAT_SELECT_FIELDS = `
-  pf.id,
-  pf.product_id,
-  pf.format,
-  pf.price::text AS price,
-  pf.compare_at_price::text AS compare_at_price,
-  pf.file_url,
-  pf.file_public_id,
-  pf.file_size_bytes::text AS file_size_bytes,
-  pf.stock,
-  pf.created_at,
-  pf.updated_at
-`;
-
-// Explicitly qualified fields to prevent any ambiguity in RETURNING clauses
-const FORMAT_RETURNING_FIELDS = `
-  product_formats.id,
-  product_formats.product_id,
-  product_formats.format,
-  product_formats.price::text AS price,
-  product_formats.compare_at_price::text AS compare_at_price,
-  product_formats.file_url,
-  product_formats.file_public_id,
-  product_formats.file_size_bytes::text AS file_size_bytes,
-  product_formats.stock,
-  product_formats.created_at,
-  product_formats.updated_at
-`;
-
-export async function checkProductBelongsToOrg(
+export async function listFormats(
   orgId: string,
-  productId: string
-): Promise<boolean> {
-  const result = await query<{ id: string }>(
-    `SELECT id FROM products WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL`,
-    [productId, orgId]
-  );
-  return result.rows.length > 0;
+  rawProductId: string
+): Promise<ProductFormatDto[]> {
+  const productId = validateUuid(rawProductId, 'productId');
+
+  const productExists = await formatQueries.checkProductBelongsToOrg(orgId, productId);
+  if (!productExists) {
+    throw new AppError('Product not found', 404);
+  }
+
+  const rows = await formatQueries.getFormatsByProductId(orgId, productId);
+  return rows.map(toFormatDto);
 }
 
-export async function getFormatsByProductId(
+export async function getFormat(
   orgId: string,
-  productId: string
-): Promise<ProductFormatRow[]> {
-  const result = await query<ProductFormatRow>(
-    `SELECT ${FORMAT_SELECT_FIELDS}
-     FROM product_formats pf
-     INNER JOIN products p ON p.id = pf.product_id
-     WHERE p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL
-     ORDER BY (
-       CASE pf.format
-         WHEN 'hardcopy' THEN 1
-         WHEN 'pdf' THEN 2
-         WHEN 'epub' THEN 3
-         ELSE 4
-       END
-     ) ASC, pf.created_at ASC`,
-    [orgId, productId]
-  );
-  return result.rows;
+  rawProductId: string,
+  rawFormatId: string
+): Promise<ProductFormatDto> {
+  const productId = validateUuid(rawProductId, 'productId');
+  const formatId = validateUuid(rawFormatId, 'formatId');
+
+  const row = await formatQueries.getFormatById(orgId, productId, formatId);
+  if (!row) {
+    throw new AppError('Product format not found', 404);
+  }
+
+  return toFormatDto(row);
 }
 
-export async function getFormatById(
+export async function createFormat(
   orgId: string,
-  productId: string,
-  formatId: string
-): Promise<ProductFormatRow | null> {
-  const result = await query<ProductFormatRow>(
-    `SELECT ${FORMAT_SELECT_FIELDS}
-     FROM product_formats pf
-     INNER JOIN products p ON p.id = pf.product_id
-     WHERE p.org_id = $1 AND p.id = $2 AND pf.id = $3 AND p.deleted_at IS NULL`,
-    [orgId, productId, formatId]
-  );
-  return result.rows[0] ?? null;
+  rawProductId: string,
+  rawBody: unknown
+): Promise<ProductFormatDto> {
+  const productId = validateUuid(rawProductId, 'productId');
+
+  const productExists = await formatQueries.checkProductBelongsToOrg(orgId, productId);
+  if (!productExists) {
+    throw new AppError('Product not found', 404);
+  }
+
+  const parsed = CreateProductFormatSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    const message = parsed.error.issues[0]?.message ?? 'Invalid format payload';
+    throw new AppError(message, 400);
+  }
+
+  const row = await formatQueries.createProductFormat(orgId, productId, {
+    format: parsed.data.format,
+    price: parsed.data.price,
+    compareAtPrice: parsed.data.compare_at_price,
+    fileUrl: parsed.data.file_url ?? parsed.data.file_public_id,
+    filePublicId: parsed.data.file_public_id,
+    fileSizeBytes: parsed.data.file_size_bytes,
+    stock: parsed.data.stock,
+  });
+
+  if (!row) {
+    throw new AppError('Failed to create format', 500, false);
+  }
+
+  return toFormatDto(row);
 }
 
-export async function createProductFormat(
+export async function updateFormat(
   orgId: string,
-  productId: string,
-  data: CreateFormatInput
-): Promise<ProductFormatRow | null> {
-  const result = await query<ProductFormatRow>(
-    `INSERT INTO product_formats (
-       product_id, format, price, compare_at_price, file_url, file_public_id, file_size_bytes, stock
-     )
-     SELECT p.id, $3, $4, $5, $6, $7, $8, $9
-     FROM products p
-     WHERE p.id = $2 AND p.org_id = $1 AND p.deleted_at IS NULL
-     ON CONFLICT (product_id, format) DO UPDATE SET
-       price            = EXCLUDED.price,
-       compare_at_price = EXCLUDED.compare_at_price,
-       file_url         = EXCLUDED.file_url,
-       file_public_id   = EXCLUDED.file_public_id,
-       file_size_bytes  = EXCLUDED.file_size_bytes,
-       stock            = EXCLUDED.stock,
-       updated_at       = NOW()
-     RETURNING ${FORMAT_RETURNING_FIELDS}`,
-    [
-      orgId,
-      productId,
-      data.format,
-      data.price,
-      data.compareAtPrice ?? null,
-      data.fileUrl ?? null,
-      data.filePublicId ?? null,
-      data.fileSizeBytes ?? null,
-      data.stock ?? null,
-    ]
-  );
-  return result.rows[0] ?? null;
+  rawProductId: string,
+  rawFormatId: string,
+  rawBody: unknown
+): Promise<ProductFormatDto> {
+  const productId = validateUuid(rawProductId, 'productId');
+  const formatId = validateUuid(rawFormatId, 'formatId');
+
+  const existing = await formatQueries.getFormatById(orgId, productId, formatId);
+  if (!existing) {
+    throw new AppError('Product format not found', 404);
+  }
+
+  const parsed = UpdateProductFormatSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    const message = parsed.error.issues[0]?.message ?? 'Invalid format update payload';
+    throw new AppError(message, 400);
+  }
+
+  const isDigital = existing.format === 'pdf' || existing.format === 'epub';
+  const isHardcopy = existing.format === 'hardcopy';
+
+  if (isDigital && parsed.data.stock !== undefined && parsed.data.stock !== null) {
+    throw new AppError('Stock count is not allowed for digital formats', 400);
+  }
+
+  if (isHardcopy && (parsed.data.file_url || parsed.data.file_public_id)) {
+    throw new AppError('File attachments are not allowed for hardcopy format', 400);
+  }
+
+  const row = await formatQueries.updateProductFormat(orgId, productId, formatId, {
+    price: parsed.data.price,
+    compareAtPrice: parsed.data.compare_at_price,
+    fileUrl: parsed.data.file_url ?? parsed.data.file_public_id,
+    filePublicId: parsed.data.file_public_id,
+    fileSizeBytes: parsed.data.file_size_bytes,
+    stock: parsed.data.stock,
+  });
+
+  if (!row) {
+    throw new AppError('Product format not found', 404);
+  }
+
+  // Cross-tenant fulfillment: unlocks download tokens for any orders waiting for this file on either store
+  if (isDigital && (row.file_url || row.file_public_id) && (!existing.file_url && !existing.file_public_id)) {
+    setImmediate(async () => {
+      try {
+        await reconcilePendingDownloadsForFormat(formatId);
+      } catch (e) {
+        console.error('Retroactive format fulfillment error:', e);
+      }
+    });
+  }
+
+  return toFormatDto(row);
 }
 
-export async function updateProductFormat(
+export async function deleteFormat(
   orgId: string,
-  productId: string,
-  formatId: string,
-  data: UpdateFormatInput
-): Promise<ProductFormatRow | null> {
-  const setClauses: string[] = [];
-  const params: unknown[] = [orgId, productId, formatId];
-  let paramIdx = 4;
+  rawProductId: string,
+  rawFormatId: string
+): Promise<void> {
+  const productId = validateUuid(rawProductId, 'productId');
+  const formatId = validateUuid(rawFormatId, 'formatId');
 
-  if (data.price !== undefined) {
-    setClauses.push(`price = $${paramIdx}`);
-    // Defensive reset of compare_at_price (unambiguous because product_formats is the sole table in scope)
-    setClauses.push(
-      `compare_at_price = (CASE WHEN compare_at_price IS NOT NULL AND compare_at_price <= $${paramIdx} THEN NULL ELSE compare_at_price END)`
-    );
-    params.push(data.price);
-    paramIdx++;
+  try {
+    const deleted = await formatQueries.deleteProductFormat(orgId, productId, formatId);
+    if (!deleted) {
+      throw new AppError('Product format not found', 404);
+    }
+  } catch (err: any) {
+    if (err.code === '23503') {
+      throw new AppError(
+        'Cannot remove this format because active customer digital downloads depend on it.',
+        409
+      );
+    }
+    throw err;
   }
-
-  if (data.compareAtPrice !== undefined) {
-    setClauses.push(`compare_at_price = $${paramIdx}`);
-    params.push(data.compareAtPrice);
-    paramIdx++;
-  }
-
-  if (data.fileUrl !== undefined) {
-    setClauses.push(`file_url = $${paramIdx}`);
-    params.push(data.fileUrl);
-    paramIdx++;
-  }
-
-  if (data.filePublicId !== undefined) {
-    setClauses.push(`file_public_id = $${paramIdx}`);
-    params.push(data.filePublicId);
-    paramIdx++;
-  }
-
-  if (data.fileSizeBytes !== undefined) {
-    setClauses.push(`file_size_bytes = $${paramIdx}`);
-    params.push(data.fileSizeBytes);
-    paramIdx++;
-  }
-
-  if (data.stock !== undefined) {
-    setClauses.push(`stock = $${paramIdx}`);
-    params.push(data.stock);
-    paramIdx++;
-  }
-
-  if (setClauses.length === 0) {
-    return getFormatById(orgId, productId, formatId);
-  }
-
-  setClauses.push('updated_at = NOW()');
-
-  // Tenant ownership enforced without multi-table join ambiguity
-  const result = await query<ProductFormatRow>(
-    `UPDATE product_formats
-     SET ${setClauses.join(', ')}
-     WHERE id = $3
-       AND product_id = $2
-       AND product_id IN (
-         SELECT id FROM products
-         WHERE id = $2 AND org_id = $1 AND deleted_at IS NULL
-       )
-     RETURNING ${FORMAT_RETURNING_FIELDS}`,
-    params
-  );
-
-  return result.rows[0] ?? null;
-}
-
-export async function deleteProductFormat(
-  orgId: string,
-  productId: string,
-  formatId: string
-): Promise<boolean> {
-  const result = await query(
-    `DELETE FROM product_formats pf
-     USING products p
-     WHERE pf.product_id = p.id
-       AND p.org_id = $1
-       AND p.id = $2
-       AND pf.id = $3
-       AND p.deleted_at IS NULL`,
-    [orgId, productId, formatId]
-  );
-  return (result.rowCount ?? 0) > 0;
 }
 </file>
 
@@ -14194,6 +13765,203 @@ export async function finalizeImportJob(
 }
 </file>
 
+<file path="src/verticals/books/delivery.service.ts">
+// =============================================================================
+// soko-api/src/verticals/books/delivery.service.ts
+// Digital Fulfillment Engine: Multi-Tenant Token Vault & Sovereign Email Routing
+// =============================================================================
+
+import crypto from 'crypto';
+import { PoolClient } from 'pg';
+import { pool } from '../../config/db';
+import { sendOrderConfirmationEmail } from '../../services/email.service';
+import pino from 'pino';
+
+const logger = pino();
+
+export interface DigitalFulfillmentItem {
+  order_item_id: string;
+  format_id: string | null;
+  file_url: string;
+  file_public_id: string | null;
+  file_size_bytes: string | null;
+  format: 'pdf' | 'epub';
+  book_title: string;
+}
+
+export function generateDownloadToken(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+/**
+ * Fulfills digital eBook purchases:
+ * 1. Resolves digital line items referencing shared catalog products and formats.
+ * 2. Snapshots title, format, and R2 key into digital_downloads with 90-day expiry.
+ * 3. Resolves the purchasing store's sovereign org_id and dispatches confirmation
+ *    email via that store's verified SMTP mailer.
+ */
+export async function fulfillDigitalItems(
+  orderId: string,
+  existingClient?: PoolClient
+): Promise<void> {
+  const runner = existingClient || (await pool.connect());
+  const shouldManageTxn = !existingClient;
+
+  try {
+    if (shouldManageTxn) {
+      await runner.query('BEGIN');
+    }
+
+    // 1. Resolve digital line items with format file links across the shared catalog
+    const itemsRes = await runner.query<DigitalFulfillmentItem>(
+      `SELECT oi.id AS order_item_id,
+              oi.format_id,
+              COALESCE(pf.file_url, pf.file_public_id) AS file_url,
+              pf.file_public_id,
+              pf.file_size_bytes::text AS file_size_bytes,
+              COALESCE(pf.format, 'pdf') AS format,
+              COALESCE(oi.product_name, p.name) AS book_title
+       FROM order_items oi
+       LEFT JOIN product_formats pf ON pf.id = oi.format_id
+       LEFT JOIN products p ON p.id = pf.product_id OR p.id = oi.product_id
+       WHERE oi.order_id = $1
+         AND (oi.delivery_method = 'digital' OR pf.format IN ('pdf', 'epub'))
+         AND (pf.file_url IS NOT NULL OR pf.file_public_id IS NOT NULL)`,
+      [orderId]
+    );
+
+    const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000); // 90-Day Access Window
+    const generatedTokens: Array<{ bookTitle: string; format: string; token: string }> = [];
+
+    for (const item of itemsRes.rows) {
+      const existing = await runner.query<{ id: string; download_token: string }>(
+        `SELECT id, download_token FROM digital_downloads WHERE order_item_id = $1`,
+        [item.order_item_id]
+      );
+
+      if (existing.rows.length === 0) {
+        const token = generateDownloadToken();
+
+        await runner.query(
+          `INSERT INTO digital_downloads (
+             order_item_id, format_id, download_token, max_downloads, download_count,
+             expires_at, book_title, format, file_url, file_public_id, file_size_bytes
+           )
+           VALUES ($1, $2, $3, 15, 0, $4, $5, $6, $7, $8, $9)`,
+          [
+            item.order_item_id,
+            item.format_id,
+            token,
+            expiresAt,
+            item.book_title,
+            item.format,
+            item.file_url,
+            item.file_public_id,
+            item.file_size_bytes ? parseInt(item.file_size_bytes, 10) : null,
+          ]
+        );
+
+        generatedTokens.push({
+          bookTitle: item.book_title,
+          format: item.format,
+          token,
+        });
+      } else {
+        generatedTokens.push({
+          bookTitle: item.book_title,
+          format: item.format,
+          token: existing.rows[0].download_token,
+        });
+      }
+    }
+
+    if (shouldManageTxn) {
+      await runner.query('COMMIT');
+    }
+
+    // 2. Dispatches out-of-band email bound strictly to the purchasing store's sovereign org_id
+    setImmediate(async () => {
+      try {
+        const orderInfo = await pool.query<{
+          id: string;
+          org_id: string;
+          customer_name: string;
+          customer_email: string | null;
+          customer_phone: string;
+          total: string;
+          delivery_type: 'delivery' | 'pickup';
+          delivery_confirmation_code: string | null;
+          delivery_location: string;
+        }>(
+          `SELECT id, org_id, customer_name, customer_email, customer_phone,
+                  total::text AS total, delivery_type, delivery_confirmation_code, delivery_location
+           FROM orders
+           WHERE id = $1`,
+          [orderId]
+        );
+
+        const order = orderInfo.rows[0];
+        if (order && order.customer_email && order.customer_email.includes('@')) {
+          await sendOrderConfirmationEmail({
+            orgId: order.org_id, // Sovereign routing: uses store's custom SMTP credentials
+            toEmail: order.customer_email,
+            customerName: order.customer_name,
+            customerPhone: order.customer_phone,
+            orderId: order.id,
+            total: parseFloat(order.total),
+            downloads: generatedTokens,
+            deliveryType: order.delivery_type,
+            deliveryConfirmationCode: order.delivery_confirmation_code,
+            deliveryLocation: order.delivery_location,
+          });
+        }
+      } catch (emailErr: any) {
+        logger.error({ err: emailErr.message, orderId }, 'Background email dispatch error');
+      }
+    });
+  } catch (err) {
+    if (shouldManageTxn) {
+      await runner.query('ROLLBACK');
+    }
+    throw err;
+  } finally {
+    if (shouldManageTxn) {
+      runner.release();
+    }
+  }
+}
+
+/**
+ * Sweeps and retroactively fulfills orders across all stores when an admin
+ * uploads a digital file to an existing format.
+ */
+export async function reconcilePendingDownloadsForFormat(formatId: string): Promise<number> {
+  const client = await pool.connect();
+  try {
+    const unfulfilled = await client.query<{ order_id: string }>(
+      `SELECT DISTINCT oi.order_id
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       LEFT JOIN digital_downloads dd ON dd.order_item_id = oi.id
+       WHERE oi.format_id = $1
+         AND o.payment_status = 'paid'
+         AND dd.id IS NULL`,
+      [formatId]
+    );
+
+    let fulfilledCount = 0;
+    for (const row of unfulfilled.rows) {
+      await fulfillDigitalItems(row.order_id, client);
+      fulfilledCount++;
+    }
+
+    return fulfilledCount;
+  } finally {
+    client.release();
+  }
+}
+</file>
+
 <file path="render.yaml">
 # soko-api/render.yaml
 services:
@@ -14761,6 +14529,267 @@ export async function handleMpesaCallback(rawPayload: unknown): Promise<void> {
 }
 </file>
 
+<file path="src/modules/product-formats/product-formats.queries.ts">
+// =============================================================================
+// soko-api/src/modules/product-formats/product-formats.queries.ts
+// Database access layer for product formats with shared catalog resolution.
+// =============================================================================
+
+import { query } from '../../config/db';
+
+export type FormatType = 'pdf' | 'epub' | 'hardcopy';
+
+export interface ProductFormatRow {
+  id: string;
+  product_id: string;
+  format: FormatType;
+  price: string;
+  compare_at_price: string | null;
+  file_url: string | null;
+  file_public_id: string | null;
+  file_size_bytes: string | null;
+  stock: number | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface CreateFormatInput {
+  format: FormatType;
+  price: number;
+  compareAtPrice?: number | null;
+  fileUrl?: string | null;
+  filePublicId?: string | null;
+  fileSizeBytes?: number | null;
+  stock?: number | null;
+}
+
+export interface UpdateFormatInput {
+  price?: number;
+  compareAtPrice?: number | null;
+  fileUrl?: string | null;
+  filePublicId?: string | null;
+  fileSizeBytes?: number | null;
+  stock?: number | null;
+}
+
+const FORMAT_SELECT_FIELDS = `
+  pf.id,
+  pf.product_id,
+  pf.format,
+  pf.price::text AS price,
+  pf.compare_at_price::text AS compare_at_price,
+  pf.file_url,
+  pf.file_public_id,
+  pf.file_size_bytes::text AS file_size_bytes,
+  pf.stock,
+  pf.created_at,
+  pf.updated_at
+`;
+
+const FORMAT_RETURNING_FIELDS = `
+  product_formats.id,
+  product_formats.product_id,
+  product_formats.format,
+  product_formats.price::text AS price,
+  product_formats.compare_at_price::text AS compare_at_price,
+  product_formats.file_url,
+  product_formats.file_public_id,
+  product_formats.file_size_bytes::text AS file_size_bytes,
+  product_formats.stock,
+  product_formats.created_at,
+  product_formats.updated_at
+`;
+
+/**
+ * Checks whether a product belongs to the requesting org OR to its inherited shared catalog source.
+ */
+export async function checkProductBelongsToOrg(
+  orgId: string,
+  productId: string
+): Promise<boolean> {
+  const result = await query<{ id: string }>(
+    `SELECT p.id 
+     FROM products p 
+     WHERE p.id = $1 
+       AND (p.org_id = $2 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $2 AND deleted_at IS NULL))
+       AND p.deleted_at IS NULL`,
+    [productId, orgId]
+  );
+  return result.rows.length > 0;
+}
+
+export async function getFormatsByProductId(
+  orgId: string,
+  productId: string
+): Promise<ProductFormatRow[]> {
+  const result = await query<ProductFormatRow>(
+    `SELECT ${FORMAT_SELECT_FIELDS}
+     FROM product_formats pf
+     INNER JOIN products p ON p.id = pf.product_id
+     WHERE (p.org_id = $1 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+       AND p.id = $2 
+       AND p.deleted_at IS NULL
+     ORDER BY (
+       CASE pf.format
+         WHEN 'hardcopy' THEN 1
+         WHEN 'pdf' THEN 2
+         WHEN 'epub' THEN 3
+         ELSE 4
+       END
+     ) ASC, pf.created_at ASC`,
+    [orgId, productId]
+  );
+  return result.rows;
+}
+
+export async function getFormatById(
+  orgId: string,
+  productId: string,
+  formatId: string
+): Promise<ProductFormatRow | null> {
+  const result = await query<ProductFormatRow>(
+    `SELECT ${FORMAT_SELECT_FIELDS}
+     FROM product_formats pf
+     INNER JOIN products p ON p.id = pf.product_id
+     WHERE (p.org_id = $1 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+       AND p.id = $2 
+       AND pf.id = $3 
+       AND p.deleted_at IS NULL`,
+    [orgId, productId, formatId]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function createProductFormat(
+  orgId: string,
+  productId: string,
+  data: CreateFormatInput
+): Promise<ProductFormatRow | null> {
+  const result = await query<ProductFormatRow>(
+    `INSERT INTO product_formats (
+       product_id, format, price, compare_at_price, file_url, file_public_id, file_size_bytes, stock
+     )
+     SELECT p.id, $3, $4, $5, $6, $7, $8, $9
+     FROM products p
+     WHERE p.id = $2 
+       AND (p.org_id = $1 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+       AND p.deleted_at IS NULL
+     ON CONFLICT (product_id, format) DO UPDATE SET
+       price            = EXCLUDED.price,
+       compare_at_price = EXCLUDED.compare_at_price,
+       file_url         = EXCLUDED.file_url,
+       file_public_id   = EXCLUDED.file_public_id,
+       file_size_bytes  = EXCLUDED.file_size_bytes,
+       stock            = EXCLUDED.stock,
+       updated_at       = NOW()
+     RETURNING ${FORMAT_RETURNING_FIELDS}`,
+    [
+      orgId,
+      productId,
+      data.format,
+      data.price,
+      data.compareAtPrice ?? null,
+      data.fileUrl ?? null,
+      data.filePublicId ?? null,
+      data.fileSizeBytes ?? null,
+      data.stock ?? null,
+    ]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function updateProductFormat(
+  orgId: string,
+  productId: string,
+  formatId: string,
+  data: UpdateFormatInput
+): Promise<ProductFormatRow | null> {
+  const setClauses: string[] = [];
+  const params: unknown[] = [orgId, productId, formatId];
+  let paramIdx = 4;
+
+  if (data.price !== undefined) {
+    setClauses.push(`price = $${paramIdx}`);
+    setClauses.push(
+      `compare_at_price = (CASE WHEN compare_at_price IS NOT NULL AND compare_at_price <= $${paramIdx} THEN NULL ELSE compare_at_price END)`
+    );
+    params.push(data.price);
+    paramIdx++;
+  }
+
+  if (data.compareAtPrice !== undefined) {
+    setClauses.push(`compare_at_price = $${paramIdx}`);
+    params.push(data.compareAtPrice);
+    paramIdx++;
+  }
+
+  if (data.fileUrl !== undefined) {
+    setClauses.push(`file_url = $${paramIdx}`);
+    params.push(data.fileUrl);
+    paramIdx++;
+  }
+
+  if (data.filePublicId !== undefined) {
+    setClauses.push(`file_public_id = $${paramIdx}`);
+    params.push(data.filePublicId);
+    paramIdx++;
+  }
+
+  if (data.fileSizeBytes !== undefined) {
+    setClauses.push(`file_size_bytes = $${paramIdx}`);
+    params.push(data.fileSizeBytes);
+    paramIdx++;
+  }
+
+  if (data.stock !== undefined) {
+    setClauses.push(`stock = $${paramIdx}`);
+    params.push(data.stock);
+    paramIdx++;
+  }
+
+  if (setClauses.length === 0) {
+    return getFormatById(orgId, productId, formatId);
+  }
+
+  setClauses.push('updated_at = NOW()');
+
+  const result = await query<ProductFormatRow>(
+    `UPDATE product_formats
+     SET ${setClauses.join(', ')}
+     WHERE id = $3
+       AND product_id = $2
+       AND product_id IN (
+         SELECT id FROM products
+         WHERE id = $2 
+           AND (org_id = $1 OR org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+           AND deleted_at IS NULL
+       )
+     RETURNING ${FORMAT_RETURNING_FIELDS}`,
+    params
+  );
+
+  return result.rows[0] ?? null;
+}
+
+export async function deleteProductFormat(
+  orgId: string,
+  productId: string,
+  formatId: string
+): Promise<boolean> {
+  const result = await query(
+    `DELETE FROM product_formats pf
+     USING products p
+     WHERE pf.product_id = p.id
+       AND (p.org_id = $1 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+       AND p.id = $2
+       AND pf.id = $3
+       AND p.deleted_at IS NULL`,
+    [orgId, productId, formatId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+</file>
+
 <file path="src/modules/products/products.controller.ts">
 // =============================================================================
 // soko-api/src/modules/products/products.controller.ts
@@ -15059,12 +15088,21 @@ export async function createProductsBulkHandler(
 <file path="src/modules/public/public.controller.ts">
 // =============================================================================
 // soko-api/src/modules/public/public.controller.ts
-// Public HTTP controller handling catalog, orders, and payment recovery.
+// Public HTTP Controller: Catalog Ingestion with First-Added-First Default Sort
 // =============================================================================
 
 import { Request, Response, NextFunction } from 'express';
 import { success } from '../../utils/response';
 import * as publicService from './public.service';
+import type { ProductSortOption } from './public.queries';
+
+const VALID_SORT_OPTIONS: ProductSortOption[] = [
+  'first_added',
+  'newest',
+  'price_asc',
+  'price_desc',
+  'title_asc',
+];
 
 export async function searchDeliveryLocationsHandler(
   req: Request,
@@ -15105,11 +15143,21 @@ export async function listStoreProductsHandler(
       ? req.query.category.trim()
       : (typeof req.query.category_id === 'string' ? req.query.category_id.trim() : undefined);
 
+    // Default to 'first_added' (FIFO) so foundational titles and verified covers show first
+    let sort: ProductSortOption = 'first_added';
+    if (typeof req.query.sort === 'string') {
+      const candidate = req.query.sort.trim().toLowerCase() as ProductSortOption;
+      if (VALID_SORT_OPTIONS.includes(candidate)) {
+        sort = candidate;
+      }
+    }
+
     const result = await publicService.listStoreProducts(req.params.storeSlug, {
       page,
       limit,
       searchQuery,
       category,
+      sort,
     });
 
     success(res, result, {
@@ -15239,596 +15287,6 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
-</file>
-
-<file path="src/modules/products/products.service.ts">
-// =============================================================================
-// soko-api/src/modules/products/products.service.ts
-// Bulletproof Deletion with Explicit Child Cleanup & Category/Product Management
-// =============================================================================
-
-import { z } from "zod";
-import { PoolClient } from "pg";
-import { v2 as cloudinary } from "cloudinary";
-import { pool } from "../../config/db";
-import { env } from "../../config/env";
-import { AppError } from "../../utils/error";
-import * as productsQueries from "./products.queries";
-
-cloudinary.config({
-    cloud_name: env.CLOUDINARY_CLOUD_NAME,
-    api_key: env.CLOUDINARY_API_KEY,
-    api_secret: env.CLOUDINARY_API_SECRET
-});
-
-const ALLOWED_BADGES = ['BESTSELLER', 'FLASH_SALE', 'NO1_PICK', 'DEAL_OF_WEEK', 'LIMITED_TIME'] as const;
-
-export const CreateCategorySchema = z.object({
-    name: z.string().min(1, "Category name is required").max(100).trim(),
-    description: z.string().max(1000).nullable().optional(),
-    is_featured: z.boolean().optional(),
-    sort_order: z.number().int().optional(),
-});
-
-export const VariantInputSchema = z.object({
-    id: z.string().uuid().optional(),
-    title: z.string().min(1, "Variant title is required").max(200),
-    sku: z.string().max(100).nullable().optional(),
-    options: z.record(z.string()).default({}),
-    price: z.number().nonnegative(),
-    cost_price: z.number().nonnegative().default(0),
-    stock: z.number().int().nonnegative().default(0),
-    low_stock_at: z.number().int().default(5),
-    image_url: z.string().url().nullable().optional().or(z.literal("")).transform(v => (v === "" ? null : v)),
-    is_active: z.boolean().default(true)
-});
-
-export const ProductValidationSchema = z.object({
-    name: z.string().min(1, "Name is required").max(200),
-    category_id: z.string().uuid().nullable().optional().or(z.literal('')).transform(v => (v === '' ? null : v)),
-    price: z.number().positive("Price must be greater than zero"),
-    compare_at_price: z.number().positive().nullable().optional(),
-    cost_price: z.number().nonnegative().nullable().optional(),
-    sku: z.string().max(100).nullable().optional(),
-    badge: z.enum(ALLOWED_BADGES).nullable().optional(),
-    sale_ends_at: z.string().datetime().nullable().optional(),
-    description: z.string().max(2000).nullable().optional(),
-    stock: z.number().int().nonnegative().default(0),
-    images: z.array(z.object({
-        image_url: z.string().url(),
-        image_public_id: z.string().min(1)
-    })).optional(),
-    variants: z.array(VariantInputSchema).optional(),
-    publish: z.boolean().optional()
-});
-
-export const BulkCreateSchema = z.object({
-    products: z.array(ProductValidationSchema).min(1).max(10)
-});
-
-export const BulkDeleteProductsSchema = z.object({
-    productIds: z.array(z.string().uuid()).min(1, "At least one product must be selected"),
-});
-
-export const ListProductsQuerySchema = z.object({
-    category_id: z.string().uuid().optional(),
-    badge: z.enum(ALLOWED_BADGES).optional(),
-    q: z.string().optional(),
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(50)
-});
-
-export const UpdateProductSchema = z.object({
-    name: z.string().min(1).max(200).optional(),
-    category_id: z
-        .string()
-        .uuid()
-        .nullable()
-        .optional()
-        .or(z.literal(''))
-        .transform((v): string | undefined => (v ? v : undefined)),
-    price: z.number().positive().optional(),
-    compare_at_price: z.number().positive().nullable().optional(),
-    cost_price: z.number().nonnegative().nullable().optional(),
-    sku: z.string().max(100).nullable().optional(),
-    badge: z.enum(ALLOWED_BADGES).nullable().optional(),
-    sale_ends_at: z.string().datetime().nullable().optional(),
-    description: z.string().max(2000).nullable().optional(),
-    status: z.enum(["draft", "published", "archived"]).optional(),
-    variants: z.array(VariantInputSchema).optional(),
-    images: z.array(z.object({ image_url: z.string(), image_public_id: z.string().optional() })).optional()
-});
-
-export const ListInventoryQuerySchema = z.object({
-    low_stock: z.enum(["true", "false"]).transform(v => v === "true").optional(),
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20)
-});
-
-export interface SignatureResult {
-    signature: string;
-    timestamp: number;
-    folder: string;
-    apiKey: string;
-    cloudName: string;
-}
-
-async function generateUniqueSlug(client: PoolClient, orgId: string, name: string): Promise<string> {
-    const base = name.toLowerCase().trim().replace(/[^a-z0-9-]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
-    const candidate = base.length > 0 ? base : "product";
-    let slug = candidate;
-    let suffix = 1;
-
-    while (suffix < 1000) {
-        const exists = await productsQueries.checkSlugExists(client, orgId, slug);
-        if (!exists) return slug;
-        suffix++;
-        slug = `${candidate}-${suffix}`;
-    }
-    throw new AppError("Could not generate unique product slug", 500, false);
-}
-
-export async function generateUploadSignature(orgId: string, folderType: "products" | "store" = "products"): Promise<SignatureResult> {
-    const timestamp = Math.round(new Date().getTime() / 1000);
-    const folder = `soko/${orgId}/${folderType}`;
-    const paramsToSign = { timestamp, folder };
-    const signature = cloudinary.utils.api_sign_request(paramsToSign, env.CLOUDINARY_API_SECRET);
-    return { signature, timestamp, folder, apiKey: env.CLOUDINARY_API_KEY, cloudName: env.CLOUDINARY_CLOUD_NAME };
-}
-
-export async function createCategory(orgId: string, rawBody: unknown) {
-    const body = typeof rawBody === "string" ? { name: rawBody } : rawBody;
-    const parsed = CreateCategorySchema.safeParse(body);
-    if (!parsed.success) {
-        throw new AppError(parsed.error.issues[0]?.message ?? "Invalid category payload", 400);
-    }
-    return productsQueries.createCategory(orgId, {
-        name: parsed.data.name,
-        description: parsed.data.description,
-        isFeatured: parsed.data.is_featured,
-        sortOrder: parsed.data.sort_order,
-    });
-}
-
-export async function listMerchantProducts(orgId: string, rawQuery: unknown) {
-    const parsed = ListProductsQuerySchema.safeParse(rawQuery);
-    if (!parsed.success) {
-        throw new AppError(parsed.error.issues[0]?.message ?? "Invalid query parameters", 400);
-    }
-    return productsQueries.listProducts(orgId, {
-        categoryId: parsed.data.category_id,
-        searchQuery: parsed.data.q,
-        badge: parsed.data.badge,
-        page: parsed.data.page,
-        limit: parsed.data.limit
-    });
-}
-
-export async function getMerchantProduct(orgId: string, productId: string) {
-    const product = await productsQueries.getProductById(orgId, productId);
-    if (!product) throw new AppError("Product not found", 404);
-    return product;
-}
-
-export async function modifyMerchantProduct(orgId: string, productId: string, rawBody: unknown) {
-    const parsed = UpdateProductSchema.safeParse(rawBody);
-    if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message ?? "Invalid request body", 400);
-    const existing = await productsQueries.getProductById(orgId, productId);
-    if (!existing) throw new AppError("Product not found", 404);
-    const updated = await productsQueries.updateProduct(orgId, productId, parsed.data);
-    if (!updated) throw new AppError("Product not found", 404);
-    return updated;
-}
-
-export async function updateMerchantProductStatus(orgId: string, productId: string, status: "draft" | "published" | "archived") {
-    const existing = await productsQueries.getProductById(orgId, productId);
-    if (!existing) throw new AppError("Product not found", 404);
-    return productsQueries.setProductStatus(orgId, productId, status);
-}
-
-export async function archiveMerchantProduct(orgId: string, productId: string) {
-    const existing = await productsQueries.getProductById(orgId, productId);
-    if (!existing) throw new AppError("Product not found", 404);
-    return productsQueries.archiveProduct(orgId, productId);
-}
-
-export async function unarchiveMerchantProduct(orgId: string, productId: string) {
-    const existing = await productsQueries.getProductById(orgId, productId);
-    if (!existing) throw new AppError("Product not found", 404);
-    return productsQueries.unarchiveProduct(orgId, productId);
-}
-
-// =============================================================================
-// BULLETPROOF SMART DELETION (Handles foreign keys safely with zero crashes)
-// =============================================================================
-export async function deleteMerchantProduct(
-    orgId: string,
-    productId: string
-): Promise<{ deleted: boolean; action: 'hard_deleted' | 'soft_deleted' }> {
-    const client = await pool.connect();
-    try {
-        await client.query("BEGIN");
-
-        // 1. Verify existence
-        const productRes = await client.query<{ id: string; name: string }>(
-            `SELECT id, name FROM products WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
-            [orgId, productId]
-        );
-
-        if (productRes.rows.length === 0) {
-            throw new AppError("Product not found or already deleted", 404);
-        }
-
-        // 2. Check if product has historical orders
-        const orderCheck = await client.query<{ count: string }>(
-            `SELECT COUNT(oi.id)::text AS count
-             FROM order_items oi
-             JOIN orders o ON o.id = oi.order_id
-             WHERE o.org_id = $1 AND (
-               oi.product_id = $2 OR 
-               oi.format_id IN (SELECT id FROM product_formats WHERE product_id = $2)
-             )`,
-            [orgId, productId]
-        );
-        const orderCount = parseInt(orderCheck.rows[0]?.count || '0', 10);
-
-        let action: 'hard_deleted' | 'soft_deleted' = 'hard_deleted';
-
-        if (orderCount > 0) {
-            // Has orders: Soft-delete and free the slug
-            const timestamp = Math.floor(Date.now() / 1000);
-            await client.query(
-                `UPDATE products
-                 SET deleted_at = NOW(),
-                     status = 'archived',
-                     slug = slug || '-deleted-' || $3,
-                     updated_at = NOW()
-                 WHERE org_id = $1 AND id = $2`,
-                [orgId, productId, timestamp]
-            );
-            action = 'soft_deleted';
-        } else {
-            // Zero orders: Manually clean children first to avoid any FK deadlock
-            await client.query(`DELETE FROM product_images WHERE product_id = $1`, [productId]);
-            await client.query(`DELETE FROM inventory WHERE product_id = $1`, [productId]);
-            await client.query(`DELETE FROM product_formats WHERE product_id = $1`, [productId]);
-            await client.query(`DELETE FROM product_variants WHERE product_id = $1`, [productId]);
-            await client.query(`DELETE FROM products WHERE org_id = $1 AND id = $2`, [orgId, productId]);
-            action = 'hard_deleted';
-        }
-
-        await client.query("COMMIT");
-        return { deleted: true, action };
-    } catch (err) {
-        await client.query("ROLLBACK");
-        throw err;
-    } finally {
-        client.release();
-    }
-}
-
-export async function deleteProductsBulk(orgId: string, rawBody: unknown) {
-    const parsed = BulkDeleteProductsSchema.safeParse(rawBody);
-    if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message ?? "Invalid payload", 400);
-
-    let count = 0;
-    for (const id of parsed.data.productIds) {
-        try {
-            await deleteMerchantProduct(orgId, id);
-            count++;
-        } catch {
-            // Ignore already deleted
-        }
-    }
-    return { deleted: true, count };
-}
-
-export async function listMerchantInventory(orgId: string, rawQuery: unknown) {
-    const parsed = ListInventoryQuerySchema.safeParse(rawQuery);
-    if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message ?? "Invalid query parameters", 400);
-    return productsQueries.listInventory(orgId, {
-        lowStockOnly: parsed.data.low_stock,
-        page: parsed.data.page,
-        limit: parsed.data.limit
-    });
-}
-
-export async function updateMerchantStock(orgId: string, productId: string, rawBody: unknown) {
-    const schema = z.object({ stock: z.number().int().nonnegative() });
-    const parsed = schema.safeParse(rawBody);
-    if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message ?? "Invalid request body", 400);
-    const updated = await productsQueries.updateInventoryStock(orgId, productId, parsed.data.stock);
-    if (!updated) throw new AppError("Product inventory not found", 404);
-    return updated;
-}
-
-export async function createProductsBulk(orgId: string, rawBody: unknown) {
-    const parsed = BulkCreateSchema.safeParse(rawBody);
-    if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message ?? "Invalid request body", 400);
-
-    const { products } = parsed.data;
-    const client = await pool.connect();
-    try {
-        await client.query("BEGIN");
-
-        const createdIds: string[] = [];
-        for (let i = 0; i < products.length; i++) {
-            const prod = products[i];
-            let finalCategoryId = prod.category_id;
-            if (!finalCategoryId) {
-                finalCategoryId = await productsQueries.findOrCreateCategoryByName(client, orgId, "General");
-            }
-
-            const slug = await generateUniqueSlug(client, orgId, prod.name);
-            const parentPrice = prod.variants && prod.variants.length > 0 ? prod.variants[0].price : prod.price;
-
-            const insertedId = await productsQueries.insertProductTransactional(client, orgId, {
-                category_id: finalCategoryId,
-                name: prod.name,
-                slug,
-                sku: prod.sku || null,
-                description: prod.description || null,
-                cost_price: null,
-                price: parentPrice,
-                compare_at_price: prod.compare_at_price || null,
-                badge: prod.badge || null,
-                sale_ends_at: prod.sale_ends_at || null,
-                status: prod.publish ? "published" : "draft"
-            });
-
-            await productsQueries.insertInventoryTransactional(client, insertedId, prod.stock || 10);
-
-            if (prod.images && prod.images.length > 0) {
-                for (let s = 0; s < prod.images.length; s++) {
-                    await productsQueries.insertProductImageTransactional(
-                        client,
-                        insertedId,
-                        prod.images[s].image_url,
-                        prod.images[s].image_public_id,
-                        s
-                    );
-                }
-            }
-
-            createdIds.push(insertedId);
-        }
-
-        await client.query("COMMIT");
-
-        const resultProducts = [];
-        for (const id of createdIds) {
-            const p = await productsQueries.getProductById(orgId, id);
-            if (p) resultProducts.push(p);
-        }
-        return resultProducts;
-    } catch (err) {
-        await client.query("ROLLBACK");
-        throw err;
-    } finally {
-        client.release();
-    }
-}
-</file>
-
-<file path="src/modules/stores/stores.service.ts">
-// =============================================================================
-// src/modules/stores/stores.service.ts
-// =============================================================================
-
-import { z } from "zod";
-import { AppError } from "../../utils/error";
-import * as storesQueries from "./stores.queries";
-
-const RESERVED_SLUGS = [
-    "admin",
-    "api",
-    "dashboard",
-    "login",
-    "register",
-    "orders",
-    "products",
-    "inventory",
-    "expenses",
-    "customers",
-    "settings",
-    "store",
-    "public",
-    "health",
-    "auth",
-    "logout",
-    "cart",
-    "checkout",
-    "help",
-    "support"
-];
-
-export const PromoTickerItemSchema = z.object({
-    id: z.string().min(1),
-    text: z.string().min(3, "Message must be at least 3 characters").max(200, "Message cannot exceed 200 characters"),
-    link: z.string().max(300).nullable().optional(),
-    is_active: z.boolean().default(true),
-    sort_order: z.number().int().default(0)
-});
-
-export const SavePromoTickerSchema = z.object({
-    items: z.array(PromoTickerItemSchema).max(10, "Maximum of 10 promotional ticker messages allowed")
-});
-
-export const SaveStoreSchema = z.object({
-    name: z.string().min(1, "Store name is required").max(200),
-    slug: z
-        .string()
-        .min(1, "Store address url is required")
-        .max(100)
-        .transform(s =>
-            s
-                .toLowerCase()
-                .trim()
-                .replace(/[^a-z0-9-]/g, "-")
-                .replace(/-+/g, "-")
-                .replace(/^-|-$/g, "")
-        )
-        .refine(slug => slug.length > 0, {
-            message: "Store address url is required"
-        })
-        .refine(slug => !RESERVED_SLUGS.includes(slug), {
-            message:
-                "This store address URL is a reserved system name. Please choose another."
-        }),
-    description: z
-        .string()
-        .max(1000)
-        .nullable()
-        .optional()
-        .or(z.literal(""))
-        .transform(v => (v === "" ? null : v)),
-    logo_url: z
-        .string()
-        .url("Logo link must be a valid URL")
-        .nullable()
-        .optional()
-        .or(z.literal(""))
-        .transform(v => (v === "" ? null : v)),
-    cover_image_url: z
-        .string()
-        .url("Cover link must be a valid URL")
-        .nullable()
-        .optional()
-        .or(z.literal(""))
-        .transform(v => (v === "" ? null : v)),
-    contact_phone: z
-        .string()
-        .max(20)
-        .nullable()
-        .optional()
-        .or(z.literal(""))
-        .transform(v => (v === "" ? null : v)),
-    contact_email: z
-        .string()
-        .email("Contact email must be valid")
-        .nullable()
-        .optional()
-        .or(z.literal(""))
-        .transform(v => (v === "" ? null : v)),
-    location: z
-        .string()
-        .max(300)
-        .nullable()
-        .optional()
-        .or(z.literal(""))
-        .transform(v => (v === "" ? null : v)),
-    delivery_info: z
-        .string()
-        .max(1000)
-        .nullable()
-        .optional()
-        .or(z.literal(""))
-        .transform(v => (v === "" ? null : v)),
-    status: z.enum(["draft", "published", "suspended"]).default("draft"),
-    hero_layout: z
-        .enum(["editorial", "split", "minimal", "promotional"])
-        .default("editorial"),
-    hero_headline: z
-        .string()
-        .max(300)
-        .nullable()
-        .optional()
-        .or(z.literal(""))
-        .transform(v => (v === "" ? null : v)),
-    hero_subheadline: z
-        .string()
-        .max(500)
-        .nullable()
-        .optional()
-        .or(z.literal(""))
-        .transform(v => (v === "" ? null : v)),
-    hero_cta_label: z
-        .string()
-        .max(50)
-        .nullable()
-        .optional()
-        .or(z.literal(""))
-        .transform(v => (v === "" ? null : v))
-});
-
-export const SaveMerchantLocationSchema = z.object({
-    name: z
-        .string()
-        .min(1, "Location hub name is required")
-        .max(200)
-        .default("Main Store / Hub"),
-    lat: z.number().min(-90).max(90),
-    lng: z.number().min(-180).max(180),
-    address_text: z
-        .string()
-        .max(500)
-        .nullable()
-        .optional()
-        .or(z.literal(""))
-        .transform(v => (v === "" ? null : v)),
-    max_delivery_radius_km: z.number().positive().max(100).default(15),
-    base_delivery_fee: z.number().nonnegative().default(100),
-    fee_per_km: z.number().nonnegative().default(25)
-});
-
-export async function fetchStoreSettings(orgId: string) {
-    return storesQueries.getStoreByOrgId(orgId);
-}
-
-export async function saveStoreSettings(orgId: string, rawBody: unknown) {
-    const parsed = SaveStoreSchema.safeParse(rawBody);
-    if (!parsed.success) {
-        throw new AppError(
-            parsed.error.issues[0]?.message ?? "Invalid request body",
-            400
-        );
-    }
-
-    const conflict = await storesQueries.checkSlugConflict(
-        orgId,
-        parsed.data.slug
-    );
-    if (conflict) {
-        throw new AppError(
-            "This store address URL is already taken by another merchant.",
-            409
-        );
-    }
-
-    return storesQueries.upsertStore(orgId, parsed.data);
-}
-
-export async function fetchMerchantLocation(orgId: string) {
-    return storesQueries.getMerchantLocation(orgId);
-}
-
-export async function saveMerchantLocation(orgId: string, rawBody: unknown) {
-    const parsed = SaveMerchantLocationSchema.safeParse(rawBody);
-    if (!parsed.success) {
-        throw new AppError(
-            parsed.error.issues[0]?.message ?? "Invalid location configuration",
-            400
-        );
-    }
-
-    return storesQueries.upsertMerchantLocation(orgId, parsed.data);
-}
-
-export async function fetchPromoTicker(orgId: string) {
-    return storesQueries.getPromoTicker(orgId);
-}
-
-export async function savePromoTicker(orgId: string, rawBody: unknown) {
-    const body = Array.isArray(rawBody) ? { items: rawBody } : rawBody;
-    const parsed = SavePromoTickerSchema.safeParse(body);
-    if (!parsed.success) {
-        throw new AppError(
-            parsed.error.issues[0]?.message ?? "Invalid promotional ticker data",
-            400
-        );
-    }
-    return storesQueries.updatePromoTicker(orgId, parsed.data.items);
-}
 </file>
 
 <file path="src/services/bookCover.service.ts">
@@ -16204,6 +15662,608 @@ export async function findBestBookCover(
     "tsx": "^4.11.0",
     "typescript": "^5.4.5"
   }
+}
+</file>
+
+<file path="src/modules/products/products.service.ts">
+// =============================================================================
+// soko-api/src/modules/products/products.service.ts
+// Bulletproof Deletion & Shared Catalog Multi-Tenant Product Management
+// =============================================================================
+
+import { z } from "zod";
+import { PoolClient } from "pg";
+import { v2 as cloudinary } from "cloudinary";
+import { pool } from "../../config/db";
+import { env } from "../../config/env";
+import { AppError } from "../../utils/error";
+import * as productsQueries from "./products.queries";
+
+cloudinary.config({
+    cloud_name: env.CLOUDINARY_CLOUD_NAME,
+    api_key: env.CLOUDINARY_API_KEY,
+    api_secret: env.CLOUDINARY_API_SECRET
+});
+
+const ALLOWED_BADGES = ['BESTSELLER', 'FLASH_SALE', 'NO1_PICK', 'DEAL_OF_WEEK', 'LIMITED_TIME'] as const;
+
+export const CreateCategorySchema = z.object({
+    name: z.string().min(1, "Category name is required").max(100).trim(),
+    description: z.string().max(1000).nullable().optional(),
+    is_featured: z.boolean().optional(),
+    sort_order: z.number().int().optional(),
+});
+
+export const VariantInputSchema = z.object({
+    id: z.string().uuid().optional(),
+    title: z.string().min(1, "Variant title is required").max(200),
+    sku: z.string().max(100).nullable().optional(),
+    options: z.record(z.string()).default({}),
+    price: z.number().nonnegative(),
+    cost_price: z.number().nonnegative().default(0),
+    stock: z.number().int().nonnegative().default(0),
+    low_stock_at: z.number().int().default(5),
+    image_url: z.string().url().nullable().optional().or(z.literal("")).transform(v => (v === "" ? null : v)),
+    is_active: z.boolean().default(true)
+});
+
+export const ProductValidationSchema = z.object({
+    name: z.string().min(1, "Name is required").max(200),
+    category_id: z.string().uuid().nullable().optional().or(z.literal('')).transform(v => (v === '' ? null : v)),
+    price: z.number().positive("Price must be greater than zero"),
+    compare_at_price: z.number().positive().nullable().optional(),
+    cost_price: z.number().nonnegative().nullable().optional(),
+    sku: z.string().max(100).nullable().optional(),
+    badge: z.enum(ALLOWED_BADGES).nullable().optional(),
+    sale_ends_at: z.string().datetime().nullable().optional(),
+    description: z.string().max(2000).nullable().optional(),
+    stock: z.number().int().nonnegative().default(0),
+    images: z.array(z.object({
+        image_url: z.string().url(),
+        image_public_id: z.string().min(1)
+    })).optional(),
+    variants: z.array(VariantInputSchema).optional(),
+    publish: z.boolean().optional()
+});
+
+export const BulkCreateSchema = z.object({
+    products: z.array(ProductValidationSchema).min(1).max(10)
+});
+
+export const BulkDeleteProductsSchema = z.object({
+    productIds: z.array(z.string().uuid()).min(1, "At least one product must be selected"),
+});
+
+export const ListProductsQuerySchema = z.object({
+    category_id: z.string().uuid().optional(),
+    badge: z.enum(ALLOWED_BADGES).optional(),
+    q: z.string().optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(50)
+});
+
+export const UpdateProductSchema = z.object({
+    name: z.string().min(1).max(200).optional(),
+    category_id: z
+        .string()
+        .uuid()
+        .nullable()
+        .optional()
+        .or(z.literal(''))
+        .transform((v): string | undefined => (v ? v : undefined)),
+    price: z.number().positive().optional(),
+    compare_at_price: z.number().positive().nullable().optional(),
+    cost_price: z.number().nonnegative().nullable().optional(),
+    sku: z.string().max(100).nullable().optional(),
+    badge: z.string().max(50).nullable().optional(),
+    sale_ends_at: z.string().datetime().nullable().optional(),
+    description: z.string().max(2000).nullable().optional(),
+    status: z.enum(["draft", "published", "archived"]).optional(),
+    variants: z.array(VariantInputSchema).optional(),
+    images: z.array(z.object({ image_url: z.string(), image_public_id: z.string().optional() })).optional()
+});
+
+export const ListInventoryQuerySchema = z.object({
+    low_stock: z.enum(["true", "false"]).transform(v => v === "true").optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20)
+});
+
+export interface SignatureResult {
+    signature: string;
+    timestamp: number;
+    folder: string;
+    apiKey: string;
+    cloudName: string;
+}
+
+async function generateUniqueSlug(client: PoolClient, orgId: string, name: string): Promise<string> {
+    const base = name.toLowerCase().trim().replace(/[^a-z0-9-]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+    const candidate = base.length > 0 ? base : "product";
+    let slug = candidate;
+    let suffix = 1;
+
+    while (suffix < 1000) {
+        const exists = await productsQueries.checkSlugExists(client, orgId, slug);
+        if (!exists) return slug;
+        suffix++;
+        slug = `${candidate}-${suffix}`;
+    }
+    throw new AppError("Could not generate unique product slug", 500, false);
+}
+
+export async function generateUploadSignature(orgId: string, folderType: "products" | "store" = "products"): Promise<SignatureResult> {
+    const effectiveCatalogOrgId = await productsQueries.getEffectiveCatalogOrgId(orgId);
+    const timestamp = Math.round(new Date().getTime() / 1000);
+    const targetFolderOrgId = folderType === 'products' ? effectiveCatalogOrgId : orgId;
+    const folder = `soko/${targetFolderOrgId}/${folderType}`;
+    const paramsToSign = { timestamp, folder };
+    const signature = cloudinary.utils.api_sign_request(paramsToSign, env.CLOUDINARY_API_SECRET);
+    return { signature, timestamp, folder, apiKey: env.CLOUDINARY_API_KEY, cloudName: env.CLOUDINARY_CLOUD_NAME };
+}
+
+export async function createCategory(orgId: string, rawBody: unknown) {
+    const body = typeof rawBody === "string" ? { name: rawBody } : rawBody;
+    const parsed = CreateCategorySchema.safeParse(body);
+    if (!parsed.success) {
+        throw new AppError(parsed.error.issues[0]?.message ?? "Invalid category payload", 400);
+    }
+    return productsQueries.createCategory(orgId, {
+        name: parsed.data.name,
+        description: parsed.data.description,
+        isFeatured: parsed.data.is_featured,
+        sortOrder: parsed.data.sort_order,
+    });
+}
+
+export async function listMerchantProducts(orgId: string, rawQuery: unknown) {
+    const parsed = ListProductsQuerySchema.safeParse(rawQuery);
+    if (!parsed.success) {
+        throw new AppError(parsed.error.issues[0]?.message ?? "Invalid query parameters", 400);
+    }
+    return productsQueries.listProducts(orgId, {
+        categoryId: parsed.data.category_id,
+        searchQuery: parsed.data.q,
+        badge: parsed.data.badge,
+        page: parsed.data.page,
+        limit: parsed.data.limit
+    });
+}
+
+export async function getMerchantProduct(orgId: string, productId: string) {
+    const product = await productsQueries.getProductById(orgId, productId);
+    if (!product) throw new AppError("Product not found", 404);
+    return product;
+}
+
+export async function modifyMerchantProduct(orgId: string, productId: string, rawBody: unknown) {
+    const parsed = UpdateProductSchema.safeParse(rawBody);
+    if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message ?? "Invalid request body", 400);
+    const existing = await productsQueries.getProductById(orgId, productId);
+    if (!existing) throw new AppError("Product not found", 404);
+    const updated = await productsQueries.updateProduct(orgId, productId, parsed.data);
+    if (!updated) throw new AppError("Product not found", 404);
+    return updated;
+}
+
+export async function updateMerchantProductStatus(orgId: string, productId: string, status: "draft" | "published" | "archived") {
+    const existing = await productsQueries.getProductById(orgId, productId);
+    if (!existing) throw new AppError("Product not found", 404);
+    return productsQueries.setProductStatus(orgId, productId, status);
+}
+
+export async function archiveMerchantProduct(orgId: string, productId: string) {
+    const existing = await productsQueries.getProductById(orgId, productId);
+    if (!existing) throw new AppError("Product not found", 404);
+    return productsQueries.archiveProduct(orgId, productId);
+}
+
+export async function unarchiveMerchantProduct(orgId: string, productId: string) {
+    const existing = await productsQueries.getProductById(orgId, productId);
+    if (!existing) throw new AppError("Product not found", 404);
+    return productsQueries.unarchiveProduct(orgId, productId);
+}
+
+/**
+ * Bulletproof deletion: Verifies historical orders across all tenant boundaries.
+ * If active paid orders or download tokens exist anywhere in the platform,
+ * applies a safe soft-delete so customer download links and financial ledgers stay intact.
+ */
+export async function deleteMerchantProduct(
+    orgId: string,
+    productId: string
+): Promise<{ deleted: boolean; action: 'hard_deleted' | 'soft_deleted' }> {
+    const effectiveCatalogOrgId = await productsQueries.getEffectiveCatalogOrgId(orgId);
+    const client = await pool.connect();
+
+    try {
+        await client.query("BEGIN");
+
+        // 1. Verify product exists under tenant OR effective shared catalog
+        const productRes = await client.query<{ id: string; name: string }>(
+            `SELECT id, name FROM products 
+             WHERE (org_id = $1 OR org_id = $2) AND id = $3 AND deleted_at IS NULL`,
+            [orgId, effectiveCatalogOrgId, productId]
+        );
+
+        if (productRes.rows.length === 0) {
+            throw new AppError("Product not found or already deleted", 404);
+        }
+
+        // 2. Check if product has historical orders on ANY store channel
+        const orderCheck = await client.query<{ count: string }>(
+            `SELECT COUNT(oi.id)::text AS count
+             FROM order_items oi
+             WHERE oi.product_id = $1 
+                OR oi.format_id IN (SELECT id FROM product_formats WHERE product_id = $1)`,
+            [productId]
+        );
+        const orderCount = parseInt(orderCheck.rows[0]?.count || '0', 10);
+
+        let action: 'hard_deleted' | 'soft_deleted' = 'hard_deleted';
+
+        if (orderCount > 0) {
+            // Soft-delete to preserve order history and digital download recovery
+            const timestamp = Math.floor(Date.now() / 1000);
+            await client.query(
+                `UPDATE products
+                 SET deleted_at = NOW(),
+                     status = 'archived',
+                     slug = slug || '-deleted-' || $2,
+                     updated_at = NOW()
+                 WHERE id = $1`,
+                [productId, timestamp]
+            );
+            action = 'soft_deleted';
+        } else {
+            // Clean child entities directly to ensure deterministic deletion
+            await client.query(`DELETE FROM product_images WHERE product_id = $1`, [productId]);
+            await client.query(`DELETE FROM inventory WHERE product_id = $1`, [productId]);
+            await client.query(`DELETE FROM product_formats WHERE product_id = $1`, [productId]);
+            await client.query(`DELETE FROM product_variants WHERE product_id = $1`, [productId]);
+            await client.query(`DELETE FROM products WHERE id = $1`, [productId]);
+            action = 'hard_deleted';
+        }
+
+        await client.query("COMMIT");
+        return { deleted: true, action };
+    } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+    } finally {
+        client.release();
+    }
+}
+
+export async function deleteProductsBulk(orgId: string, rawBody: unknown) {
+    const parsed = BulkDeleteProductsSchema.safeParse(rawBody);
+    if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message ?? "Invalid payload", 400);
+
+    let count = 0;
+    let softDeleted = 0;
+    let hardDeleted = 0;
+
+    for (const id of parsed.data.productIds) {
+        try {
+            const res = await deleteMerchantProduct(orgId, id);
+            count++;
+            if (res.action === 'soft_deleted') softDeleted++;
+            else hardDeleted++;
+        } catch {
+            // Non-blocking: continue processing remaining batch items
+        }
+    }
+    return { deleted: true, count, softDeleted, hardDeleted };
+}
+
+export async function listMerchantInventory(orgId: string, rawQuery: unknown) {
+    const parsed = ListInventoryQuerySchema.safeParse(rawQuery);
+    if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message ?? "Invalid query parameters", 400);
+    return productsQueries.listInventory(orgId, {
+        lowStockOnly: parsed.data.low_stock,
+        page: parsed.data.page,
+        limit: parsed.data.limit
+    });
+}
+
+export async function updateMerchantStock(orgId: string, productId: string, rawBody: unknown) {
+    const schema = z.object({ stock: z.number().int().nonnegative() });
+    const parsed = schema.safeParse(rawBody);
+    if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message ?? "Invalid request body", 400);
+    const updated = await productsQueries.updateInventoryStock(orgId, productId, parsed.data.stock);
+    if (!updated) throw new AppError("Product inventory not found", 404);
+    return updated;
+}
+
+export async function createProductsBulk(orgId: string, rawBody: unknown) {
+    const parsed = BulkCreateSchema.safeParse(rawBody);
+    if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message ?? "Invalid request body", 400);
+
+    const effectiveCatalogOrgId = await productsQueries.getEffectiveCatalogOrgId(orgId);
+    const { products } = parsed.data;
+    const client = await pool.connect();
+
+    try {
+        await client.query("BEGIN");
+
+        const createdIds: string[] = [];
+        for (let i = 0; i < products.length; i++) {
+            const prod = products[i];
+            let finalCategoryId = prod.category_id;
+            if (!finalCategoryId) {
+                finalCategoryId = await productsQueries.findOrCreateCategoryByName(client, effectiveCatalogOrgId, "General");
+            }
+
+            const slug = await generateUniqueSlug(client, effectiveCatalogOrgId, prod.name);
+            const parentPrice = prod.variants && prod.variants.length > 0 ? prod.variants[0].price : prod.price;
+
+            const insertedId = await productsQueries.insertProductTransactional(client, effectiveCatalogOrgId, {
+                category_id: finalCategoryId,
+                name: prod.name,
+                slug,
+                sku: prod.sku || null,
+                description: prod.description || null,
+                cost_price: null,
+                price: parentPrice,
+                compare_at_price: prod.compare_at_price || null,
+                badge: prod.badge || null,
+                sale_ends_at: prod.sale_ends_at || null,
+                status: prod.publish ? "published" : "draft"
+            });
+
+            await productsQueries.insertInventoryTransactional(client, insertedId, prod.stock || 10);
+
+            if (prod.images && prod.images.length > 0) {
+                for (let s = 0; s < prod.images.length; s++) {
+                    await productsQueries.insertProductImageTransactional(
+                        client,
+                        insertedId,
+                        prod.images[s].image_url,
+                        prod.images[s].image_public_id,
+                        s
+                    );
+                }
+            }
+
+            createdIds.push(insertedId);
+        }
+
+        await client.query("COMMIT");
+
+        const resultProducts = [];
+        for (const id of createdIds) {
+            const p = await productsQueries.getProductById(orgId, id);
+            if (p) resultProducts.push(p);
+        }
+        return resultProducts;
+    } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+    } finally {
+        client.release();
+    }
+}
+</file>
+
+<file path="src/modules/stores/stores.service.ts">
+// =============================================================================
+// src/modules/stores/stores.service.ts
+// Storefront Settings & Channel Configuration Management
+// =============================================================================
+
+import { z } from "zod";
+import { AppError } from "../../utils/error";
+import * as storesQueries from "./stores.queries";
+
+const RESERVED_SLUGS = [
+    "admin",
+    "api",
+    "dashboard",
+    "login",
+    "register",
+    "orders",
+    "products",
+    "inventory",
+    "expenses",
+    "customers",
+    "settings",
+    "store",
+    "public",
+    "health",
+    "auth",
+    "logout",
+    "cart",
+    "checkout",
+    "help",
+    "support"
+];
+
+export const PromoTickerItemSchema = z.object({
+    id: z.string().min(1),
+    text: z.string().min(3, "Message must be at least 3 characters").max(200, "Message cannot exceed 200 characters"),
+    link: z.string().max(300).nullable().optional(),
+    is_active: z.boolean().default(true),
+    sort_order: z.number().int().default(0)
+});
+
+export const SavePromoTickerSchema = z.object({
+    items: z.array(PromoTickerItemSchema).max(10, "Maximum of 10 promotional ticker messages allowed")
+});
+
+export const SaveStoreSchema = z.object({
+    name: z.string().min(1, "Store name is required").max(200),
+    slug: z
+        .string()
+        .min(1, "Store address url is required")
+        .max(100)
+        .transform(s =>
+            s
+                .toLowerCase()
+                .trim()
+                .replace(/[^a-z0-9-]/g, "-")
+                .replace(/-+/g, "-")
+                .replace(/^-|-$/g, "")
+        )
+        .refine(slug => slug.length > 0, {
+            message: "Store address url is required"
+        })
+        .refine(slug => !RESERVED_SLUGS.includes(slug), {
+            message:
+                "This store address URL is a reserved system name. Please choose another."
+        }),
+    description: z
+        .string()
+        .max(1000)
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
+    logo_url: z
+        .string()
+        .url("Logo link must be a valid URL")
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
+    cover_image_url: z
+        .string()
+        .url("Cover link must be a valid URL")
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
+    contact_phone: z
+        .string()
+        .max(20)
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
+    contact_email: z
+        .string()
+        .email("Contact email must be valid")
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
+    location: z
+        .string()
+        .max(300)
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
+    delivery_info: z
+        .string()
+        .max(1000)
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
+    status: z.enum(["draft", "published", "suspended"]).default("draft"),
+    hero_layout: z
+        .enum(["editorial", "split", "minimal", "promotional"])
+        .default("editorial"),
+    hero_headline: z
+        .string()
+        .max(300)
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
+    hero_subheadline: z
+        .string()
+        .max(500)
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
+    hero_cta_label: z
+        .string()
+        .max(50)
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v))
+});
+
+export const SaveMerchantLocationSchema = z.object({
+    name: z
+        .string()
+        .min(1, "Location hub name is required")
+        .max(200)
+        .default("Main Store / Hub"),
+    lat: z.number().min(-90).max(90),
+    lng: z.number().min(-180).max(180),
+    address_text: z
+        .string()
+        .max(500)
+        .nullable()
+        .optional()
+        .or(z.literal(""))
+        .transform(v => (v === "" ? null : v)),
+    max_delivery_radius_km: z.number().positive().max(100).default(15),
+    base_delivery_fee: z.number().nonnegative().default(100),
+    fee_per_km: z.number().nonnegative().default(25)
+});
+
+export async function fetchStoreSettings(orgId: string) {
+    return storesQueries.getStoreByOrgId(orgId);
+}
+
+export async function saveStoreSettings(orgId: string, rawBody: unknown) {
+    const parsed = SaveStoreSchema.safeParse(rawBody);
+    if (!parsed.success) {
+        throw new AppError(
+            parsed.error.issues[0]?.message ?? "Invalid request body",
+            400
+        );
+    }
+
+    const conflict = await storesQueries.checkSlugConflict(
+        orgId,
+        parsed.data.slug
+    );
+    if (conflict) {
+        throw new AppError(
+            "This store address URL is already taken by another merchant.",
+            409
+        );
+    }
+
+    return storesQueries.upsertStore(orgId, parsed.data);
+}
+
+export async function fetchMerchantLocation(orgId: string) {
+    return storesQueries.getMerchantLocation(orgId);
+}
+
+export async function saveMerchantLocation(orgId: string, rawBody: unknown) {
+    const parsed = SaveMerchantLocationSchema.safeParse(rawBody);
+    if (!parsed.success) {
+        throw new AppError(
+            parsed.error.issues[0]?.message ?? "Invalid location configuration",
+            400
+        );
+    }
+
+    return storesQueries.upsertMerchantLocation(orgId, parsed.data);
+}
+
+export async function fetchPromoTicker(orgId: string) {
+    return storesQueries.getPromoTicker(orgId);
+}
+
+export async function savePromoTicker(orgId: string, rawBody: unknown) {
+    const body = Array.isArray(rawBody) ? { items: rawBody } : rawBody;
+    const parsed = SavePromoTickerSchema.safeParse(body);
+    if (!parsed.success) {
+        throw new AppError(
+            parsed.error.issues[0]?.message ?? "Invalid promotional ticker data",
+            400
+        );
+    }
+    return storesQueries.updatePromoTicker(orgId, parsed.data.items);
 }
 </file>
 
@@ -17177,7 +17237,7 @@ export async function getCashReconciliationSummary(
 <file path="src/modules/products/products.queries.ts">
 // =============================================================================
 // soko-api/src/modules/products/products.queries.ts
-// Product and Category catalog queries with Trigram Fuzzy Search support.
+// Product and Category Catalog Queries with First-Added-First Default Sorting
 // =============================================================================
 
 import { PoolClient } from "pg";
@@ -17301,7 +17361,19 @@ function slugifyCategory(input: string): string {
     return base.length > 0 ? base : 'category';
 }
 
+export async function getEffectiveCatalogOrgId(orgId: string): Promise<string> {
+    const result = await query<{ catalog_source_org_id: string | null }>(
+        `SELECT catalog_source_org_id 
+         FROM organizations 
+         WHERE id = $1 AND deleted_at IS NULL`,
+        [orgId]
+    );
+    return result.rows[0]?.catalog_source_org_id || orgId;
+}
+
 export async function listCategories(orgId: string): Promise<CategoryRow[]> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
+
     const result = await query<CategoryRow>(
         `SELECT c.id, c.org_id, c.name, c.slug, c.description, c.is_featured, c.sort_order, c.created_at,
                 COALESCE((
@@ -17312,7 +17384,7 @@ export async function listCategories(orgId: string): Promise<CategoryRow[]> {
          FROM   categories c
          WHERE  c.org_id = $1 
          ORDER  BY c.is_featured DESC, c.sort_order ASC, c.name ASC`,
-        [orgId]
+        [effectiveCatalogOrgId]
     );
     return result.rows;
 }
@@ -17364,6 +17436,7 @@ export async function createCategory(
         sortOrder?: number;
     }
 ): Promise<CategoryRow> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
     const trimmedName = data.name.trim();
     const slug = slugifyCategory(trimmedName);
 
@@ -17377,7 +17450,7 @@ export async function createCategory(
              sort_order = COALESCE(EXCLUDED.sort_order, categories.sort_order)
          RETURNING id, org_id, name, slug, description, is_featured, sort_order, created_at`,
         [
-            orgId,
+            effectiveCatalogOrgId,
             trimmedName,
             slug,
             data.description?.trim() || null,
@@ -17461,15 +17534,20 @@ const PRODUCT_SELECT_FIELDS = `
   ) AS formats
 `;
 
+/**
+ * Admin Product Table: Defaults to FIFO (First Added First: created_at ASC, id ASC)
+ * so foundational titles with verified covers are presented at the top.
+ */
 export async function listProducts(
     orgId: string,
     options: ListProductsOptions
 ): Promise<{ products: ProductWithImages[]; total: number }> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
     const { categoryId, searchQuery, badge, page, limit } = options;
     const offset = (page - 1) * limit;
 
     const conditions: string[] = ["p.org_id = $1", "p.deleted_at IS NULL"];
-    const params: unknown[] = [orgId];
+    const params: unknown[] = [effectiveCatalogOrgId];
     let paramIndex = 2;
 
     if (categoryId) {
@@ -17484,7 +17562,8 @@ export async function listProducts(
         paramIndex++;
     }
 
-    let relevanceOrderClause = `(CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, p.created_at DESC`;
+    // Unarchived first, then foundational books first (FIFO: created_at ASC, id ASC)
+    let relevanceOrderClause = `(CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, p.created_at ASC, p.id ASC`;
 
     if (searchQuery && searchQuery.trim().length > 0) {
         const fuzzy = buildFuzzySearchQuery({
@@ -17503,7 +17582,7 @@ export async function listProducts(
             conditions.push(fuzzy.conditionSql);
             params.push(...fuzzy.params);
             paramIndex = fuzzy.nextParamIndex;
-            relevanceOrderClause = `(CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, ${fuzzy.relevanceSql} DESC, p.created_at DESC`;
+            relevanceOrderClause = `(CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, ${fuzzy.relevanceSql} DESC, p.created_at ASC, p.id ASC`;
         }
     }
 
@@ -17540,12 +17619,14 @@ export async function getProductById(
     orgId: string,
     productId: string
 ): Promise<ProductWithImages | null> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
+
     const result = await query<ProductWithImages>(
         `SELECT ${PRODUCT_SELECT_FIELDS}
          FROM products p
          LEFT JOIN categories c ON c.id = p.category_id
-         WHERE p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL`,
-        [orgId, productId]
+         WHERE (p.org_id = $1 OR p.org_id = $2) AND p.id = $3 AND p.deleted_at IS NULL`,
+        [orgId, effectiveCatalogOrgId, productId]
     );
     return result.rows[0] ?? null;
 }
@@ -17568,13 +17649,15 @@ export async function updateProduct(
         images?: Array<{ image_url: string; image_public_id?: string }>;
     }
 ): Promise<ProductWithImages | null> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
     const client = await pool.connect();
+
     try {
         await client.query("BEGIN");
 
         const setClauses: string[] = [];
-        const params: unknown[] = [orgId, productId];
-        let paramIndex = 3;
+        const params: unknown[] = [orgId, effectiveCatalogOrgId, productId];
+        let paramIndex = 4;
 
         const { variants, images, sale_ends_at, ...directFields } = fields;
 
@@ -17596,7 +17679,7 @@ export async function updateProduct(
             const updateQuery = `
               UPDATE products
               SET ${setClauses.join(", ")}, updated_at = NOW()
-              WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL
+              WHERE (org_id = $1 OR org_id = $2) AND id = $3 AND deleted_at IS NULL
             `;
             await client.query(updateQuery, params);
         }
@@ -17617,7 +17700,7 @@ export async function updateProduct(
         }
 
         if (variants !== undefined) {
-            await syncProductVariantsTransactional(client, orgId, productId, variants);
+            await syncProductVariantsTransactional(client, effectiveCatalogOrgId, productId, variants);
         }
 
         await client.query("COMMIT");
@@ -17717,11 +17800,13 @@ export async function archiveProduct(
     orgId: string,
     productId: string
 ): Promise<boolean> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
+
     const result = await query(
         `UPDATE products 
          SET status = 'archived', updated_at = NOW() 
-         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
-        [orgId, productId]
+         WHERE (org_id = $1 OR org_id = $2) AND id = $3 AND deleted_at IS NULL`,
+        [orgId, effectiveCatalogOrgId, productId]
     );
     return result.rowCount !== null && result.rowCount > 0;
 }
@@ -17730,71 +17815,13 @@ export async function unarchiveProduct(
     orgId: string,
     productId: string
 ): Promise<boolean> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
+
     const result = await query(
         `UPDATE products 
          SET status = 'draft', updated_at = NOW() 
-         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
-        [orgId, productId]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function getProductOrderCount(
-    client: PoolClient,
-    orgId: string,
-    productId: string
-): Promise<number> {
-    const result = await client.query<{ count: string }>(
-        `SELECT COUNT(oi.id)::text AS count
-         FROM order_items oi
-         INNER JOIN orders o ON o.id = oi.order_id
-         WHERE o.org_id = $1 AND (
-           oi.product_id = $2 OR 
-           oi.format_id IN (SELECT id FROM product_formats WHERE product_id = $2)
-         )`,
-        [orgId, productId]
-    );
-    return parseInt(result.rows[0]?.count || '0', 10);
-}
-
-export async function softDeleteProductTransactional(
-    client: PoolClient,
-    orgId: string,
-    productId: string
-): Promise<void> {
-    const timestamp = Math.floor(Date.now() / 1000);
-    await client.query(
-        `UPDATE products
-         SET deleted_at = NOW(),
-             status     = 'archived',
-             slug       = slug || '-deleted-' || $3,
-             updated_at = NOW()
-         WHERE org_id = $1 AND id = $2`,
-        [orgId, productId, timestamp]
-    );
-}
-
-export async function hardDeleteProductTransactional(
-    client: PoolClient,
-    orgId: string,
-    productId: string
-): Promise<boolean> {
-    const result = await client.query(
-        `DELETE FROM products 
-         WHERE org_id = $1 AND id = $2`,
-        [orgId, productId]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function deleteProductPermanently(
-    orgId: string,
-    productId: string
-): Promise<boolean> {
-    const result = await query(
-        `DELETE FROM products 
-         WHERE org_id = $1 AND id = $2`,
-        [orgId, productId]
+         WHERE (org_id = $1 OR org_id = $2) AND id = $3 AND deleted_at IS NULL`,
+        [orgId, effectiveCatalogOrgId, productId]
     );
     return result.rowCount !== null && result.rowCount > 0;
 }
@@ -17804,11 +17831,13 @@ export async function setProductStatus(
     productId: string,
     status: "draft" | "published" | "archived"
 ): Promise<ProductWithImages | null> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
+
     await query(
         `UPDATE products 
          SET status = $3, updated_at = NOW() 
-         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
-        [orgId, productId, status]
+         WHERE (org_id = $1 OR org_id = $2) AND id = $4 AND deleted_at IS NULL`,
+        [orgId, effectiveCatalogOrgId, status, productId]
     );
     return getProductById(orgId, productId);
 }
@@ -17817,12 +17846,13 @@ export async function listInventory(
     orgId: string,
     options: ListInventoryOptions
 ): Promise<{ inventory: InventoryWithProduct[]; total: number }> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
     const { lowStockOnly, page, limit } = options;
     const offset = (page - 1) * limit;
 
-    const conditions: string[] = ["p.org_id = $1", "p.deleted_at IS NULL"];
-    const params: unknown[] = [orgId];
-    let paramIndex = 2;
+    const conditions: string[] = ["(p.org_id = $1 OR p.org_id = $2)", "p.deleted_at IS NULL"];
+    const params: unknown[] = [orgId, effectiveCatalogOrgId];
+    let paramIndex = 3;
 
     if (lowStockOnly) {
         conditions.push("i.stock <= i.low_stock_at");
@@ -17864,15 +17894,17 @@ export async function updateInventoryStock(
     productId: string,
     stock: number
 ): Promise<InventoryWithProduct | null> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
+
     const result = await query<InventoryWithProduct>(
         `UPDATE inventory i
-         SET stock = $3, updated_at = NOW()
+         SET stock = $4, updated_at = NOW()
          FROM products p
-         WHERE p.id = i.product_id AND p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL
+         WHERE p.id = i.product_id AND (p.org_id = $1 OR p.org_id = $2) AND p.id = $3 AND p.deleted_at IS NULL
          RETURNING i.id, i.product_id, i.stock, i.low_stock_at, i.updated_at,
                    p.name AS product_name, p.sku AS product_sku,
                    0::int AS variants_count`,
-        [orgId, productId, stock]
+        [orgId, effectiveCatalogOrgId, productId, stock]
     );
     return result.rows[0] ?? null;
 }
@@ -17883,7 +17915,7 @@ export async function checkCategoryExists(
     categoryId: string
 ): Promise<boolean> {
     const result = await client.query(
-        "SELECT 1 FROM categories WHERE id = $1 AND org_id = $2",
+        "SELECT 1 FROM categories WHERE id = $1 AND (org_id = $2 OR org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $2))",
         [categoryId, orgId]
     );
     return result.rowCount !== null && result.rowCount > 0;
@@ -17895,7 +17927,7 @@ export async function checkSlugExists(
     slug: string
 ): Promise<boolean> {
     const result = await client.query(
-        "SELECT 1 FROM products WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL",
+        "SELECT 1 FROM products WHERE (org_id = $1 OR org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1)) AND slug = $2 AND deleted_at IS NULL",
         [orgId, slug]
     );
     return result.rowCount !== null && result.rowCount > 0;
@@ -17967,6 +17999,7 @@ export async function insertProductImageTransactional(
         [productId, imageUrl, imagePublicId, sortOrder]
     );
 }
+
 export async function insertProductVariantTransactional(
     client: PoolClient,
     orgId: string,
@@ -17998,18 +18031,183 @@ export async function insertProductVariantTransactional(
 }
 </file>
 
+<file path="src/app.ts">
+// =============================================================================
+// soko-api/src/app.ts
+// Multi-Frontend CORS Support & Master Express Route Registrations
+// =============================================================================
+
+import express, { Request, Response, NextFunction } from "express";
+import helmet from "helmet";
+import cors from "cors";
+import pinoHttp from "pino-http";
+import rateLimit from "express-rate-limit";
+import { v4 as uuidv4 } from "uuid";
+import { env } from "./config/env";
+import { errorHandler } from "./middleware/errorHandler";
+import { AppError } from "./utils/error";
+import { HealthCheckResponse } from "./types/health";
+import { pool } from "./config/db";
+
+// Route Imports
+import authRoutes from "./modules/auth/auth.routes";
+import customersRoutes from "./modules/customers/customers.routes";
+import transactionsRoutes from "./modules/transactions/transactions.routes";
+import dashboardRoutes from "./modules/transactions/dashboard.routes";
+import paymentsRoutes from "./modules/payments/payments.routes";
+import agentRoutes from "./verticals/market/agent.routes";
+import expensesRoutes from "./modules/expenses/expenses.routes";
+import adminRoutes from "./modules/admin/admin.routes";
+import productsRoutes from "./modules/products/products.routes";
+import productFormatsRoutes from "./modules/product-formats/product-formats.routes";
+import storesRoutes from "./modules/stores/stores.routes";
+import ordersRoutes from "./modules/orders/orders.routes";
+import publicRoutes from "./modules/public/public.routes";
+import mpesaCredentialsRoutes from "./modules/mpesa-credentials/mpesa-credentials.routes";
+import analyticsRoutes from "./modules/analytics/analytics.routes";
+import booksRoutes from "./verticals/books/books.routes";
+import bannersRoutes from "./modules/banners/banners.routes";
+import smtpRoutes from "./modules/smtp/smtp.routes";
+
+const app = express();
+
+app.use(helmet());
+
+// Multi-Frontend Allowed Origins
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:3333',
+];
+
+// Support comma-separated URLs in FRONTEND_URL
+if (env.FRONTEND_URL) {
+  const customOrigins = env.FRONTEND_URL.split(',').map((o) => o.trim().replace(/\/$/, ''));
+  allowedOrigins.push(...customOrigins);
+}
+
+app.use(
+  cors({
+    origin: (requestOrigin, callback) => {
+      if (!requestOrigin) return callback(null, true);
+
+      if (allowedOrigins.includes(requestOrigin)) {
+        return callback(null, true);
+      }
+
+      if (requestOrigin.endsWith('.vercel.app')) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`Origin ${requestOrigin} is not allowed by CORS`));
+    },
+    credentials: true,
+  })
+);
+
+app.use(express.json());
+
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  req.requestId = uuidv4();
+  next();
+});
+
+app.use(
+  pinoHttp({
+    customProps: req => ({
+      requestId: (req as Request).requestId
+    }),
+    autoLogging: {
+      ignore: req => req.url === "/api/v1/health"
+    }
+  })
+);
+
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: {
+      message: "Too many requests. Please try again later."
+    }
+  }
+});
+app.use(limiter);
+
+const apiRouter = express.Router();
+
+apiRouter.get("/health", async (_req: Request, res: Response) => {
+  let dbStatus: HealthCheckResponse["db"] = "connected";
+
+  try {
+    await pool.query("SELECT 1");
+  } catch {
+    dbStatus = "error";
+  }
+
+  const response: HealthCheckResponse = {
+    status: dbStatus === "connected" ? "ok" : "error",
+    db: dbStatus,
+    timestamp: new Date().toISOString()
+  };
+
+  res.status(dbStatus === "connected" ? 200 : 503).json(response);
+});
+
+apiRouter.use("/auth", authRoutes);
+apiRouter.use("/customers", customersRoutes);
+apiRouter.use("/transactions", transactionsRoutes);
+apiRouter.use("/dashboard", dashboardRoutes);
+apiRouter.use("/payments", paymentsRoutes);
+apiRouter.use("/agent", agentRoutes);
+apiRouter.use("/expenses", expensesRoutes);
+apiRouter.use("/public", publicRoutes);
+apiRouter.use("/admin", adminRoutes);
+apiRouter.use("/products/:productId/formats", productFormatsRoutes);
+apiRouter.use("/products", productsRoutes);
+apiRouter.use("/store", storesRoutes);
+apiRouter.use("/orders", ordersRoutes);
+apiRouter.use("/mpesa-credentials", mpesaCredentialsRoutes);
+apiRouter.use("/analytics", analyticsRoutes);
+apiRouter.use("/books", booksRoutes);
+apiRouter.use("/banners", bannersRoutes);
+apiRouter.use("/smtp", smtpRoutes);
+
+app.use("/api/v1", apiRouter);
+
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  next(
+    new AppError(
+      `Endpoint not found: ${req.method} ${req.originalUrl}`,
+      404
+    )
+  );
+});
+
+app.use(errorHandler);
+
+export default app;
+</file>
+
 <file path="src/modules/public/public.queries.ts">
 // =============================================================================
 // soko-api/src/modules/public/public.queries.ts
-// Strict Tenant-Isolated Public Storefront Queries with DB-Native Fuzzy Search
+// Strict Tenant-Isolated Public Storefront Queries with First-Added-First Ordering
 // =============================================================================
 
 import { query } from '../../config/db';
 import { buildFuzzySearchQuery } from '../../utils/search';
 
+export type ProductSortOption = 'first_added' | 'newest' | 'price_asc' | 'price_desc' | 'title_asc';
+
 export interface PublicStoreRow {
   id: string;
   org_id: string;
+  catalog_source_org_id: string | null;
+  digital_only: boolean;
   slug: string;
   name: string;
   description: string | null;
@@ -18102,6 +18300,7 @@ export interface LocalEstateRow {
 export interface ListStoreProductsOptions {
   searchQuery?: string;
   category?: string;
+  sort?: ProductSortOption;
   page?: number;
   limit?: number;
 }
@@ -18133,9 +18332,23 @@ export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow
   const cleanSlug = (slug || '').trim().toLowerCase();
 
   const result = await query<PublicStoreRow>(
-    `SELECT s.id, s.org_id, s.slug, s.name, s.description, s.logo_url, s.cover_image_url,
-            s.contact_phone, s.contact_email, s.location, s.delivery_info,
-            s.hero_layout, s.hero_headline, s.hero_subheadline, s.hero_cta_label,
+    `SELECT s.id,
+            s.org_id,
+            o.catalog_source_org_id,
+            COALESCE((o.settings->>'digital_only')::boolean, false) AS digital_only,
+            s.slug,
+            s.name,
+            s.description,
+            s.logo_url,
+            s.cover_image_url,
+            s.contact_phone,
+            s.contact_email,
+            s.location,
+            s.delivery_info,
+            s.hero_layout,
+            s.hero_headline,
+            s.hero_subheadline,
+            s.hero_cta_label,
             COALESCE(s.promo_ticker, '[]'::jsonb) AS promo_ticker
      FROM   stores s
      INNER JOIN organizations o ON o.id = s.org_id
@@ -18149,9 +18362,36 @@ export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow
   return result.rows[0] ?? null;
 }
 
+/**
+ * Resolves the deterministic ORDER BY clause based on requested sort option.
+ * Defaults strictly to FIRST-ADDED-FIRST (FIFO: created_at ASC, id ASC)
+ * so bestselling titles with curated studio covers display at the top of the storefront.
+ */
+function resolveSortOrderClause(sort?: ProductSortOption): string {
+  switch (sort) {
+    case 'price_asc':
+      return 'p.price ASC, p.created_at ASC, p.id ASC';
+    case 'price_desc':
+      return 'p.price DESC, p.created_at ASC, p.id ASC';
+    case 'title_asc':
+      return 'p.name ASC, p.created_at ASC, p.id ASC';
+    case 'newest':
+      return 'p.created_at DESC, p.id DESC';
+    case 'first_added':
+    default:
+      // FIFO Order: Books added first appear first, with id ASC as deterministic tie-breaker
+      return 'p.created_at ASC, p.id ASC';
+  }
+}
+
+/**
+ * Queries catalog items for a given storefront channel.
+ * Defaults to displaying books added first (bestsellers with proper covers).
+ */
 export async function getProductsByStoreOrgIdPublic(
-  orgId: string,
-  options: ListStoreProductsOptions = {}
+  catalogOrgId: string,
+  options: ListStoreProductsOptions = {},
+  digitalOnly = false
 ): Promise<PaginatedPublicProducts> {
   const page = Math.max(1, options.page || 1);
   const limit = Math.min(100, Math.max(1, options.limit || 50));
@@ -18162,10 +18402,19 @@ export async function getProductsByStoreOrgIdPublic(
     "p.status = 'published'",
     'p.deleted_at IS NULL',
   ];
-  const params: unknown[] = [orgId];
+  const params: unknown[] = [catalogOrgId];
   let paramIndex = 2;
 
-  // 1. Category Filter
+  // 1. Digital-Only Channel Filter (EbookReads restriction)
+  if (digitalOnly) {
+    conditions.push(`EXISTS (
+      SELECT 1 FROM product_formats pf_filter
+      WHERE pf_filter.product_id = p.id
+        AND pf_filter.format IN ('pdf', 'epub')
+    )`);
+  }
+
+  // 2. Category Filter
   if (
     options.category &&
     !['general', 'all', 'all books'].includes(options.category.toLowerCase().trim())
@@ -18186,8 +18435,9 @@ export async function getProductsByStoreOrgIdPublic(
     }
   }
 
-  // 2. Database-Level Native Trigram Fuzzy Matcher
-  let relevanceOrderClause = 'p.created_at DESC';
+  // 3. FIFO Sort Order Clause with Search Override
+  const baseSortClause = resolveSortOrderClause(options.sort);
+  let orderClause = baseSortClause;
 
   if (options.searchQuery && options.searchQuery.trim().length > 0) {
     const fuzzy = buildFuzzySearchQuery({
@@ -18206,13 +18456,12 @@ export async function getProductsByStoreOrgIdPublic(
       conditions.push(fuzzy.conditionSql);
       params.push(...fuzzy.params);
       paramIndex = fuzzy.nextParamIndex;
-      relevanceOrderClause = `${fuzzy.relevanceSql} DESC, p.created_at DESC`;
+      orderClause = `${fuzzy.relevanceSql} DESC, ${baseSortClause}`;
     }
   }
 
   const whereClause = conditions.join(' AND ');
 
-  // Count total matching items across the whole catalog
   const countResult = await query<{ count: string }>(
     `SELECT COUNT(p.id) AS count
      FROM   products p
@@ -18233,6 +18482,10 @@ export async function getProductsByStoreOrgIdPublic(
       totalPages: 1,
     };
   }
+
+  const formatFilterClause = digitalOnly
+    ? "AND pf.format IN ('pdf', 'epub')"
+    : '';
 
   const dataParams = [...params, limit, offset];
   const dataResult = await query<PublicProductRow>(
@@ -18289,6 +18542,7 @@ export async function getProductsByStoreOrgIdPublic(
                 )
                 FROM product_formats pf
                 WHERE pf.product_id = p.id
+                ${formatFilterClause}
               ),
               '[]'::json
             ) AS formats
@@ -18296,7 +18550,7 @@ export async function getProductsByStoreOrgIdPublic(
      LEFT JOIN categories c ON c.id = p.category_id
      LEFT JOIN inventory i  ON i.product_id = p.id
      WHERE  ${whereClause}
-     ORDER  BY ${relevanceOrderClause}
+     ORDER  BY ${orderClause}
      LIMIT  $${paramIndex} OFFSET $${paramIndex + 1}`,
     dataParams
   );
@@ -18311,9 +18565,14 @@ export async function getProductsByStoreOrgIdPublic(
 }
 
 export async function getProductBySlugPublic(
-  orgId: string,
-  productSlug: string
+  catalogOrgId: string,
+  productSlug: string,
+  digitalOnly = false
 ): Promise<PublicProductRow | null> {
+  const formatFilterClause = digitalOnly
+    ? "AND pf.format IN ('pdf', 'epub')"
+    : '';
+
   const result = await query<PublicProductRow>(
     `SELECT p.id,
             p.org_id,
@@ -18368,6 +18627,7 @@ export async function getProductBySlugPublic(
                 )
                 FROM product_formats pf
                 WHERE pf.product_id = p.id
+                ${formatFilterClause}
               ),
               '[]'::json
             ) AS formats
@@ -18378,7 +18638,7 @@ export async function getProductBySlugPublic(
        AND  p.slug       = $2
        AND  p.status     = 'published'
        AND  p.deleted_at IS NULL`,
-    [orgId, productSlug.trim().toLowerCase()]
+    [catalogOrgId, productSlug.trim().toLowerCase()]
   );
   return result.rows[0] ?? null;
 }
@@ -18421,7 +18681,7 @@ export async function getPublicOrderItems(orderId: string): Promise<PublicOrderI
 <file path="src/verticals/books/import/import.worker.ts">
 // =============================================================================
 // soko-api/src/verticals/books/import/import.worker.ts
-// In-process Spreadsheet & Google Sheet ingestion worker with deduplication
+// Spreadsheet Ingestion Worker with Shared Master Catalog Deduplication
 // =============================================================================
 
 import crypto from 'crypto';
@@ -18432,6 +18692,7 @@ import axios from 'axios';
 import ExcelJS from 'exceljs';
 import { pool } from '../../../config/db';
 import {
+  getEffectiveCatalogOrgId,
   findOrCreateCategoryByName,
   insertProductTransactional,
   insertInventoryTransactional,
@@ -18439,10 +18700,6 @@ import {
 } from '../../../modules/products/products.queries';
 import { findBestBookCover } from '../../../services/bookCover.service';
 import * as importQueries from './import.queries';
-
-// -----------------------------------------------------------------------------
-// Types
-// -----------------------------------------------------------------------------
 
 export interface ParsedBookRow {
   title: string;
@@ -18459,10 +18716,6 @@ export interface ParsedBookRow {
   pdfFileUrl?: string | null;
   epubFileUrl?: string | null;
 }
-
-// -----------------------------------------------------------------------------
-// Excel Cell Parsing Helpers
-// -----------------------------------------------------------------------------
 
 function normalizeHeader(h: string): string {
   return h.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
@@ -18499,30 +18752,33 @@ function getCellValueAsNumber(value: unknown): number | null {
   return isNaN(num) ? null : num;
 }
 
-// -----------------------------------------------------------------------------
-// Database Ingestion & Deduplication
-// -----------------------------------------------------------------------------
-
+/**
+ * Upserts book into the shared master catalog.
+ * Performs pre-flight deduplication against SKU and Title.
+ */
 async function upsertBookFromImport(
   orgId: string,
   row: ParsedBookRow
 ): Promise<'inserted' | 'updated' | 'skipped'> {
+  const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
 
-    // 1. Safe Category Resolution
+    // 1. Safe Category Resolution under Effective Catalog Organization
     const categoryName = row.category || 'General';
-    const categoryId = await findOrCreateCategoryByName(client, orgId, categoryName);
+    const categoryId = await findOrCreateCategoryByName(client, effectiveCatalogOrgId, categoryName);
 
-    // 2. Pre-Flight Duplicate Check (SKU first, fallback to Title)
+    // 2. Pre-Flight Duplicate Check across Shared Catalog Bounds
     let existingProductId: string | null = null;
 
     if (row.sku && row.sku.trim()) {
       const skuCheck = await client.query<{ id: string }>(
         `SELECT id FROM products 
-         WHERE org_id = $1 AND LOWER(TRIM(sku)) = LOWER(TRIM($2)) AND deleted_at IS NULL 
+         WHERE (org_id = $1 OR org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+           AND LOWER(TRIM(sku)) = LOWER(TRIM($2)) 
+           AND deleted_at IS NULL 
          LIMIT 1`,
         [orgId, row.sku.trim()]
       );
@@ -18534,7 +18790,9 @@ async function upsertBookFromImport(
     if (!existingProductId) {
       const titleCheck = await client.query<{ id: string }>(
         `SELECT id FROM products 
-         WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) AND deleted_at IS NULL 
+         WHERE (org_id = $1 OR org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+           AND LOWER(TRIM(name)) = LOWER(TRIM($2)) 
+           AND deleted_at IS NULL 
          LIMIT 1`,
         [orgId, row.title.trim()]
       );
@@ -18543,7 +18801,7 @@ async function upsertBookFromImport(
       }
     }
 
-    // 3. Price & Discount Normalization (Respects chk_products_compare_at_price constraint)
+    // 3. Price & Discount Normalization (Ensures compare_at_price > price)
     let sellingPrice = 999;
     let compareAtPrice: number | null = null;
 
@@ -18560,12 +18818,10 @@ async function upsertBookFromImport(
       sellingPrice = row.salePrice || row.regularPrice || 999;
     }
 
-    // 4. Synchronize PDF & EPUB eBook prices
     const digitalPrice = row.pdfPrice && row.pdfPrice > 0
       ? row.pdfPrice
       : (row.epubPrice && row.epubPrice > 0 ? row.epubPrice : 149);
 
-    // Compute matching digital strike-through price if book is on sale
     let digitalCompareAt: number | null = null;
     if (compareAtPrice && compareAtPrice > sellingPrice) {
       const discountRatio = (compareAtPrice - sellingPrice) / compareAtPrice;
@@ -18574,7 +18830,6 @@ async function upsertBookFromImport(
       }
     }
 
-    // 5. Auto-discover cover art if no image link was provided
     let targetImageUrl: string | null = row.coverImageUrl || null;
 
     if (!targetImageUrl) {
@@ -18606,7 +18861,7 @@ async function upsertBookFromImport(
              description      = COALESCE($6, products.description),
              badge            = (CASE WHEN $4 IS NOT NULL THEN 'FLASH_SALE' ELSE products.badge END),
              updated_at       = NOW()
-         WHERE id = $1 AND org_id = $7`,
+         WHERE id = $1`,
         [
           existingProductId,
           categoryId,
@@ -18614,7 +18869,6 @@ async function upsertBookFromImport(
           compareAtPrice,
           row.sku || null,
           row.description || (row.author ? `By ${row.author}` : null),
-          orgId,
         ]
       );
 
@@ -18627,7 +18881,6 @@ async function upsertBookFromImport(
         );
       }
 
-      // Attach discovered cover if existing book has no image
       if (targetImageUrl) {
         const hasImg = await client.query(
           `SELECT 1 FROM product_images WHERE product_id = $1 LIMIT 1`,
@@ -18654,7 +18907,7 @@ async function upsertBookFromImport(
       const slugSuffix = crypto.randomBytes(3).toString('hex');
       const slug = `${cleanSlugTitle}-${slugSuffix}`;
 
-      productId = await insertProductTransactional(client, orgId, {
+      productId = await insertProductTransactional(client, effectiveCatalogOrgId, {
         category_id: categoryId,
         name: row.title,
         slug,
@@ -18669,7 +18922,6 @@ async function upsertBookFromImport(
 
       await insertInventoryTransactional(client, productId, row.hardcopyStock || 10);
 
-      // Attach cover if found or provided
       if (targetImageUrl) {
         await insertProductImageTransactional(
           client,
@@ -18681,7 +18933,7 @@ async function upsertBookFromImport(
       }
     }
 
-    // 5. Hardcopy Format (Always assume/create Hardcopy when sellingPrice is present)
+    // Provision Hardcopy Format for Hybrid Storefronts (Sunrise)
     if (productId && sellingPrice) {
       await client.query(
         `INSERT INTO product_formats (
@@ -18697,7 +18949,7 @@ async function upsertBookFromImport(
       );
     }
 
-    // 6. Digital PDF Format (Strict Guard: Only create if a PDF link or price was explicitly provided)
+    // Provision Digital PDF Format for Both Storefronts (Sunrise & EbookReads)
     if (productId && (row.pdfFileUrl || row.pdfPrice)) {
       const isExternalUrl = row.pdfFileUrl?.startsWith('http://') || row.pdfFileUrl?.startsWith('https://');
       const filePublicId = isExternalUrl ? null : (row.pdfFileUrl || null);
@@ -18717,7 +18969,7 @@ async function upsertBookFromImport(
       );
     }
 
-    // 7. Digital EPUB Format (Strict Guard: Only create if an EPUB link or price was explicitly provided)
+    // Provision Digital EPUB Format
     if (productId && (row.epubFileUrl || row.epubPrice)) {
       const isExternalUrl = row.epubFileUrl?.startsWith('http://') || row.epubFileUrl?.startsWith('https://');
       const filePublicId = isExternalUrl ? null : (row.epubFileUrl || null);
@@ -18746,10 +18998,6 @@ async function upsertBookFromImport(
     client.release();
   }
 }
-
-// -----------------------------------------------------------------------------
-// Excel File Processor
-// -----------------------------------------------------------------------------
 
 export async function processExcelFile(
   jobId: string,
@@ -18916,10 +19164,6 @@ export async function processExcelFile(
   }
 }
 
-// -----------------------------------------------------------------------------
-// Google Sheet Processor
-// -----------------------------------------------------------------------------
-
 export async function processGoogleSheet(
   jobId: string,
   orgId: string,
@@ -18932,7 +19176,6 @@ export async function processGoogleSheet(
 
   const sheetId = match[1];
   const csvExportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
-
   const tempFilePath = path.join(os.tmpdir(), `gsheet-${jobId}-${Date.now()}.csv`);
 
   try {
@@ -18955,7 +19198,6 @@ export async function processGoogleSheet(
     }
 
     fs.writeFileSync(tempFilePath, response.data, 'utf8');
-
     await processExcelFile(jobId, orgId, tempFilePath);
   } catch (err: any) {
     console.error(`[Process Google Sheet Error] Job ${jobId}:`, err);
@@ -18978,172 +19220,10 @@ export async function processGoogleSheet(
 }
 </file>
 
-<file path="src/app.ts">
-// =============================================================================
-// soko-api/src/app.ts
-// Multi-Frontend CORS Support & Master Express Route Registrations
-// =============================================================================
-
-import express, { Request, Response, NextFunction } from "express";
-import helmet from "helmet";
-import cors from "cors";
-import pinoHttp from "pino-http";
-import rateLimit from "express-rate-limit";
-import { v4 as uuidv4 } from "uuid";
-import { env } from "./config/env";
-import { errorHandler } from "./middleware/errorHandler";
-import { AppError } from "./utils/error";
-import { HealthCheckResponse } from "./types/health";
-import { pool } from "./config/db";
-
-// Route Imports
-import authRoutes from "./modules/auth/auth.routes";
-import customersRoutes from "./modules/customers/customers.routes";
-import transactionsRoutes from "./modules/transactions/transactions.routes";
-import dashboardRoutes from "./modules/transactions/dashboard.routes";
-import paymentsRoutes from "./modules/payments/payments.routes";
-import agentRoutes from "./verticals/market/agent.routes";
-import expensesRoutes from "./modules/expenses/expenses.routes";
-import adminRoutes from "./modules/admin/admin.routes";
-import productsRoutes from "./modules/products/products.routes";
-import productFormatsRoutes from "./modules/product-formats/product-formats.routes";
-import storesRoutes from "./modules/stores/stores.routes";
-import ordersRoutes from "./modules/orders/orders.routes";
-import publicRoutes from "./modules/public/public.routes";
-import mpesaCredentialsRoutes from "./modules/mpesa-credentials/mpesa-credentials.routes";
-import analyticsRoutes from "./modules/analytics/analytics.routes";
-import booksRoutes from "./verticals/books/books.routes";
-import bannersRoutes from "./modules/banners/banners.routes";
-import smtpRoutes from "./modules/smtp/smtp.routes";
-
-const app = express();
-
-app.use(helmet());
-
-// Multi-Frontend Allowed Origins
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://localhost:3000',
-  'http://localhost:3333',
-];
-
-// Support comma-separated URLs in FRONTEND_URL
-if (env.FRONTEND_URL) {
-  const customOrigins = env.FRONTEND_URL.split(',').map((o) => o.trim().replace(/\/$/, ''));
-  allowedOrigins.push(...customOrigins);
-}
-
-app.use(
-  cors({
-    origin: (requestOrigin, callback) => {
-      if (!requestOrigin) return callback(null, true);
-
-      if (allowedOrigins.includes(requestOrigin)) {
-        return callback(null, true);
-      }
-
-      if (requestOrigin.endsWith('.vercel.app')) {
-        return callback(null, true);
-      }
-
-      return callback(new Error(`Origin ${requestOrigin} is not allowed by CORS`));
-    },
-    credentials: true,
-  })
-);
-
-app.use(express.json());
-
-app.use((req: Request, _res: Response, next: NextFunction) => {
-  req.requestId = uuidv4();
-  next();
-});
-
-app.use(
-  pinoHttp({
-    customProps: req => ({
-      requestId: (req as Request).requestId
-    }),
-    autoLogging: {
-      ignore: req => req.url === "/api/v1/health"
-    }
-  })
-);
-
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 300,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    success: false,
-    error: {
-      message: "Too many requests. Please try again later."
-    }
-  }
-});
-app.use(limiter);
-
-const apiRouter = express.Router();
-
-apiRouter.get("/health", async (_req: Request, res: Response) => {
-  let dbStatus: HealthCheckResponse["db"] = "connected";
-
-  try {
-    await pool.query("SELECT 1");
-  } catch {
-    dbStatus = "error";
-  }
-
-  const response: HealthCheckResponse = {
-    status: dbStatus === "connected" ? "ok" : "error",
-    db: dbStatus,
-    timestamp: new Date().toISOString()
-  };
-
-  res.status(dbStatus === "connected" ? 200 : 503).json(response);
-});
-
-apiRouter.use("/auth", authRoutes);
-apiRouter.use("/customers", customersRoutes);
-apiRouter.use("/transactions", transactionsRoutes);
-apiRouter.use("/dashboard", dashboardRoutes);
-apiRouter.use("/payments", paymentsRoutes);
-apiRouter.use("/agent", agentRoutes);
-apiRouter.use("/expenses", expensesRoutes);
-apiRouter.use("/public", publicRoutes);
-apiRouter.use("/admin", adminRoutes);
-apiRouter.use("/products/:productId/formats", productFormatsRoutes);
-apiRouter.use("/products", productsRoutes);
-apiRouter.use("/store", storesRoutes);
-apiRouter.use("/orders", ordersRoutes);
-apiRouter.use("/mpesa-credentials", mpesaCredentialsRoutes);
-apiRouter.use("/analytics", analyticsRoutes);
-apiRouter.use("/books", booksRoutes);
-apiRouter.use("/banners", bannersRoutes);
-apiRouter.use("/smtp", smtpRoutes);
-
-app.use("/api/v1", apiRouter);
-
-app.use((req: Request, _res: Response, next: NextFunction) => {
-  next(
-    new AppError(
-      `Endpoint not found: ${req.method} ${req.originalUrl}`,
-      404
-    )
-  );
-});
-
-app.use(errorHandler);
-
-export default app;
-</file>
-
 <file path="src/modules/public/public.service.ts">
 // =============================================================================
 // soko-api/src/modules/public/public.service.ts
-// Storefront API with phone-gated downloads, email capture, promo expiration,
-// and in-place payment recovery retries.
+// Storefront API: Shared Catalog Routing with Sovereign Multi-Tenant Isolation
 // =============================================================================
 
 import axios from 'axios';
@@ -19306,6 +19386,7 @@ export interface PublicStoreDto {
   hero_subheadline: string | null;
   hero_cta_label: string | null;
   mpesa_verified: boolean;
+  digital_only: boolean;
 }
 
 export interface PublicFormatDto {
@@ -19380,6 +19461,7 @@ function toPublicStoreDto(row: publicQueries.PublicStoreRow, mpesaVerified: bool
     hero_subheadline: row.hero_subheadline,
     hero_cta_label: row.hero_cta_label,
     mpesa_verified: mpesaVerified,
+    digital_only: row.digital_only,
   };
 }
 
@@ -19469,7 +19551,14 @@ export async function listStoreProducts(
   const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
   if (!store) throw new AppError('Store not found', 404);
 
-  const result = await publicQueries.getProductsByStoreOrgIdPublic(store.org_id, options);
+  const effectiveCatalogOrgId = store.catalog_source_org_id || store.org_id;
+
+  const result = await publicQueries.getProductsByStoreOrgIdPublic(
+    effectiveCatalogOrgId,
+    options,
+    store.digital_only
+  );
+
   return {
     products: result.products.map(toPublicProductDto),
     total: result.total,
@@ -19483,8 +19572,16 @@ export async function getProductDetails(storeSlug: string, productSlug: string):
   const normalizedSlug = (storeSlug || '').trim().toLowerCase();
   const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
   if (!store) throw new AppError('Store not found', 404);
-  const product = await publicQueries.getProductBySlugPublic(store.org_id, productSlug);
+
+  const effectiveCatalogOrgId = store.catalog_source_org_id || store.org_id;
+
+  const product = await publicQueries.getProductBySlugPublic(
+    effectiveCatalogOrgId,
+    productSlug,
+    store.digital_only
+  );
   if (!product) throw new AppError('Product not found', 404);
+
   return toPublicProductDto(product);
 }
 
@@ -19504,6 +19601,7 @@ export async function placeOrder(
     throw new AppError('Store not found', 404);
   }
 
+  const effectiveCatalogOrgId = store.catalog_source_org_id || store.org_id;
   const isAutomatedDaraja = customerData.paymentMethod === 'mpesa' || customerData.paymentMethod === 'mpesa_direct';
 
   if (isAutomatedDaraja) {
@@ -19553,9 +19651,11 @@ export async function placeOrder(
       }>(
         `SELECT p.id, p.name, p.price::text AS price, p.cost_price::text AS cost_price, p.status, i.stock
          FROM   products p
-         INNER  JOIN inventory i ON i.product_id = p.id
-         WHERE  p.id = $1 AND p.org_id = $2 AND p.deleted_at IS NULL`,
-        [cartItem.product_id, store.org_id]
+         LEFT JOIN inventory i ON i.product_id = p.id
+         WHERE  p.id = $1
+           AND  (p.org_id = $2 OR p.org_id = $3)
+           AND  p.deleted_at IS NULL`,
+        [cartItem.product_id, store.org_id, effectiveCatalogOrgId]
       );
 
       const product = productRes.rows[0];
@@ -19587,6 +19687,13 @@ export async function placeOrder(
           throw new AppError(`Selected format for "${product.name}" is no longer available.`, 400);
         }
 
+        if (store.digital_only && formatRow.format === 'hardcopy') {
+          throw new AppError(
+            `"${product.name}" is available as a digital eBook on this storefront. Physical editions are not fulfilled here.`,
+            400
+          );
+        }
+
         unitPrice = parseFloat(formatRow.price);
         variantTitle = formatRow.format.toUpperCase();
 
@@ -19605,11 +19712,16 @@ export async function placeOrder(
           isPhysical = false;
         }
       } else {
-        hasPhysicalItem = true;
-        isPhysical = true;
-        deliveryMethod = customerData.deliveryType || 'delivery';
-        if (product.stock < cartItem.quantity) {
-          throw new AppError(`Insufficient stock for "${product.name}". Only ${product.stock} left.`, 409);
+        if (store.digital_only) {
+          deliveryMethod = 'digital';
+          isPhysical = false;
+        } else {
+          hasPhysicalItem = true;
+          isPhysical = true;
+          deliveryMethod = customerData.deliveryType || 'delivery';
+          if (product.stock !== null && product.stock < cartItem.quantity) {
+            throw new AppError(`Insufficient stock for "${product.name}". Only ${product.stock} left.`, 409);
+          }
         }
       }
 
@@ -19736,10 +19848,8 @@ export async function placeOrder(
           if (decFormatRes.rowCount === 0) {
             throw new AppError(`The hardcopy edition of "${item.productName}" was just sold out.`, 409);
           }
-          await ordersQueries.decrementStockTransactional(client, item.productId, item.quantity);
-        } else {
-          await ordersQueries.decrementStockTransactional(client, item.productId, item.quantity);
         }
+        await ordersQueries.decrementStockTransactional(client, item.productId, item.quantity);
       }
     }
 

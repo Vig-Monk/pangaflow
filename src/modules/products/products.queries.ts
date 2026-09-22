@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/products/products.queries.ts
-// Product and Category Catalog Queries with Shared Catalog Resolution
+// Product and Category Catalog Queries with First-Added-First Default Sorting
 // =============================================================================
 
 import { PoolClient } from "pg";
@@ -124,11 +124,6 @@ function slugifyCategory(input: string): string {
     return base.length > 0 ? base : 'category';
 }
 
-/**
- * Resolves the authoritative catalog orgId for an organization.
- * If the organization subscribes to a shared catalog via catalog_source_org_id,
- * returns the parent catalog orgId. Otherwise returns its own orgId.
- */
 export async function getEffectiveCatalogOrgId(orgId: string): Promise<string> {
     const result = await query<{ catalog_source_org_id: string | null }>(
         `SELECT catalog_source_org_id 
@@ -302,6 +297,10 @@ const PRODUCT_SELECT_FIELDS = `
   ) AS formats
 `;
 
+/**
+ * Admin Product Table: Defaults to FIFO (First Added First: created_at ASC, id ASC)
+ * so foundational titles with verified covers are presented at the top.
+ */
 export async function listProducts(
     orgId: string,
     options: ListProductsOptions
@@ -326,7 +325,8 @@ export async function listProducts(
         paramIndex++;
     }
 
-    let relevanceOrderClause = `(CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, p.created_at DESC`;
+    // Unarchived first, then foundational books first (FIFO: created_at ASC, id ASC)
+    let relevanceOrderClause = `(CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, p.created_at ASC, p.id ASC`;
 
     if (searchQuery && searchQuery.trim().length > 0) {
         const fuzzy = buildFuzzySearchQuery({
@@ -345,7 +345,7 @@ export async function listProducts(
             conditions.push(fuzzy.conditionSql);
             params.push(...fuzzy.params);
             paramIndex = fuzzy.nextParamIndex;
-            relevanceOrderClause = `(CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, ${fuzzy.relevanceSql} DESC, p.created_at DESC`;
+            relevanceOrderClause = `(CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END) ASC, ${fuzzy.relevanceSql} DESC, p.created_at ASC, p.id ASC`;
         }
     }
 
@@ -695,6 +695,7 @@ export async function checkSlugExists(
     );
     return result.rowCount !== null && result.rowCount > 0;
 }
+
 export async function insertProductTransactional(
     client: PoolClient,
     orgId: string,

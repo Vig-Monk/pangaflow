@@ -1,10 +1,12 @@
 // =============================================================================
 // soko-api/src/modules/public/public.queries.ts
-// Strict Tenant-Isolated Public Storefront Queries with Shared Catalog Support
+// Strict Tenant-Isolated Public Storefront Queries with First-Added-First Ordering
 // =============================================================================
 
 import { query } from '../../config/db';
 import { buildFuzzySearchQuery } from '../../utils/search';
+
+export type ProductSortOption = 'first_added' | 'newest' | 'price_asc' | 'price_desc' | 'title_asc';
 
 export interface PublicStoreRow {
   id: string;
@@ -103,6 +105,7 @@ export interface LocalEstateRow {
 export interface ListStoreProductsOptions {
   searchQuery?: string;
   category?: string;
+  sort?: ProductSortOption;
   page?: number;
   limit?: number;
 }
@@ -130,9 +133,6 @@ export async function searchEstatesLocal(searchQuery: string): Promise<LocalEsta
   return result.rows;
 }
 
-/**
- * Retrieves public store metadata, including the shared catalog link and channel rules.
- */
 export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow | null> {
   const cleanSlug = (slug || '').trim().toLowerCase();
 
@@ -168,9 +168,30 @@ export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow
 }
 
 /**
+ * Resolves the deterministic ORDER BY clause based on requested sort option.
+ * Defaults strictly to FIRST-ADDED-FIRST (FIFO: created_at ASC, id ASC)
+ * so bestselling titles with curated studio covers display at the top of the storefront.
+ */
+function resolveSortOrderClause(sort?: ProductSortOption): string {
+  switch (sort) {
+    case 'price_asc':
+      return 'p.price ASC, p.created_at ASC, p.id ASC';
+    case 'price_desc':
+      return 'p.price DESC, p.created_at ASC, p.id ASC';
+    case 'title_asc':
+      return 'p.name ASC, p.created_at ASC, p.id ASC';
+    case 'newest':
+      return 'p.created_at DESC, p.id DESC';
+    case 'first_added':
+    default:
+      // FIFO Order: Books added first appear first, with id ASC as deterministic tie-breaker
+      return 'p.created_at ASC, p.id ASC';
+  }
+}
+
+/**
  * Queries catalog items for a given storefront channel.
- * Resolves against effectiveCatalogOrgId (shared master catalog or local tenant).
- * Automatically applies channel format filtering (e.g. digital-only for EbookReads).
+ * Defaults to displaying books added first (bestsellers with proper covers).
  */
 export async function getProductsByStoreOrgIdPublic(
   catalogOrgId: string,
@@ -219,8 +240,9 @@ export async function getProductsByStoreOrgIdPublic(
     }
   }
 
-  // 3. Typo-Tolerant Trigram Matcher
-  let relevanceOrderClause = 'p.created_at DESC';
+  // 3. FIFO Sort Order Clause with Search Override
+  const baseSortClause = resolveSortOrderClause(options.sort);
+  let orderClause = baseSortClause;
 
   if (options.searchQuery && options.searchQuery.trim().length > 0) {
     const fuzzy = buildFuzzySearchQuery({
@@ -239,7 +261,7 @@ export async function getProductsByStoreOrgIdPublic(
       conditions.push(fuzzy.conditionSql);
       params.push(...fuzzy.params);
       paramIndex = fuzzy.nextParamIndex;
-      relevanceOrderClause = `${fuzzy.relevanceSql} DESC, p.created_at DESC`;
+      orderClause = `${fuzzy.relevanceSql} DESC, ${baseSortClause}`;
     }
   }
 
@@ -333,7 +355,7 @@ export async function getProductsByStoreOrgIdPublic(
      LEFT JOIN categories c ON c.id = p.category_id
      LEFT JOIN inventory i  ON i.product_id = p.id
      WHERE  ${whereClause}
-     ORDER  BY ${relevanceOrderClause}
+     ORDER  BY ${orderClause}
      LIMIT  $${paramIndex} OFFSET $${paramIndex + 1}`,
     dataParams
   );
@@ -347,9 +369,6 @@ export async function getProductsByStoreOrgIdPublic(
   };
 }
 
-/**
- * Retrieves a single book by slug against the effective catalog source.
- */
 export async function getProductBySlugPublic(
   catalogOrgId: string,
   productSlug: string,
