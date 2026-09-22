@@ -1,5 +1,6 @@
 // =============================================================================
 // src/modules/stores/stores.service.ts
+// Storefront Settings & Channel Configuration Management
 // =============================================================================
 
 import { z } from "zod";

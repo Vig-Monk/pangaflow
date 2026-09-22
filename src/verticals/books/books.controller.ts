@@ -1,6 +1,6 @@
 // =============================================================================
 // src/verticals/books/books.controller.ts
-// Administrative controller for Cloudflare R2 uploads and bookstore telemetry.
+// Administrative Controller for Cloudflare R2 Uploads & Storage Telemetry
 // =============================================================================
 
 import { Request, Response, NextFunction } from 'express';
@@ -9,6 +9,7 @@ import { success } from '../../utils/response';
 import { AppError } from '../../utils/error';
 import { query } from '../../config/db';
 import { generatePresignedUploadUrl } from '../../services/r2.service';
+import { getEffectiveCatalogOrgId } from '../../modules/products/products.queries';
 
 function requireOrgId(req: Request): string {
   if (!req.orgId) {
@@ -26,6 +27,11 @@ const PresignedUploadSchema = z.object({
   contentType: z.string().optional(),
 });
 
+/**
+ * Generates an authorized presigned PUT upload URL to Cloudflare R2.
+ * Resolves to the effective catalog organization so both Sunrise and EbookReads
+ * store and share master digital eBook files in the unified asset vault.
+ */
 export async function getPresignedR2UploadUrlHandler(
   req: Request,
   res: Response,
@@ -33,6 +39,8 @@ export async function getPresignedR2UploadUrlHandler(
 ): Promise<void> {
   try {
     const orgId = requireOrgId(req);
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
+
     const parsed = PresignedUploadSchema.safeParse(req.body);
 
     if (!parsed.success) {
@@ -48,7 +56,11 @@ export async function getPresignedR2UploadUrlHandler(
       parsed.data.contentType ||
       (parsed.data.format === 'pdf' ? 'application/pdf' : 'application/epub+zip');
 
-    const result = await generatePresignedUploadUrl(orgId, parsed.data.filename, mime);
+    const result = await generatePresignedUploadUrl(
+      effectiveCatalogOrgId,
+      parsed.data.filename,
+      mime
+    );
 
     success(res, result, undefined, 200);
   } catch (err) {
@@ -56,6 +68,9 @@ export async function getPresignedR2UploadUrlHandler(
   }
 }
 
+/**
+ * Returns digital storage telemetry across the shared catalog for the requesting organization.
+ */
 export async function getBookstoreStorageStatsHandler(
   req: Request,
   res: Response,
@@ -63,6 +78,7 @@ export async function getBookstoreStorageStatsHandler(
 ): Promise<void> {
   try {
     const orgId = requireOrgId(req);
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
 
     const result = await query<{
       total_bytes: string;
@@ -73,8 +89,10 @@ export async function getBookstoreStorageStatsHandler(
          COUNT(DISTINCT pf.product_id)::text AS digital_books_count
        FROM product_formats pf
        INNER JOIN products p ON p.id = pf.product_id
-       WHERE p.org_id = $1 AND p.deleted_at IS NULL AND pf.file_url IS NOT NULL`,
-      [orgId]
+       WHERE (p.org_id = $1 OR p.org_id = $2)
+         AND p.deleted_at IS NULL 
+         AND (pf.file_url IS NOT NULL OR pf.file_public_id IS NOT NULL)`,
+      [orgId, effectiveCatalogOrgId]
     );
 
     const row = result.rows[0];

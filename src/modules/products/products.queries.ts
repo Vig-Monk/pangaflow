@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/products/products.queries.ts
-// Product and Category catalog queries with Trigram Fuzzy Search support.
+// Product and Category Catalog Queries with Shared Catalog Resolution
 // =============================================================================
 
 import { PoolClient } from "pg";
@@ -124,7 +124,24 @@ function slugifyCategory(input: string): string {
     return base.length > 0 ? base : 'category';
 }
 
+/**
+ * Resolves the authoritative catalog orgId for an organization.
+ * If the organization subscribes to a shared catalog via catalog_source_org_id,
+ * returns the parent catalog orgId. Otherwise returns its own orgId.
+ */
+export async function getEffectiveCatalogOrgId(orgId: string): Promise<string> {
+    const result = await query<{ catalog_source_org_id: string | null }>(
+        `SELECT catalog_source_org_id 
+         FROM organizations 
+         WHERE id = $1 AND deleted_at IS NULL`,
+        [orgId]
+    );
+    return result.rows[0]?.catalog_source_org_id || orgId;
+}
+
 export async function listCategories(orgId: string): Promise<CategoryRow[]> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
+
     const result = await query<CategoryRow>(
         `SELECT c.id, c.org_id, c.name, c.slug, c.description, c.is_featured, c.sort_order, c.created_at,
                 COALESCE((
@@ -135,7 +152,7 @@ export async function listCategories(orgId: string): Promise<CategoryRow[]> {
          FROM   categories c
          WHERE  c.org_id = $1 
          ORDER  BY c.is_featured DESC, c.sort_order ASC, c.name ASC`,
-        [orgId]
+        [effectiveCatalogOrgId]
     );
     return result.rows;
 }
@@ -187,6 +204,7 @@ export async function createCategory(
         sortOrder?: number;
     }
 ): Promise<CategoryRow> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
     const trimmedName = data.name.trim();
     const slug = slugifyCategory(trimmedName);
 
@@ -200,7 +218,7 @@ export async function createCategory(
              sort_order = COALESCE(EXCLUDED.sort_order, categories.sort_order)
          RETURNING id, org_id, name, slug, description, is_featured, sort_order, created_at`,
         [
-            orgId,
+            effectiveCatalogOrgId,
             trimmedName,
             slug,
             data.description?.trim() || null,
@@ -288,11 +306,12 @@ export async function listProducts(
     orgId: string,
     options: ListProductsOptions
 ): Promise<{ products: ProductWithImages[]; total: number }> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
     const { categoryId, searchQuery, badge, page, limit } = options;
     const offset = (page - 1) * limit;
 
     const conditions: string[] = ["p.org_id = $1", "p.deleted_at IS NULL"];
-    const params: unknown[] = [orgId];
+    const params: unknown[] = [effectiveCatalogOrgId];
     let paramIndex = 2;
 
     if (categoryId) {
@@ -363,12 +382,14 @@ export async function getProductById(
     orgId: string,
     productId: string
 ): Promise<ProductWithImages | null> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
+
     const result = await query<ProductWithImages>(
         `SELECT ${PRODUCT_SELECT_FIELDS}
          FROM products p
          LEFT JOIN categories c ON c.id = p.category_id
-         WHERE p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL`,
-        [orgId, productId]
+         WHERE (p.org_id = $1 OR p.org_id = $2) AND p.id = $3 AND p.deleted_at IS NULL`,
+        [orgId, effectiveCatalogOrgId, productId]
     );
     return result.rows[0] ?? null;
 }
@@ -391,13 +412,15 @@ export async function updateProduct(
         images?: Array<{ image_url: string; image_public_id?: string }>;
     }
 ): Promise<ProductWithImages | null> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
     const client = await pool.connect();
+
     try {
         await client.query("BEGIN");
 
         const setClauses: string[] = [];
-        const params: unknown[] = [orgId, productId];
-        let paramIndex = 3;
+        const params: unknown[] = [orgId, effectiveCatalogOrgId, productId];
+        let paramIndex = 4;
 
         const { variants, images, sale_ends_at, ...directFields } = fields;
 
@@ -419,7 +442,7 @@ export async function updateProduct(
             const updateQuery = `
               UPDATE products
               SET ${setClauses.join(", ")}, updated_at = NOW()
-              WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL
+              WHERE (org_id = $1 OR org_id = $2) AND id = $3 AND deleted_at IS NULL
             `;
             await client.query(updateQuery, params);
         }
@@ -440,7 +463,7 @@ export async function updateProduct(
         }
 
         if (variants !== undefined) {
-            await syncProductVariantsTransactional(client, orgId, productId, variants);
+            await syncProductVariantsTransactional(client, effectiveCatalogOrgId, productId, variants);
         }
 
         await client.query("COMMIT");
@@ -540,11 +563,13 @@ export async function archiveProduct(
     orgId: string,
     productId: string
 ): Promise<boolean> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
+
     const result = await query(
         `UPDATE products 
          SET status = 'archived', updated_at = NOW() 
-         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
-        [orgId, productId]
+         WHERE (org_id = $1 OR org_id = $2) AND id = $3 AND deleted_at IS NULL`,
+        [orgId, effectiveCatalogOrgId, productId]
     );
     return result.rowCount !== null && result.rowCount > 0;
 }
@@ -553,71 +578,13 @@ export async function unarchiveProduct(
     orgId: string,
     productId: string
 ): Promise<boolean> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
+
     const result = await query(
         `UPDATE products 
          SET status = 'draft', updated_at = NOW() 
-         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
-        [orgId, productId]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function getProductOrderCount(
-    client: PoolClient,
-    orgId: string,
-    productId: string
-): Promise<number> {
-    const result = await client.query<{ count: string }>(
-        `SELECT COUNT(oi.id)::text AS count
-         FROM order_items oi
-         INNER JOIN orders o ON o.id = oi.order_id
-         WHERE o.org_id = $1 AND (
-           oi.product_id = $2 OR 
-           oi.format_id IN (SELECT id FROM product_formats WHERE product_id = $2)
-         )`,
-        [orgId, productId]
-    );
-    return parseInt(result.rows[0]?.count || '0', 10);
-}
-
-export async function softDeleteProductTransactional(
-    client: PoolClient,
-    orgId: string,
-    productId: string
-): Promise<void> {
-    const timestamp = Math.floor(Date.now() / 1000);
-    await client.query(
-        `UPDATE products
-         SET deleted_at = NOW(),
-             status     = 'archived',
-             slug       = slug || '-deleted-' || $3,
-             updated_at = NOW()
-         WHERE org_id = $1 AND id = $2`,
-        [orgId, productId, timestamp]
-    );
-}
-
-export async function hardDeleteProductTransactional(
-    client: PoolClient,
-    orgId: string,
-    productId: string
-): Promise<boolean> {
-    const result = await client.query(
-        `DELETE FROM products 
-         WHERE org_id = $1 AND id = $2`,
-        [orgId, productId]
-    );
-    return result.rowCount !== null && result.rowCount > 0;
-}
-
-export async function deleteProductPermanently(
-    orgId: string,
-    productId: string
-): Promise<boolean> {
-    const result = await query(
-        `DELETE FROM products 
-         WHERE org_id = $1 AND id = $2`,
-        [orgId, productId]
+         WHERE (org_id = $1 OR org_id = $2) AND id = $3 AND deleted_at IS NULL`,
+        [orgId, effectiveCatalogOrgId, productId]
     );
     return result.rowCount !== null && result.rowCount > 0;
 }
@@ -627,11 +594,13 @@ export async function setProductStatus(
     productId: string,
     status: "draft" | "published" | "archived"
 ): Promise<ProductWithImages | null> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
+
     await query(
         `UPDATE products 
          SET status = $3, updated_at = NOW() 
-         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
-        [orgId, productId, status]
+         WHERE (org_id = $1 OR org_id = $2) AND id = $4 AND deleted_at IS NULL`,
+        [orgId, effectiveCatalogOrgId, status, productId]
     );
     return getProductById(orgId, productId);
 }
@@ -640,12 +609,13 @@ export async function listInventory(
     orgId: string,
     options: ListInventoryOptions
 ): Promise<{ inventory: InventoryWithProduct[]; total: number }> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
     const { lowStockOnly, page, limit } = options;
     const offset = (page - 1) * limit;
 
-    const conditions: string[] = ["p.org_id = $1", "p.deleted_at IS NULL"];
-    const params: unknown[] = [orgId];
-    let paramIndex = 2;
+    const conditions: string[] = ["(p.org_id = $1 OR p.org_id = $2)", "p.deleted_at IS NULL"];
+    const params: unknown[] = [orgId, effectiveCatalogOrgId];
+    let paramIndex = 3;
 
     if (lowStockOnly) {
         conditions.push("i.stock <= i.low_stock_at");
@@ -687,15 +657,17 @@ export async function updateInventoryStock(
     productId: string,
     stock: number
 ): Promise<InventoryWithProduct | null> {
+    const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
+
     const result = await query<InventoryWithProduct>(
         `UPDATE inventory i
-         SET stock = $3, updated_at = NOW()
+         SET stock = $4, updated_at = NOW()
          FROM products p
-         WHERE p.id = i.product_id AND p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL
+         WHERE p.id = i.product_id AND (p.org_id = $1 OR p.org_id = $2) AND p.id = $3 AND p.deleted_at IS NULL
          RETURNING i.id, i.product_id, i.stock, i.low_stock_at, i.updated_at,
                    p.name AS product_name, p.sku AS product_sku,
                    0::int AS variants_count`,
-        [orgId, productId, stock]
+        [orgId, effectiveCatalogOrgId, productId, stock]
     );
     return result.rows[0] ?? null;
 }
@@ -706,7 +678,7 @@ export async function checkCategoryExists(
     categoryId: string
 ): Promise<boolean> {
     const result = await client.query(
-        "SELECT 1 FROM categories WHERE id = $1 AND org_id = $2",
+        "SELECT 1 FROM categories WHERE id = $1 AND (org_id = $2 OR org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $2))",
         [categoryId, orgId]
     );
     return result.rowCount !== null && result.rowCount > 0;
@@ -718,12 +690,11 @@ export async function checkSlugExists(
     slug: string
 ): Promise<boolean> {
     const result = await client.query(
-        "SELECT 1 FROM products WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL",
+        "SELECT 1 FROM products WHERE (org_id = $1 OR org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1)) AND slug = $2 AND deleted_at IS NULL",
         [orgId, slug]
     );
     return result.rowCount !== null && result.rowCount > 0;
 }
-
 export async function insertProductTransactional(
     client: PoolClient,
     orgId: string,
@@ -790,6 +761,7 @@ export async function insertProductImageTransactional(
         [productId, imageUrl, imagePublicId, sortOrder]
     );
 }
+
 export async function insertProductVariantTransactional(
     client: PoolClient,
     orgId: string,

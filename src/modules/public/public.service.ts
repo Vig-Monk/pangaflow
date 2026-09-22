@@ -1,7 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/public/public.service.ts
-// Storefront API with phone-gated downloads, email capture, promo expiration,
-// and in-place payment recovery retries.
+// Storefront API: Shared Catalog Routing with Sovereign Multi-Tenant Isolation
 // =============================================================================
 
 import axios from 'axios';
@@ -164,6 +163,7 @@ export interface PublicStoreDto {
   hero_subheadline: string | null;
   hero_cta_label: string | null;
   mpesa_verified: boolean;
+  digital_only: boolean;
 }
 
 export interface PublicFormatDto {
@@ -238,6 +238,7 @@ function toPublicStoreDto(row: publicQueries.PublicStoreRow, mpesaVerified: bool
     hero_subheadline: row.hero_subheadline,
     hero_cta_label: row.hero_cta_label,
     mpesa_verified: mpesaVerified,
+    digital_only: row.digital_only,
   };
 }
 
@@ -327,7 +328,14 @@ export async function listStoreProducts(
   const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
   if (!store) throw new AppError('Store not found', 404);
 
-  const result = await publicQueries.getProductsByStoreOrgIdPublic(store.org_id, options);
+  const effectiveCatalogOrgId = store.catalog_source_org_id || store.org_id;
+
+  const result = await publicQueries.getProductsByStoreOrgIdPublic(
+    effectiveCatalogOrgId,
+    options,
+    store.digital_only
+  );
+
   return {
     products: result.products.map(toPublicProductDto),
     total: result.total,
@@ -341,8 +349,16 @@ export async function getProductDetails(storeSlug: string, productSlug: string):
   const normalizedSlug = (storeSlug || '').trim().toLowerCase();
   const store = await publicQueries.getStoreBySlugPublic(normalizedSlug);
   if (!store) throw new AppError('Store not found', 404);
-  const product = await publicQueries.getProductBySlugPublic(store.org_id, productSlug);
+
+  const effectiveCatalogOrgId = store.catalog_source_org_id || store.org_id;
+
+  const product = await publicQueries.getProductBySlugPublic(
+    effectiveCatalogOrgId,
+    productSlug,
+    store.digital_only
+  );
   if (!product) throw new AppError('Product not found', 404);
+
   return toPublicProductDto(product);
 }
 
@@ -362,6 +378,7 @@ export async function placeOrder(
     throw new AppError('Store not found', 404);
   }
 
+  const effectiveCatalogOrgId = store.catalog_source_org_id || store.org_id;
   const isAutomatedDaraja = customerData.paymentMethod === 'mpesa' || customerData.paymentMethod === 'mpesa_direct';
 
   if (isAutomatedDaraja) {
@@ -411,9 +428,11 @@ export async function placeOrder(
       }>(
         `SELECT p.id, p.name, p.price::text AS price, p.cost_price::text AS cost_price, p.status, i.stock
          FROM   products p
-         INNER  JOIN inventory i ON i.product_id = p.id
-         WHERE  p.id = $1 AND p.org_id = $2 AND p.deleted_at IS NULL`,
-        [cartItem.product_id, store.org_id]
+         LEFT JOIN inventory i ON i.product_id = p.id
+         WHERE  p.id = $1
+           AND  (p.org_id = $2 OR p.org_id = $3)
+           AND  p.deleted_at IS NULL`,
+        [cartItem.product_id, store.org_id, effectiveCatalogOrgId]
       );
 
       const product = productRes.rows[0];
@@ -445,6 +464,13 @@ export async function placeOrder(
           throw new AppError(`Selected format for "${product.name}" is no longer available.`, 400);
         }
 
+        if (store.digital_only && formatRow.format === 'hardcopy') {
+          throw new AppError(
+            `"${product.name}" is available as a digital eBook on this storefront. Physical editions are not fulfilled here.`,
+            400
+          );
+        }
+
         unitPrice = parseFloat(formatRow.price);
         variantTitle = formatRow.format.toUpperCase();
 
@@ -463,11 +489,16 @@ export async function placeOrder(
           isPhysical = false;
         }
       } else {
-        hasPhysicalItem = true;
-        isPhysical = true;
-        deliveryMethod = customerData.deliveryType || 'delivery';
-        if (product.stock < cartItem.quantity) {
-          throw new AppError(`Insufficient stock for "${product.name}". Only ${product.stock} left.`, 409);
+        if (store.digital_only) {
+          deliveryMethod = 'digital';
+          isPhysical = false;
+        } else {
+          hasPhysicalItem = true;
+          isPhysical = true;
+          deliveryMethod = customerData.deliveryType || 'delivery';
+          if (product.stock !== null && product.stock < cartItem.quantity) {
+            throw new AppError(`Insufficient stock for "${product.name}". Only ${product.stock} left.`, 409);
+          }
         }
       }
 
@@ -594,10 +625,8 @@ export async function placeOrder(
           if (decFormatRes.rowCount === 0) {
             throw new AppError(`The hardcopy edition of "${item.productName}" was just sold out.`, 409);
           }
-          await ordersQueries.decrementStockTransactional(client, item.productId, item.quantity);
-        } else {
-          await ordersQueries.decrementStockTransactional(client, item.productId, item.quantity);
         }
+        await ordersQueries.decrementStockTransactional(client, item.productId, item.quantity);
       }
     }
 

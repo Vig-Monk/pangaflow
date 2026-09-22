@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/verticals/books/import/import.worker.ts
-// In-process Spreadsheet & Google Sheet ingestion worker with deduplication
+// Spreadsheet Ingestion Worker with Shared Master Catalog Deduplication
 // =============================================================================
 
 import crypto from 'crypto';
@@ -11,6 +11,7 @@ import axios from 'axios';
 import ExcelJS from 'exceljs';
 import { pool } from '../../../config/db';
 import {
+  getEffectiveCatalogOrgId,
   findOrCreateCategoryByName,
   insertProductTransactional,
   insertInventoryTransactional,
@@ -18,10 +19,6 @@ import {
 } from '../../../modules/products/products.queries';
 import { findBestBookCover } from '../../../services/bookCover.service';
 import * as importQueries from './import.queries';
-
-// -----------------------------------------------------------------------------
-// Types
-// -----------------------------------------------------------------------------
 
 export interface ParsedBookRow {
   title: string;
@@ -38,10 +35,6 @@ export interface ParsedBookRow {
   pdfFileUrl?: string | null;
   epubFileUrl?: string | null;
 }
-
-// -----------------------------------------------------------------------------
-// Excel Cell Parsing Helpers
-// -----------------------------------------------------------------------------
 
 function normalizeHeader(h: string): string {
   return h.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
@@ -78,30 +71,33 @@ function getCellValueAsNumber(value: unknown): number | null {
   return isNaN(num) ? null : num;
 }
 
-// -----------------------------------------------------------------------------
-// Database Ingestion & Deduplication
-// -----------------------------------------------------------------------------
-
+/**
+ * Upserts book into the shared master catalog.
+ * Performs pre-flight deduplication against SKU and Title.
+ */
 async function upsertBookFromImport(
   orgId: string,
   row: ParsedBookRow
 ): Promise<'inserted' | 'updated' | 'skipped'> {
+  const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
 
-    // 1. Safe Category Resolution
+    // 1. Safe Category Resolution under Effective Catalog Organization
     const categoryName = row.category || 'General';
-    const categoryId = await findOrCreateCategoryByName(client, orgId, categoryName);
+    const categoryId = await findOrCreateCategoryByName(client, effectiveCatalogOrgId, categoryName);
 
-    // 2. Pre-Flight Duplicate Check (SKU first, fallback to Title)
+    // 2. Pre-Flight Duplicate Check across Shared Catalog Bounds
     let existingProductId: string | null = null;
 
     if (row.sku && row.sku.trim()) {
       const skuCheck = await client.query<{ id: string }>(
         `SELECT id FROM products 
-         WHERE org_id = $1 AND LOWER(TRIM(sku)) = LOWER(TRIM($2)) AND deleted_at IS NULL 
+         WHERE (org_id = $1 OR org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+           AND LOWER(TRIM(sku)) = LOWER(TRIM($2)) 
+           AND deleted_at IS NULL 
          LIMIT 1`,
         [orgId, row.sku.trim()]
       );
@@ -113,7 +109,9 @@ async function upsertBookFromImport(
     if (!existingProductId) {
       const titleCheck = await client.query<{ id: string }>(
         `SELECT id FROM products 
-         WHERE org_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) AND deleted_at IS NULL 
+         WHERE (org_id = $1 OR org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+           AND LOWER(TRIM(name)) = LOWER(TRIM($2)) 
+           AND deleted_at IS NULL 
          LIMIT 1`,
         [orgId, row.title.trim()]
       );
@@ -122,7 +120,7 @@ async function upsertBookFromImport(
       }
     }
 
-    // 3. Price & Discount Normalization (Respects chk_products_compare_at_price constraint)
+    // 3. Price & Discount Normalization (Ensures compare_at_price > price)
     let sellingPrice = 999;
     let compareAtPrice: number | null = null;
 
@@ -139,12 +137,10 @@ async function upsertBookFromImport(
       sellingPrice = row.salePrice || row.regularPrice || 999;
     }
 
-    // 4. Synchronize PDF & EPUB eBook prices
     const digitalPrice = row.pdfPrice && row.pdfPrice > 0
       ? row.pdfPrice
       : (row.epubPrice && row.epubPrice > 0 ? row.epubPrice : 149);
 
-    // Compute matching digital strike-through price if book is on sale
     let digitalCompareAt: number | null = null;
     if (compareAtPrice && compareAtPrice > sellingPrice) {
       const discountRatio = (compareAtPrice - sellingPrice) / compareAtPrice;
@@ -153,7 +149,6 @@ async function upsertBookFromImport(
       }
     }
 
-    // 5. Auto-discover cover art if no image link was provided
     let targetImageUrl: string | null = row.coverImageUrl || null;
 
     if (!targetImageUrl) {
@@ -185,7 +180,7 @@ async function upsertBookFromImport(
              description      = COALESCE($6, products.description),
              badge            = (CASE WHEN $4 IS NOT NULL THEN 'FLASH_SALE' ELSE products.badge END),
              updated_at       = NOW()
-         WHERE id = $1 AND org_id = $7`,
+         WHERE id = $1`,
         [
           existingProductId,
           categoryId,
@@ -193,7 +188,6 @@ async function upsertBookFromImport(
           compareAtPrice,
           row.sku || null,
           row.description || (row.author ? `By ${row.author}` : null),
-          orgId,
         ]
       );
 
@@ -206,7 +200,6 @@ async function upsertBookFromImport(
         );
       }
 
-      // Attach discovered cover if existing book has no image
       if (targetImageUrl) {
         const hasImg = await client.query(
           `SELECT 1 FROM product_images WHERE product_id = $1 LIMIT 1`,
@@ -233,7 +226,7 @@ async function upsertBookFromImport(
       const slugSuffix = crypto.randomBytes(3).toString('hex');
       const slug = `${cleanSlugTitle}-${slugSuffix}`;
 
-      productId = await insertProductTransactional(client, orgId, {
+      productId = await insertProductTransactional(client, effectiveCatalogOrgId, {
         category_id: categoryId,
         name: row.title,
         slug,
@@ -248,7 +241,6 @@ async function upsertBookFromImport(
 
       await insertInventoryTransactional(client, productId, row.hardcopyStock || 10);
 
-      // Attach cover if found or provided
       if (targetImageUrl) {
         await insertProductImageTransactional(
           client,
@@ -260,7 +252,7 @@ async function upsertBookFromImport(
       }
     }
 
-    // 5. Hardcopy Format (Always assume/create Hardcopy when sellingPrice is present)
+    // Provision Hardcopy Format for Hybrid Storefronts (Sunrise)
     if (productId && sellingPrice) {
       await client.query(
         `INSERT INTO product_formats (
@@ -276,7 +268,7 @@ async function upsertBookFromImport(
       );
     }
 
-    // 6. Digital PDF Format (Strict Guard: Only create if a PDF link or price was explicitly provided)
+    // Provision Digital PDF Format for Both Storefronts (Sunrise & EbookReads)
     if (productId && (row.pdfFileUrl || row.pdfPrice)) {
       const isExternalUrl = row.pdfFileUrl?.startsWith('http://') || row.pdfFileUrl?.startsWith('https://');
       const filePublicId = isExternalUrl ? null : (row.pdfFileUrl || null);
@@ -296,7 +288,7 @@ async function upsertBookFromImport(
       );
     }
 
-    // 7. Digital EPUB Format (Strict Guard: Only create if an EPUB link or price was explicitly provided)
+    // Provision Digital EPUB Format
     if (productId && (row.epubFileUrl || row.epubPrice)) {
       const isExternalUrl = row.epubFileUrl?.startsWith('http://') || row.epubFileUrl?.startsWith('https://');
       const filePublicId = isExternalUrl ? null : (row.epubFileUrl || null);
@@ -325,10 +317,6 @@ async function upsertBookFromImport(
     client.release();
   }
 }
-
-// -----------------------------------------------------------------------------
-// Excel File Processor
-// -----------------------------------------------------------------------------
 
 export async function processExcelFile(
   jobId: string,
@@ -495,10 +483,6 @@ export async function processExcelFile(
   }
 }
 
-// -----------------------------------------------------------------------------
-// Google Sheet Processor
-// -----------------------------------------------------------------------------
-
 export async function processGoogleSheet(
   jobId: string,
   orgId: string,
@@ -511,7 +495,6 @@ export async function processGoogleSheet(
 
   const sheetId = match[1];
   const csvExportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
-
   const tempFilePath = path.join(os.tmpdir(), `gsheet-${jobId}-${Date.now()}.csv`);
 
   try {
@@ -534,7 +517,6 @@ export async function processGoogleSheet(
     }
 
     fs.writeFileSync(tempFilePath, response.data, 'utf8');
-
     await processExcelFile(jobId, orgId, tempFilePath);
   } catch (err: any) {
     console.error(`[Process Google Sheet Error] Job ${jobId}:`, err);

@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/product-formats/product-formats.queries.ts
-// Database access layer for product formats with unambiguous UPDATE scope.
+// Database access layer for product formats with shared catalog resolution.
 // =============================================================================
 
 import { query } from '../../config/db';
@@ -40,7 +40,6 @@ export interface UpdateFormatInput {
   stock?: number | null;
 }
 
-// Fields for SELECT queries joining product_formats as pf
 const FORMAT_SELECT_FIELDS = `
   pf.id,
   pf.product_id,
@@ -55,7 +54,6 @@ const FORMAT_SELECT_FIELDS = `
   pf.updated_at
 `;
 
-// Explicitly qualified fields to prevent any ambiguity in RETURNING clauses
 const FORMAT_RETURNING_FIELDS = `
   product_formats.id,
   product_formats.product_id,
@@ -70,12 +68,19 @@ const FORMAT_RETURNING_FIELDS = `
   product_formats.updated_at
 `;
 
+/**
+ * Checks whether a product belongs to the requesting org OR to its inherited shared catalog source.
+ */
 export async function checkProductBelongsToOrg(
   orgId: string,
   productId: string
 ): Promise<boolean> {
   const result = await query<{ id: string }>(
-    `SELECT id FROM products WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL`,
+    `SELECT p.id 
+     FROM products p 
+     WHERE p.id = $1 
+       AND (p.org_id = $2 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $2 AND deleted_at IS NULL))
+       AND p.deleted_at IS NULL`,
     [productId, orgId]
   );
   return result.rows.length > 0;
@@ -89,7 +94,9 @@ export async function getFormatsByProductId(
     `SELECT ${FORMAT_SELECT_FIELDS}
      FROM product_formats pf
      INNER JOIN products p ON p.id = pf.product_id
-     WHERE p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL
+     WHERE (p.org_id = $1 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+       AND p.id = $2 
+       AND p.deleted_at IS NULL
      ORDER BY (
        CASE pf.format
          WHEN 'hardcopy' THEN 1
@@ -112,7 +119,10 @@ export async function getFormatById(
     `SELECT ${FORMAT_SELECT_FIELDS}
      FROM product_formats pf
      INNER JOIN products p ON p.id = pf.product_id
-     WHERE p.org_id = $1 AND p.id = $2 AND pf.id = $3 AND p.deleted_at IS NULL`,
+     WHERE (p.org_id = $1 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+       AND p.id = $2 
+       AND pf.id = $3 
+       AND p.deleted_at IS NULL`,
     [orgId, productId, formatId]
   );
   return result.rows[0] ?? null;
@@ -129,7 +139,9 @@ export async function createProductFormat(
      )
      SELECT p.id, $3, $4, $5, $6, $7, $8, $9
      FROM products p
-     WHERE p.id = $2 AND p.org_id = $1 AND p.deleted_at IS NULL
+     WHERE p.id = $2 
+       AND (p.org_id = $1 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+       AND p.deleted_at IS NULL
      ON CONFLICT (product_id, format) DO UPDATE SET
        price            = EXCLUDED.price,
        compare_at_price = EXCLUDED.compare_at_price,
@@ -166,7 +178,6 @@ export async function updateProductFormat(
 
   if (data.price !== undefined) {
     setClauses.push(`price = $${paramIdx}`);
-    // Defensive reset of compare_at_price (unambiguous because product_formats is the sole table in scope)
     setClauses.push(
       `compare_at_price = (CASE WHEN compare_at_price IS NOT NULL AND compare_at_price <= $${paramIdx} THEN NULL ELSE compare_at_price END)`
     );
@@ -210,7 +221,6 @@ export async function updateProductFormat(
 
   setClauses.push('updated_at = NOW()');
 
-  // Tenant ownership enforced without multi-table join ambiguity
   const result = await query<ProductFormatRow>(
     `UPDATE product_formats
      SET ${setClauses.join(', ')}
@@ -218,7 +228,9 @@ export async function updateProductFormat(
        AND product_id = $2
        AND product_id IN (
          SELECT id FROM products
-         WHERE id = $2 AND org_id = $1 AND deleted_at IS NULL
+         WHERE id = $2 
+           AND (org_id = $1 OR org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+           AND deleted_at IS NULL
        )
      RETURNING ${FORMAT_RETURNING_FIELDS}`,
     params
@@ -236,7 +248,7 @@ export async function deleteProductFormat(
     `DELETE FROM product_formats pf
      USING products p
      WHERE pf.product_id = p.id
-       AND p.org_id = $1
+       AND (p.org_id = $1 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
        AND p.id = $2
        AND pf.id = $3
        AND p.deleted_at IS NULL`,

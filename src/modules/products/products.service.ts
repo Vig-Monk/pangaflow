@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/products/products.service.ts
-// Bulletproof Deletion with Explicit Child Cleanup & Category/Product Management
+// Bulletproof Deletion & Shared Catalog Multi-Tenant Product Management
 // =============================================================================
 
 import { z } from "zod";
@@ -87,7 +87,7 @@ export const UpdateProductSchema = z.object({
     compare_at_price: z.number().positive().nullable().optional(),
     cost_price: z.number().nonnegative().nullable().optional(),
     sku: z.string().max(100).nullable().optional(),
-    badge: z.enum(ALLOWED_BADGES).nullable().optional(),
+    badge: z.string().max(50).nullable().optional(),
     sale_ends_at: z.string().datetime().nullable().optional(),
     description: z.string().max(2000).nullable().optional(),
     status: z.enum(["draft", "published", "archived"]).optional(),
@@ -125,8 +125,10 @@ async function generateUniqueSlug(client: PoolClient, orgId: string, name: strin
 }
 
 export async function generateUploadSignature(orgId: string, folderType: "products" | "store" = "products"): Promise<SignatureResult> {
+    const effectiveCatalogOrgId = await productsQueries.getEffectiveCatalogOrgId(orgId);
     const timestamp = Math.round(new Date().getTime() / 1000);
-    const folder = `soko/${orgId}/${folderType}`;
+    const targetFolderOrgId = folderType === 'products' ? effectiveCatalogOrgId : orgId;
+    const folder = `soko/${targetFolderOrgId}/${folderType}`;
     const paramsToSign = { timestamp, folder };
     const signature = cloudinary.utils.api_sign_request(paramsToSign, env.CLOUDINARY_API_SECRET);
     return { signature, timestamp, folder, apiKey: env.CLOUDINARY_API_KEY, cloudName: env.CLOUDINARY_CLOUD_NAME };
@@ -194,62 +196,64 @@ export async function unarchiveMerchantProduct(orgId: string, productId: string)
     return productsQueries.unarchiveProduct(orgId, productId);
 }
 
-// =============================================================================
-// BULLETPROOF SMART DELETION (Handles foreign keys safely with zero crashes)
-// =============================================================================
+/**
+ * Bulletproof deletion: Verifies historical orders across all tenant boundaries.
+ * If active paid orders or download tokens exist anywhere in the platform,
+ * applies a safe soft-delete so customer download links and financial ledgers stay intact.
+ */
 export async function deleteMerchantProduct(
     orgId: string,
     productId: string
 ): Promise<{ deleted: boolean; action: 'hard_deleted' | 'soft_deleted' }> {
+    const effectiveCatalogOrgId = await productsQueries.getEffectiveCatalogOrgId(orgId);
     const client = await pool.connect();
+
     try {
         await client.query("BEGIN");
 
-        // 1. Verify existence
+        // 1. Verify product exists under tenant OR effective shared catalog
         const productRes = await client.query<{ id: string; name: string }>(
-            `SELECT id, name FROM products WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL`,
-            [orgId, productId]
+            `SELECT id, name FROM products 
+             WHERE (org_id = $1 OR org_id = $2) AND id = $3 AND deleted_at IS NULL`,
+            [orgId, effectiveCatalogOrgId, productId]
         );
 
         if (productRes.rows.length === 0) {
             throw new AppError("Product not found or already deleted", 404);
         }
 
-        // 2. Check if product has historical orders
+        // 2. Check if product has historical orders on ANY store channel
         const orderCheck = await client.query<{ count: string }>(
             `SELECT COUNT(oi.id)::text AS count
              FROM order_items oi
-             JOIN orders o ON o.id = oi.order_id
-             WHERE o.org_id = $1 AND (
-               oi.product_id = $2 OR 
-               oi.format_id IN (SELECT id FROM product_formats WHERE product_id = $2)
-             )`,
-            [orgId, productId]
+             WHERE oi.product_id = $1 
+                OR oi.format_id IN (SELECT id FROM product_formats WHERE product_id = $1)`,
+            [productId]
         );
         const orderCount = parseInt(orderCheck.rows[0]?.count || '0', 10);
 
         let action: 'hard_deleted' | 'soft_deleted' = 'hard_deleted';
 
         if (orderCount > 0) {
-            // Has orders: Soft-delete and free the slug
+            // Soft-delete to preserve order history and digital download recovery
             const timestamp = Math.floor(Date.now() / 1000);
             await client.query(
                 `UPDATE products
                  SET deleted_at = NOW(),
                      status = 'archived',
-                     slug = slug || '-deleted-' || $3,
+                     slug = slug || '-deleted-' || $2,
                      updated_at = NOW()
-                 WHERE org_id = $1 AND id = $2`,
-                [orgId, productId, timestamp]
+                 WHERE id = $1`,
+                [productId, timestamp]
             );
             action = 'soft_deleted';
         } else {
-            // Zero orders: Manually clean children first to avoid any FK deadlock
+            // Clean child entities directly to ensure deterministic deletion
             await client.query(`DELETE FROM product_images WHERE product_id = $1`, [productId]);
             await client.query(`DELETE FROM inventory WHERE product_id = $1`, [productId]);
             await client.query(`DELETE FROM product_formats WHERE product_id = $1`, [productId]);
             await client.query(`DELETE FROM product_variants WHERE product_id = $1`, [productId]);
-            await client.query(`DELETE FROM products WHERE org_id = $1 AND id = $2`, [orgId, productId]);
+            await client.query(`DELETE FROM products WHERE id = $1`, [productId]);
             action = 'hard_deleted';
         }
 
@@ -268,15 +272,20 @@ export async function deleteProductsBulk(orgId: string, rawBody: unknown) {
     if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message ?? "Invalid payload", 400);
 
     let count = 0;
+    let softDeleted = 0;
+    let hardDeleted = 0;
+
     for (const id of parsed.data.productIds) {
         try {
-            await deleteMerchantProduct(orgId, id);
+            const res = await deleteMerchantProduct(orgId, id);
             count++;
+            if (res.action === 'soft_deleted') softDeleted++;
+            else hardDeleted++;
         } catch {
-            // Ignore already deleted
+            // Non-blocking: continue processing remaining batch items
         }
     }
-    return { deleted: true, count };
+    return { deleted: true, count, softDeleted, hardDeleted };
 }
 
 export async function listMerchantInventory(orgId: string, rawQuery: unknown) {
@@ -302,8 +311,10 @@ export async function createProductsBulk(orgId: string, rawBody: unknown) {
     const parsed = BulkCreateSchema.safeParse(rawBody);
     if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message ?? "Invalid request body", 400);
 
+    const effectiveCatalogOrgId = await productsQueries.getEffectiveCatalogOrgId(orgId);
     const { products } = parsed.data;
     const client = await pool.connect();
+
     try {
         await client.query("BEGIN");
 
@@ -312,13 +323,13 @@ export async function createProductsBulk(orgId: string, rawBody: unknown) {
             const prod = products[i];
             let finalCategoryId = prod.category_id;
             if (!finalCategoryId) {
-                finalCategoryId = await productsQueries.findOrCreateCategoryByName(client, orgId, "General");
+                finalCategoryId = await productsQueries.findOrCreateCategoryByName(client, effectiveCatalogOrgId, "General");
             }
 
-            const slug = await generateUniqueSlug(client, orgId, prod.name);
+            const slug = await generateUniqueSlug(client, effectiveCatalogOrgId, prod.name);
             const parentPrice = prod.variants && prod.variants.length > 0 ? prod.variants[0].price : prod.price;
 
-            const insertedId = await productsQueries.insertProductTransactional(client, orgId, {
+            const insertedId = await productsQueries.insertProductTransactional(client, effectiveCatalogOrgId, {
                 category_id: finalCategoryId,
                 name: prod.name,
                 slug,

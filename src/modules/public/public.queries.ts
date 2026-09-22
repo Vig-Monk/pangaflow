@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/public/public.queries.ts
-// Strict Tenant-Isolated Public Storefront Queries with DB-Native Fuzzy Search
+// Strict Tenant-Isolated Public Storefront Queries with Shared Catalog Support
 // =============================================================================
 
 import { query } from '../../config/db';
@@ -9,6 +9,8 @@ import { buildFuzzySearchQuery } from '../../utils/search';
 export interface PublicStoreRow {
   id: string;
   org_id: string;
+  catalog_source_org_id: string | null;
+  digital_only: boolean;
   slug: string;
   name: string;
   description: string | null;
@@ -128,13 +130,30 @@ export async function searchEstatesLocal(searchQuery: string): Promise<LocalEsta
   return result.rows;
 }
 
+/**
+ * Retrieves public store metadata, including the shared catalog link and channel rules.
+ */
 export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow | null> {
   const cleanSlug = (slug || '').trim().toLowerCase();
 
   const result = await query<PublicStoreRow>(
-    `SELECT s.id, s.org_id, s.slug, s.name, s.description, s.logo_url, s.cover_image_url,
-            s.contact_phone, s.contact_email, s.location, s.delivery_info,
-            s.hero_layout, s.hero_headline, s.hero_subheadline, s.hero_cta_label,
+    `SELECT s.id,
+            s.org_id,
+            o.catalog_source_org_id,
+            COALESCE((o.settings->>'digital_only')::boolean, false) AS digital_only,
+            s.slug,
+            s.name,
+            s.description,
+            s.logo_url,
+            s.cover_image_url,
+            s.contact_phone,
+            s.contact_email,
+            s.location,
+            s.delivery_info,
+            s.hero_layout,
+            s.hero_headline,
+            s.hero_subheadline,
+            s.hero_cta_label,
             COALESCE(s.promo_ticker, '[]'::jsonb) AS promo_ticker
      FROM   stores s
      INNER JOIN organizations o ON o.id = s.org_id
@@ -148,9 +167,15 @@ export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow
   return result.rows[0] ?? null;
 }
 
+/**
+ * Queries catalog items for a given storefront channel.
+ * Resolves against effectiveCatalogOrgId (shared master catalog or local tenant).
+ * Automatically applies channel format filtering (e.g. digital-only for EbookReads).
+ */
 export async function getProductsByStoreOrgIdPublic(
-  orgId: string,
-  options: ListStoreProductsOptions = {}
+  catalogOrgId: string,
+  options: ListStoreProductsOptions = {},
+  digitalOnly = false
 ): Promise<PaginatedPublicProducts> {
   const page = Math.max(1, options.page || 1);
   const limit = Math.min(100, Math.max(1, options.limit || 50));
@@ -161,10 +186,19 @@ export async function getProductsByStoreOrgIdPublic(
     "p.status = 'published'",
     'p.deleted_at IS NULL',
   ];
-  const params: unknown[] = [orgId];
+  const params: unknown[] = [catalogOrgId];
   let paramIndex = 2;
 
-  // 1. Category Filter
+  // 1. Digital-Only Channel Filter (EbookReads restriction)
+  if (digitalOnly) {
+    conditions.push(`EXISTS (
+      SELECT 1 FROM product_formats pf_filter
+      WHERE pf_filter.product_id = p.id
+        AND pf_filter.format IN ('pdf', 'epub')
+    )`);
+  }
+
+  // 2. Category Filter
   if (
     options.category &&
     !['general', 'all', 'all books'].includes(options.category.toLowerCase().trim())
@@ -185,7 +219,7 @@ export async function getProductsByStoreOrgIdPublic(
     }
   }
 
-  // 2. Database-Level Native Trigram Fuzzy Matcher
+  // 3. Typo-Tolerant Trigram Matcher
   let relevanceOrderClause = 'p.created_at DESC';
 
   if (options.searchQuery && options.searchQuery.trim().length > 0) {
@@ -211,7 +245,6 @@ export async function getProductsByStoreOrgIdPublic(
 
   const whereClause = conditions.join(' AND ');
 
-  // Count total matching items across the whole catalog
   const countResult = await query<{ count: string }>(
     `SELECT COUNT(p.id) AS count
      FROM   products p
@@ -232,6 +265,10 @@ export async function getProductsByStoreOrgIdPublic(
       totalPages: 1,
     };
   }
+
+  const formatFilterClause = digitalOnly
+    ? "AND pf.format IN ('pdf', 'epub')"
+    : '';
 
   const dataParams = [...params, limit, offset];
   const dataResult = await query<PublicProductRow>(
@@ -288,6 +325,7 @@ export async function getProductsByStoreOrgIdPublic(
                 )
                 FROM product_formats pf
                 WHERE pf.product_id = p.id
+                ${formatFilterClause}
               ),
               '[]'::json
             ) AS formats
@@ -309,10 +347,18 @@ export async function getProductsByStoreOrgIdPublic(
   };
 }
 
+/**
+ * Retrieves a single book by slug against the effective catalog source.
+ */
 export async function getProductBySlugPublic(
-  orgId: string,
-  productSlug: string
+  catalogOrgId: string,
+  productSlug: string,
+  digitalOnly = false
 ): Promise<PublicProductRow | null> {
+  const formatFilterClause = digitalOnly
+    ? "AND pf.format IN ('pdf', 'epub')"
+    : '';
+
   const result = await query<PublicProductRow>(
     `SELECT p.id,
             p.org_id,
@@ -367,6 +413,7 @@ export async function getProductBySlugPublic(
                 )
                 FROM product_formats pf
                 WHERE pf.product_id = p.id
+                ${formatFilterClause}
               ),
               '[]'::json
             ) AS formats
@@ -377,7 +424,7 @@ export async function getProductBySlugPublic(
        AND  p.slug       = $2
        AND  p.status     = 'published'
        AND  p.deleted_at IS NULL`,
-    [orgId, productSlug.trim().toLowerCase()]
+    [catalogOrgId, productSlug.trim().toLowerCase()]
   );
   return result.rows[0] ?? null;
 }

@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/verticals/books/delivery.service.ts
-// Digital fulfillment engine for books: snapshots assets and dispatches emails.
+// Digital Fulfillment Engine: Multi-Tenant Token Vault & Sovereign Email Routing
 // =============================================================================
 
 import crypto from 'crypto';
@@ -26,10 +26,11 @@ export function generateDownloadToken(): string {
 }
 
 /**
- * Fulfills all digital items for an order:
- * 1. Snapshots book title, format, and R2 key into digital_downloads.
- * 2. Sets 90-day TTL and 15 download attempts.
- * 3. Resolves tenant org_id and dispatches email via tenant-specific SMTP.
+ * Fulfills digital eBook purchases:
+ * 1. Resolves digital line items referencing shared catalog products and formats.
+ * 2. Snapshots title, format, and R2 key into digital_downloads with 90-day expiry.
+ * 3. Resolves the purchasing store's sovereign org_id and dispatches confirmation
+ *    email via that store's verified SMTP mailer.
  */
 export async function fulfillDigitalItems(
   orderId: string,
@@ -43,7 +44,7 @@ export async function fulfillDigitalItems(
       await runner.query('BEGIN');
     }
 
-    // 1. Resolve digital line items with format file links
+    // 1. Resolve digital line items with format file links across the shared catalog
     const itemsRes = await runner.query<DigitalFulfillmentItem>(
       `SELECT oi.id AS order_item_id,
               oi.format_id,
@@ -51,7 +52,7 @@ export async function fulfillDigitalItems(
               pf.file_public_id,
               pf.file_size_bytes::text AS file_size_bytes,
               COALESCE(pf.format, 'pdf') AS format,
-              p.name AS book_title
+              COALESCE(oi.product_name, p.name) AS book_title
        FROM order_items oi
        LEFT JOIN product_formats pf ON pf.id = oi.format_id
        LEFT JOIN products p ON p.id = pf.product_id OR p.id = oi.product_id
@@ -110,7 +111,7 @@ export async function fulfillDigitalItems(
       await runner.query('COMMIT');
     }
 
-    // 2. Asynchronously Dispatch Out-of-Band Email with org_id binding
+    // 2. Dispatches out-of-band email bound strictly to the purchasing store's sovereign org_id
     setImmediate(async () => {
       try {
         const orderInfo = await pool.query<{
@@ -134,7 +135,7 @@ export async function fulfillDigitalItems(
         const order = orderInfo.rows[0];
         if (order && order.customer_email && order.customer_email.includes('@')) {
           await sendOrderConfirmationEmail({
-            orgId: order.org_id, // Pass tenant org_id to resolve tenant-specific SMTP
+            orgId: order.org_id, // Sovereign routing: uses store's custom SMTP credentials
             toEmail: order.customer_email,
             customerName: order.customer_name,
             customerPhone: order.customer_phone,
@@ -147,7 +148,7 @@ export async function fulfillDigitalItems(
           });
         }
       } catch (emailErr: any) {
-        logger.error({ err: emailErr.message, orderId }, 'Background email trigger error');
+        logger.error({ err: emailErr.message, orderId }, 'Background email dispatch error');
       }
     });
   } catch (err) {
@@ -163,7 +164,8 @@ export async function fulfillDigitalItems(
 }
 
 /**
- * Sweeps and retroactively fulfills orders when an admin uploads a file to an existing format.
+ * Sweeps and retroactively fulfills orders across all stores when an admin
+ * uploads a digital file to an existing format.
  */
 export async function reconcilePendingDownloadsForFormat(formatId: string): Promise<number> {
   const client = await pool.connect();
