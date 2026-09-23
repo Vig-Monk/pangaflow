@@ -7,7 +7,7 @@ import express, { Request, Response, NextFunction } from "express";
 import helmet from "helmet";
 import cors from "cors";
 import pinoHttp from "pino-http";
-import rateLimit from "express-rate-limit";
+//import rateLimit from "express-rate-limit";
 import { v4 as uuidv4 } from "uuid";
 import { env } from "./config/env";
 import { errorHandler } from "./middleware/errorHandler";
@@ -89,18 +89,18 @@ app.use(
   })
 );
 
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 300,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    success: false,
-    error: {
-      message: "Too many requests. Please try again later."
-    }
-  }
-});
+//const limiter = rateLimit({
+ // windowMs: 15 * 60 * 1000,
+ // max: 300,
+ // standardHeaders: true,
+ // legacyHeaders: false,
+ // message: {
+   // success: false,
+   // error: {
+    //  message: "Too many requests. Please try again later."
+   // }
+ // }
+//});
 //app.use(limiter);
 
 const apiRouter = express.Router();

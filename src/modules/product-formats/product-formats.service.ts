@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/product-formats/product-formats.service.ts
-// Format Management with Cross-Channel Shared Catalog Resolution
+// Format Management with Persistent Strikethrough Pricing & Shared Catalog Support
 // =============================================================================
 
 import { z } from 'zod';
@@ -11,11 +11,21 @@ import { reconcilePendingDownloadsForFormat } from '../../verticals/books/delive
 
 const UUID_SCHEMA = z.string().uuid('Must be a valid UUID');
 
+const PriceDiscountSchema = z
+  .number()
+  .positive('Discount / compare-at price must be greater than zero')
+  .nullable()
+  .optional()
+  .or(z.literal(''))
+  .or(z.literal(0))
+  .transform((v) => (v === '' || v === 0 ? null : v));
+
 export const CreateProductFormatSchema = z
   .object({
     format: z.enum(['pdf', 'epub', 'hardcopy']),
     price: z.number().nonnegative('Price must be greater than or equal to zero'),
-    compare_at_price: z.number().positive().nullable().optional(),
+    compare_at_price: PriceDiscountSchema,
+    compareAtPrice: PriceDiscountSchema,
     file_url: z
       .string()
       .max(1000)
@@ -64,7 +74,8 @@ export const CreateProductFormatSchema = z
 
 export const UpdateProductFormatSchema = z.object({
   price: z.number().nonnegative('Price must be greater than or equal to zero').optional(),
-  compare_at_price: z.number().positive().nullable().optional(),
+  compare_at_price: PriceDiscountSchema,
+  compareAtPrice: PriceDiscountSchema,
   file_url: z
     .string()
     .max(1000)
@@ -170,10 +181,12 @@ export async function createFormat(
     throw new AppError(message, 400);
   }
 
+  const compareAtPrice = parsed.data.compare_at_price ?? parsed.data.compareAtPrice ?? null;
+
   const row = await formatQueries.createProductFormat(orgId, productId, {
     format: parsed.data.format,
     price: parsed.data.price,
-    compareAtPrice: parsed.data.compare_at_price,
+    compareAtPrice,
     fileUrl: parsed.data.file_url ?? parsed.data.file_public_id,
     filePublicId: parsed.data.file_public_id,
     fileSizeBytes: parsed.data.file_size_bytes,
@@ -218,9 +231,14 @@ export async function updateFormat(
     throw new AppError('File attachments are not allowed for hardcopy format', 400);
   }
 
+  // Resolve compareAtPrice from either casing
+  const compareAtPrice = parsed.data.compare_at_price !== undefined
+    ? parsed.data.compare_at_price
+    : parsed.data.compareAtPrice;
+
   const row = await formatQueries.updateProductFormat(orgId, productId, formatId, {
     price: parsed.data.price,
-    compareAtPrice: parsed.data.compare_at_price,
+    compareAtPrice,
     fileUrl: parsed.data.file_url ?? parsed.data.file_public_id,
     filePublicId: parsed.data.file_public_id,
     fileSizeBytes: parsed.data.file_size_bytes,
@@ -231,7 +249,6 @@ export async function updateFormat(
     throw new AppError('Product format not found', 404);
   }
 
-  // Cross-tenant fulfillment: unlocks download tokens for any orders waiting for this file on either store
   if (isDigital && (row.file_url || row.file_public_id) && (!existing.file_url && !existing.file_public_id)) {
     setImmediate(async () => {
       try {

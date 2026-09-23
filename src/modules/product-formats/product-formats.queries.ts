@@ -1,6 +1,6 @@
 // =============================================================================
 // soko-api/src/modules/product-formats/product-formats.queries.ts
-// Database access layer for product formats with shared catalog resolution.
+// Database queries for product formats with constraint-safe compare_at_price updates
 // =============================================================================
 
 import { query } from '../../config/db';
@@ -68,9 +68,6 @@ const FORMAT_RETURNING_FIELDS = `
   product_formats.updated_at
 `;
 
-/**
- * Checks whether a product belongs to the requesting org OR to its inherited shared catalog source.
- */
 export async function checkProductBelongsToOrg(
   orgId: string,
   productId: string
@@ -166,6 +163,10 @@ export async function createProductFormat(
   return result.rows[0] ?? null;
 }
 
+/**
+ * Updates a product format without duplicate column assignments in SQL SET.
+ * Defensively cleans compare_at_price to satisfy chk_product_formats_compare_at_price.
+ */
 export async function updateProductFormat(
   orgId: string,
   productId: string,
@@ -178,17 +179,20 @@ export async function updateProductFormat(
 
   if (data.price !== undefined) {
     setClauses.push(`price = $${paramIdx}`);
-    setClauses.push(
-      `compare_at_price = (CASE WHEN compare_at_price IS NOT NULL AND compare_at_price <= $${paramIdx} THEN NULL ELSE compare_at_price END)`
-    );
     params.push(data.price);
     paramIdx++;
   }
 
+  // If compareAtPrice is explicitly provided, assign once
   if (data.compareAtPrice !== undefined) {
     setClauses.push(`compare_at_price = $${paramIdx}`);
     params.push(data.compareAtPrice);
     paramIdx++;
+  } else if (data.price !== undefined) {
+    // Only if compareAtPrice was NOT explicitly passed do we defensively reset invalid older values
+    setClauses.push(
+      `compare_at_price = (CASE WHEN compare_at_price IS NOT NULL AND compare_at_price <= $${paramIdx - 1} THEN NULL ELSE compare_at_price END)`
+    );
   }
 
   if (data.fileUrl !== undefined) {
