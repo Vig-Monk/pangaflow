@@ -101,7 +101,7 @@ const limiter = rateLimit({
     }
   }
 });
-app.use(limiter);
+//app.use(limiter);
 
 const apiRouter = express.Router();
 
