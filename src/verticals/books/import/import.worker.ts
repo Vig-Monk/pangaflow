@@ -74,6 +74,7 @@ function getCellValueAsNumber(value: unknown): number | null {
 /**
  * Upserts book into the shared master catalog.
  * Performs pre-flight deduplication against SKU and Title.
+ * Neutral: does NOT automatically assign FLASH_SALE badges.
  */
 async function upsertBookFromImport(
   orgId: string,
@@ -171,6 +172,7 @@ async function upsertBookFromImport(
 
     if (existingProductId) {
       outcome = 'updated';
+      // Deliberate merchandising: preserves existing product badge, does NOT auto-assign FLASH_SALE
       await client.query(
         `UPDATE products
          SET category_id      = $2,
@@ -178,7 +180,6 @@ async function upsertBookFromImport(
              compare_at_price = COALESCE($4, compare_at_price),
              sku              = COALESCE(products.sku, $5),
              description      = COALESCE($6, products.description),
-             badge            = (CASE WHEN $4 IS NOT NULL THEN 'FLASH_SALE' ELSE products.badge END),
              updated_at       = NOW()
          WHERE id = $1`,
         [
@@ -226,6 +227,7 @@ async function upsertBookFromImport(
       const slugSuffix = crypto.randomBytes(3).toString('hex');
       const slug = `${cleanSlugTitle}-${slugSuffix}`;
 
+      // Badge defaults to null: deliberate curation only
       productId = await insertProductTransactional(client, effectiveCatalogOrgId, {
         category_id: categoryId,
         name: row.title,
@@ -235,7 +237,7 @@ async function upsertBookFromImport(
         cost_price: null,
         price: sellingPrice,
         compare_at_price: compareAtPrice,
-        badge: compareAtPrice ? 'FLASH_SALE' : null,
+        badge: null,
         status: 'published',
       });
 
