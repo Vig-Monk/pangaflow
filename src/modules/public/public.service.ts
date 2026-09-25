@@ -164,6 +164,7 @@ export interface PublicStoreDto {
   hero_cta_label: string | null;
   mpesa_verified: boolean;
   digital_only: boolean;
+  hero_notes: publicQueries.StoreHeroNotes;
 }
 
 export interface PublicFormatDto {
@@ -239,6 +240,13 @@ function toPublicStoreDto(row: publicQueries.PublicStoreRow, mpesaVerified: bool
     hero_cta_label: row.hero_cta_label,
     mpesa_verified: mpesaVerified,
     digital_only: row.digital_only,
+    hero_notes: row.hero_notes || {
+      is_active: false,
+      title: 'Reader Announcements',
+      content_html: '',
+      bg_color: '#FAF7F0',
+      text_color: '#141E1A',
+    },
   };
 }
 

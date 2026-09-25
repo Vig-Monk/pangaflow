@@ -11,11 +11,17 @@ import {
   saveMerchantLocationHandler,
   getPromoTickerHandler,
   savePromoTickerHandler,
+  getHeroNotesHandler,
+  saveHeroNotesHandler,
 } from './stores.controller';
 
 const router = Router();
 
 router.use(verifyToken);
+
+// Editorial Hero Notes Endpoints
+router.get('/hero-notes', getHeroNotesHandler);
+router.put('/hero-notes', saveHeroNotesHandler);
 
 // Promotional Gold Ribbon Ticker Endpoints
 router.get('/ticker', getPromoTickerHandler);

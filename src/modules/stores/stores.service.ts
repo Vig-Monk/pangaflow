@@ -1,6 +1,6 @@
 // =============================================================================
 // src/modules/stores/stores.service.ts
-// Storefront Settings & Channel Configuration Management
+// Storefront Settings, Channel Configuration & Hero Notes Management
 // =============================================================================
 
 import { z } from "zod";
@@ -40,6 +40,46 @@ export const PromoTickerItemSchema = z.object({
 
 export const SavePromoTickerSchema = z.object({
     items: z.array(PromoTickerItemSchema).max(10, "Maximum of 10 promotional ticker messages allowed")
+});
+
+/**
+ * Defensive server-side HTML sanitizer.
+ * Strips script tags, javascript: URIs, onerror/onload attributes while
+ * preserving formatting, hyperlinks, images, and safe video embed iframes.
+ */
+function sanitizeRichTextHtml(input: string): string {
+    if (!input || typeof input !== "string") return "";
+
+    let sanitized = input
+        // Remove script tags and their inner content
+        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+        // Strip inline javascript: protocol
+        .replace(/href\s*=\s*["']?\s*javascript:[^"'>]*/gi, 'href="#"')
+        .replace(/src\s*=\s*["']?\s*javascript:[^"'>]*/gi, 'src=""')
+        // Strip all event handlers (onclick, onload, onerror, etc.)
+        .replace(/\s+on[a-z]+\s*=\s*(["'][^"']*["']|[^\s>]+)/gi, "")
+        // Strip data: URIs in tags other than images
+        .replace(/<iframe\b[^>]*src\s*=\s*["']?data:[^"'>]*[^>]*>/gi, "");
+
+    // Verify iframe embed sources (only permit YouTube, Vimeo, and soundcloud)
+    sanitized = sanitized.replace(/<iframe\b([^>]*)src=["']([^"']*)["']([^>]*)>/gi, (match, before, src, after) => {
+        const isAllowedSrc =
+            /^https:\/\/(www\.)?(youtube\.com\/embed\/|player\.vimeo\.com\/video\/|w\.soundcloud\.com\/player\/)/i.test(src);
+        if (!isAllowedSrc) {
+            return `<!-- Blocked unauthorized iframe src: ${src} -->`;
+        }
+        return `<iframe ${before}src="${src}"${after} loading="lazy" frameborder="0" allowfullscreen>`;
+    });
+
+    return sanitized.trim();
+}
+
+export const HeroNotesSchema = z.object({
+    is_active: z.boolean().default(false),
+    title: z.string().min(1, "Title is required").max(100, "Title cannot exceed 100 characters").default("Reader Announcements"),
+    content_html: z.string().max(30000, "Content exceeds maximum length").transform(sanitizeRichTextHtml),
+    bg_color: z.string().regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "Invalid hex color code").optional().default("#FAF7F0"),
+    text_color: z.string().regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "Invalid hex color code").optional().default("#141E1A"),
 });
 
 export const SaveStoreSchema = z.object({
@@ -216,4 +256,19 @@ export async function savePromoTicker(orgId: string, rawBody: unknown) {
         );
     }
     return storesQueries.updatePromoTicker(orgId, parsed.data.items);
+}
+
+export async function fetchHeroNotes(orgId: string): Promise<storesQueries.StoreHeroNotes> {
+    return storesQueries.getHeroNotes(orgId);
+}
+
+export async function saveHeroNotes(orgId: string, rawBody: unknown): Promise<storesQueries.StoreHeroNotes> {
+    const parsed = HeroNotesSchema.safeParse(rawBody);
+    if (!parsed.success) {
+        throw new AppError(
+            parsed.error.issues[0]?.message ?? "Invalid hero notes configuration",
+            400
+        );
+    }
+    return storesQueries.updateHeroNotes(orgId, parsed.data);
 }

@@ -8,6 +8,14 @@ import { buildFuzzySearchQuery } from '../../utils/search';
 
 export type ProductSortOption = 'first_added' | 'newest' | 'price_asc' | 'price_desc' | 'title_asc';
 
+export interface StoreHeroNotes {
+  is_active: boolean;
+  title: string;
+  content_html: string;
+  bg_color?: string;
+  text_color?: string;
+}
+
 export interface PublicStoreRow {
   id: string;
   org_id: string;
@@ -33,6 +41,7 @@ export interface PublicStoreRow {
     is_active: boolean;
     sort_order: number;
   }>;
+  hero_notes: StoreHeroNotes;
 }
 
 export interface PublicFormatRow {
@@ -118,6 +127,14 @@ export interface PaginatedPublicProducts {
   totalPages: number;
 }
 
+const DEFAULT_HERO_NOTES_SQL = `'{
+  "is_active": false,
+  "title": "Reader Announcements",
+  "content_html": "<p>Welcome to <strong>The Sunrise Bookstore</strong>. Instant eBook downloads and physical deliveries across Nairobi.</p>",
+  "bg_color": "#FAF7F0",
+  "text_color": "#141E1A"
+}'::jsonb`;
+
 export async function searchEstatesLocal(searchQuery: string): Promise<LocalEstateRow[]> {
   const result = await query<LocalEstateRow>(
     `SELECT id, name, city, lat::text AS lat, lng::text AS lng
@@ -154,7 +171,8 @@ export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow
             s.hero_headline,
             s.hero_subheadline,
             s.hero_cta_label,
-            COALESCE(s.promo_ticker, '[]'::jsonb) AS promo_ticker
+            COALESCE(s.promo_ticker, '[]'::jsonb) AS promo_ticker,
+            COALESCE(s.hero_notes, ${DEFAULT_HERO_NOTES_SQL}) AS hero_notes
      FROM   stores s
      INNER JOIN organizations o ON o.id = s.org_id
      WHERE  s.slug = $1
@@ -167,11 +185,6 @@ export async function getStoreBySlugPublic(slug: string): Promise<PublicStoreRow
   return result.rows[0] ?? null;
 }
 
-/**
- * Resolves the deterministic ORDER BY clause based on requested sort option.
- * Defaults strictly to FIRST-ADDED-FIRST (FIFO: created_at ASC, id ASC)
- * so bestselling titles with curated studio covers display at the top of the storefront.
- */
 function resolveSortOrderClause(sort?: ProductSortOption): string {
   switch (sort) {
     case 'price_asc':
@@ -184,15 +197,10 @@ function resolveSortOrderClause(sort?: ProductSortOption): string {
       return 'p.created_at DESC, p.id DESC';
     case 'first_added':
     default:
-      // FIFO Order: Books added first appear first, with id ASC as deterministic tie-breaker
       return 'p.created_at ASC, p.id ASC';
   }
 }
 
-/**
- * Queries catalog items for a given storefront channel.
- * Defaults to displaying books added first (bestsellers with proper covers).
- */
 export async function getProductsByStoreOrgIdPublic(
   catalogOrgId: string,
   options: ListStoreProductsOptions = {},
@@ -210,7 +218,6 @@ export async function getProductsByStoreOrgIdPublic(
   const params: unknown[] = [catalogOrgId];
   let paramIndex = 2;
 
-  // 1. Digital-Only Channel Filter (EbookReads restriction)
   if (digitalOnly) {
     conditions.push(`EXISTS (
       SELECT 1 FROM product_formats pf_filter
@@ -219,7 +226,6 @@ export async function getProductsByStoreOrgIdPublic(
     )`);
   }
 
-  // 2. Category Filter
   if (
     options.category &&
     !['general', 'all', 'all books'].includes(options.category.toLowerCase().trim())
@@ -240,7 +246,6 @@ export async function getProductsByStoreOrgIdPublic(
     }
   }
 
-  // 3. FIFO Sort Order Clause with Search Override
   const baseSortClause = resolveSortOrderClause(options.sort);
   let orderClause = baseSortClause;
 

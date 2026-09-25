@@ -100,3 +100,31 @@ export async function savePromoTickerHandler(
         next(err);
     }
 }
+
+export async function getHeroNotesHandler(
+    req: Request,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const orgId = requireOrgId(req);
+        const notes = await storesService.fetchHeroNotes(orgId);
+        success(res, notes);
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function saveHeroNotesHandler(
+    req: Request,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const orgId = requireOrgId(req);
+        const notes = await storesService.saveHeroNotes(orgId, req.body);
+        success(res, notes);
+    } catch (err) {
+        next(err);
+    }
+}

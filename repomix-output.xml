@@ -89,6 +89,7 @@ src/
     031_org_smtp.sql
     032_fuzzy_search_trgm.sql
     033_shared_catalog.sql
+    034_reset_flash_sale_badges.sql
     run.ts
   modules/
     admin/
@@ -1845,6 +1846,21 @@ CREATE INDEX IF NOT EXISTS idx_products_shared_catalog
 -- Composite index for category lookups across catalog bounds
 CREATE INDEX IF NOT EXISTS idx_categories_shared_lookup
   ON categories(org_id, LOWER(TRIM(name)));
+</file>
+
+<file path="src/migrations/034_reset_flash_sale_badges.sql">
+-- =============================================================================
+-- Migration: 034_reset_flash_sale_badges.sql
+-- Soko Platform — Clear Auto-Populated Flash Sale Badges
+-- =============================================================================
+-- Resets products where badge was automatically set to 'FLASH_SALE' by past
+-- bulk spreadsheet imports. Guarantees that the Flash Sale shelf remains
+-- strictly empty until an administrator deliberately assigns the badge.
+-- =============================================================================
+
+UPDATE products
+SET badge = NULL
+WHERE badge = 'FLASH_SALE';
 </file>
 
 <file path="src/migrations/run.ts">
@@ -12907,279 +12923,6 @@ export async function recordClick(bannerId: string): Promise<void> {
 }
 </file>
 
-<file path="src/modules/product-formats/product-formats.service.ts">
-// =============================================================================
-// soko-api/src/modules/product-formats/product-formats.service.ts
-// Format Management with Cross-Channel Shared Catalog Resolution
-// =============================================================================
-
-import { z } from 'zod';
-import { AppError } from '../../utils/error';
-import * as formatQueries from './product-formats.queries';
-import type { FormatType, ProductFormatRow } from './product-formats.queries';
-import { reconcilePendingDownloadsForFormat } from '../../verticals/books/delivery.service';
-
-const UUID_SCHEMA = z.string().uuid('Must be a valid UUID');
-
-export const CreateProductFormatSchema = z
-  .object({
-    format: z.enum(['pdf', 'epub', 'hardcopy']),
-    price: z.number().nonnegative('Price must be greater than or equal to zero'),
-    compare_at_price: z.number().positive().nullable().optional(),
-    file_url: z
-      .string()
-      .max(1000)
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    file_public_id: z
-      .string()
-      .max(500)
-      .nullable()
-      .optional()
-      .or(z.literal(''))
-      .transform((v) => (v === '' ? null : v)),
-    file_size_bytes: z.number().int().nonnegative().nullable().optional(),
-    stock: z.number().int().nonnegative().nullable().optional(),
-  })
-  .superRefine((data, ctx) => {
-    if (data.format === 'pdf' || data.format === 'epub') {
-      if (data.stock !== undefined && data.stock !== null) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['stock'],
-          message: 'Stock count is not allowed for digital formats',
-        });
-      }
-    }
-
-    if (data.format === 'hardcopy') {
-      if (data.file_url) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['file_url'],
-          message: 'file_url is not allowed for hardcopy format',
-        });
-      }
-      if (data.file_public_id) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['file_public_id'],
-          message: 'file_public_id is not allowed for hardcopy format',
-        });
-      }
-    }
-  });
-
-export const UpdateProductFormatSchema = z.object({
-  price: z.number().nonnegative('Price must be greater than or equal to zero').optional(),
-  compare_at_price: z.number().positive().nullable().optional(),
-  file_url: z
-    .string()
-    .max(1000)
-    .nullable()
-    .optional()
-    .or(z.literal(''))
-    .transform((v) => (v === '' ? null : v)),
-  file_public_id: z
-    .string()
-    .max(500)
-    .nullable()
-    .optional()
-    .or(z.literal(''))
-    .transform((v) => (v === '' ? null : v)),
-  file_size_bytes: z.number().int().nonnegative().nullable().optional(),
-  stock: z.number().int().nonnegative().nullable().optional(),
-});
-
-export interface ProductFormatDto {
-  id: string;
-  product_id: string;
-  format: FormatType;
-  price: number;
-  compare_at_price: number | null;
-  file_url: string | null;
-  file_public_id: string | null;
-  file_size_bytes: number | null;
-  stock: number | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export function toFormatDto(row: ProductFormatRow): ProductFormatDto {
-  return {
-    id: row.id,
-    product_id: row.product_id,
-    format: row.format,
-    price: parseFloat(row.price),
-    compare_at_price: row.compare_at_price ? parseFloat(row.compare_at_price) : null,
-    file_url: row.file_url,
-    file_public_id: row.file_public_id,
-    file_size_bytes: row.file_size_bytes ? parseInt(row.file_size_bytes, 10) : null,
-    stock: row.stock !== null ? row.stock : null,
-    created_at: row.created_at.toISOString(),
-    updated_at: row.updated_at.toISOString(),
-  };
-}
-
-function validateUuid(id: string, name = 'ID'): string {
-  const parsed = UUID_SCHEMA.safeParse(id);
-  if (!parsed.success) {
-    throw new AppError(`Invalid ${name} format`, 400);
-  }
-  return parsed.data;
-}
-
-export async function listFormats(
-  orgId: string,
-  rawProductId: string
-): Promise<ProductFormatDto[]> {
-  const productId = validateUuid(rawProductId, 'productId');
-
-  const productExists = await formatQueries.checkProductBelongsToOrg(orgId, productId);
-  if (!productExists) {
-    throw new AppError('Product not found', 404);
-  }
-
-  const rows = await formatQueries.getFormatsByProductId(orgId, productId);
-  return rows.map(toFormatDto);
-}
-
-export async function getFormat(
-  orgId: string,
-  rawProductId: string,
-  rawFormatId: string
-): Promise<ProductFormatDto> {
-  const productId = validateUuid(rawProductId, 'productId');
-  const formatId = validateUuid(rawFormatId, 'formatId');
-
-  const row = await formatQueries.getFormatById(orgId, productId, formatId);
-  if (!row) {
-    throw new AppError('Product format not found', 404);
-  }
-
-  return toFormatDto(row);
-}
-
-export async function createFormat(
-  orgId: string,
-  rawProductId: string,
-  rawBody: unknown
-): Promise<ProductFormatDto> {
-  const productId = validateUuid(rawProductId, 'productId');
-
-  const productExists = await formatQueries.checkProductBelongsToOrg(orgId, productId);
-  if (!productExists) {
-    throw new AppError('Product not found', 404);
-  }
-
-  const parsed = CreateProductFormatSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    const message = parsed.error.issues[0]?.message ?? 'Invalid format payload';
-    throw new AppError(message, 400);
-  }
-
-  const row = await formatQueries.createProductFormat(orgId, productId, {
-    format: parsed.data.format,
-    price: parsed.data.price,
-    compareAtPrice: parsed.data.compare_at_price,
-    fileUrl: parsed.data.file_url ?? parsed.data.file_public_id,
-    filePublicId: parsed.data.file_public_id,
-    fileSizeBytes: parsed.data.file_size_bytes,
-    stock: parsed.data.stock,
-  });
-
-  if (!row) {
-    throw new AppError('Failed to create format', 500, false);
-  }
-
-  return toFormatDto(row);
-}
-
-export async function updateFormat(
-  orgId: string,
-  rawProductId: string,
-  rawFormatId: string,
-  rawBody: unknown
-): Promise<ProductFormatDto> {
-  const productId = validateUuid(rawProductId, 'productId');
-  const formatId = validateUuid(rawFormatId, 'formatId');
-
-  const existing = await formatQueries.getFormatById(orgId, productId, formatId);
-  if (!existing) {
-    throw new AppError('Product format not found', 404);
-  }
-
-  const parsed = UpdateProductFormatSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    const message = parsed.error.issues[0]?.message ?? 'Invalid format update payload';
-    throw new AppError(message, 400);
-  }
-
-  const isDigital = existing.format === 'pdf' || existing.format === 'epub';
-  const isHardcopy = existing.format === 'hardcopy';
-
-  if (isDigital && parsed.data.stock !== undefined && parsed.data.stock !== null) {
-    throw new AppError('Stock count is not allowed for digital formats', 400);
-  }
-
-  if (isHardcopy && (parsed.data.file_url || parsed.data.file_public_id)) {
-    throw new AppError('File attachments are not allowed for hardcopy format', 400);
-  }
-
-  const row = await formatQueries.updateProductFormat(orgId, productId, formatId, {
-    price: parsed.data.price,
-    compareAtPrice: parsed.data.compare_at_price,
-    fileUrl: parsed.data.file_url ?? parsed.data.file_public_id,
-    filePublicId: parsed.data.file_public_id,
-    fileSizeBytes: parsed.data.file_size_bytes,
-    stock: parsed.data.stock,
-  });
-
-  if (!row) {
-    throw new AppError('Product format not found', 404);
-  }
-
-  // Cross-tenant fulfillment: unlocks download tokens for any orders waiting for this file on either store
-  if (isDigital && (row.file_url || row.file_public_id) && (!existing.file_url && !existing.file_public_id)) {
-    setImmediate(async () => {
-      try {
-        await reconcilePendingDownloadsForFormat(formatId);
-      } catch (e) {
-        console.error('Retroactive format fulfillment error:', e);
-      }
-    });
-  }
-
-  return toFormatDto(row);
-}
-
-export async function deleteFormat(
-  orgId: string,
-  rawProductId: string,
-  rawFormatId: string
-): Promise<void> {
-  const productId = validateUuid(rawProductId, 'productId');
-  const formatId = validateUuid(rawFormatId, 'formatId');
-
-  try {
-    const deleted = await formatQueries.deleteProductFormat(orgId, productId, formatId);
-    if (!deleted) {
-      throw new AppError('Product format not found', 404);
-    }
-  } catch (err: any) {
-    if (err.code === '23503') {
-      throw new AppError(
-        'Cannot remove this format because active customer digital downloads depend on it.',
-        409
-      );
-    }
-    throw err;
-  }
-}
-</file>
-
 <file path="src/modules/transactions/transactions.service.ts">
 // =============================================================================
 // src/modules/transactions/transactions.service.ts
@@ -14529,264 +14272,293 @@ export async function handleMpesaCallback(rawPayload: unknown): Promise<void> {
 }
 </file>
 
-<file path="src/modules/product-formats/product-formats.queries.ts">
+<file path="src/modules/product-formats/product-formats.service.ts">
 // =============================================================================
-// soko-api/src/modules/product-formats/product-formats.queries.ts
-// Database access layer for product formats with shared catalog resolution.
+// soko-api/src/modules/product-formats/product-formats.service.ts
+// Format Management with Persistent Strikethrough Pricing & Shared Catalog Support
 // =============================================================================
 
-import { query } from '../../config/db';
+import { z } from 'zod';
+import { AppError } from '../../utils/error';
+import * as formatQueries from './product-formats.queries';
+import type { FormatType, ProductFormatRow } from './product-formats.queries';
+import { reconcilePendingDownloadsForFormat } from '../../verticals/books/delivery.service';
 
-export type FormatType = 'pdf' | 'epub' | 'hardcopy';
+const UUID_SCHEMA = z.string().uuid('Must be a valid UUID');
 
-export interface ProductFormatRow {
+const PriceDiscountSchema = z
+  .number()
+  .positive('Discount / compare-at price must be greater than zero')
+  .nullable()
+  .optional()
+  .or(z.literal(''))
+  .or(z.literal(0))
+  .transform((v) => (v === '' || v === 0 ? null : v));
+
+export const CreateProductFormatSchema = z
+  .object({
+    format: z.enum(['pdf', 'epub', 'hardcopy']),
+    price: z.number().nonnegative('Price must be greater than or equal to zero'),
+    compare_at_price: PriceDiscountSchema,
+    compareAtPrice: PriceDiscountSchema,
+    file_url: z
+      .string()
+      .max(1000)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    file_public_id: z
+      .string()
+      .max(500)
+      .nullable()
+      .optional()
+      .or(z.literal(''))
+      .transform((v) => (v === '' ? null : v)),
+    file_size_bytes: z.number().int().nonnegative().nullable().optional(),
+    stock: z.number().int().nonnegative().nullable().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.format === 'pdf' || data.format === 'epub') {
+      if (data.stock !== undefined && data.stock !== null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['stock'],
+          message: 'Stock count is not allowed for digital formats',
+        });
+      }
+    }
+
+    if (data.format === 'hardcopy') {
+      if (data.file_url) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['file_url'],
+          message: 'file_url is not allowed for hardcopy format',
+        });
+      }
+      if (data.file_public_id) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['file_public_id'],
+          message: 'file_public_id is not allowed for hardcopy format',
+        });
+      }
+    }
+  });
+
+export const UpdateProductFormatSchema = z.object({
+  price: z.number().nonnegative('Price must be greater than or equal to zero').optional(),
+  compare_at_price: PriceDiscountSchema,
+  compareAtPrice: PriceDiscountSchema,
+  file_url: z
+    .string()
+    .max(1000)
+    .nullable()
+    .optional()
+    .or(z.literal(''))
+    .transform((v) => (v === '' ? null : v)),
+  file_public_id: z
+    .string()
+    .max(500)
+    .nullable()
+    .optional()
+    .or(z.literal(''))
+    .transform((v) => (v === '' ? null : v)),
+  file_size_bytes: z.number().int().nonnegative().nullable().optional(),
+  stock: z.number().int().nonnegative().nullable().optional(),
+});
+
+export interface ProductFormatDto {
   id: string;
   product_id: string;
   format: FormatType;
-  price: string;
-  compare_at_price: string | null;
+  price: number;
+  compare_at_price: number | null;
   file_url: string | null;
   file_public_id: string | null;
-  file_size_bytes: string | null;
+  file_size_bytes: number | null;
   stock: number | null;
-  created_at: Date;
-  updated_at: Date;
+  created_at: string;
+  updated_at: string;
 }
 
-export interface CreateFormatInput {
-  format: FormatType;
-  price: number;
-  compareAtPrice?: number | null;
-  fileUrl?: string | null;
-  filePublicId?: string | null;
-  fileSizeBytes?: number | null;
-  stock?: number | null;
+export function toFormatDto(row: ProductFormatRow): ProductFormatDto {
+  return {
+    id: row.id,
+    product_id: row.product_id,
+    format: row.format,
+    price: parseFloat(row.price),
+    compare_at_price: row.compare_at_price ? parseFloat(row.compare_at_price) : null,
+    file_url: row.file_url,
+    file_public_id: row.file_public_id,
+    file_size_bytes: row.file_size_bytes ? parseInt(row.file_size_bytes, 10) : null,
+    stock: row.stock !== null ? row.stock : null,
+    created_at: row.created_at.toISOString(),
+    updated_at: row.updated_at.toISOString(),
+  };
 }
 
-export interface UpdateFormatInput {
-  price?: number;
-  compareAtPrice?: number | null;
-  fileUrl?: string | null;
-  filePublicId?: string | null;
-  fileSizeBytes?: number | null;
-  stock?: number | null;
+function validateUuid(id: string, name = 'ID'): string {
+  const parsed = UUID_SCHEMA.safeParse(id);
+  if (!parsed.success) {
+    throw new AppError(`Invalid ${name} format`, 400);
+  }
+  return parsed.data;
 }
 
-const FORMAT_SELECT_FIELDS = `
-  pf.id,
-  pf.product_id,
-  pf.format,
-  pf.price::text AS price,
-  pf.compare_at_price::text AS compare_at_price,
-  pf.file_url,
-  pf.file_public_id,
-  pf.file_size_bytes::text AS file_size_bytes,
-  pf.stock,
-  pf.created_at,
-  pf.updated_at
-`;
-
-const FORMAT_RETURNING_FIELDS = `
-  product_formats.id,
-  product_formats.product_id,
-  product_formats.format,
-  product_formats.price::text AS price,
-  product_formats.compare_at_price::text AS compare_at_price,
-  product_formats.file_url,
-  product_formats.file_public_id,
-  product_formats.file_size_bytes::text AS file_size_bytes,
-  product_formats.stock,
-  product_formats.created_at,
-  product_formats.updated_at
-`;
-
-/**
- * Checks whether a product belongs to the requesting org OR to its inherited shared catalog source.
- */
-export async function checkProductBelongsToOrg(
+export async function listFormats(
   orgId: string,
-  productId: string
-): Promise<boolean> {
-  const result = await query<{ id: string }>(
-    `SELECT p.id 
-     FROM products p 
-     WHERE p.id = $1 
-       AND (p.org_id = $2 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $2 AND deleted_at IS NULL))
-       AND p.deleted_at IS NULL`,
-    [productId, orgId]
-  );
-  return result.rows.length > 0;
+  rawProductId: string
+): Promise<ProductFormatDto[]> {
+  const productId = validateUuid(rawProductId, 'productId');
+
+  const productExists = await formatQueries.checkProductBelongsToOrg(orgId, productId);
+  if (!productExists) {
+    throw new AppError('Product not found', 404);
+  }
+
+  const rows = await formatQueries.getFormatsByProductId(orgId, productId);
+  return rows.map(toFormatDto);
 }
 
-export async function getFormatsByProductId(
+export async function getFormat(
   orgId: string,
-  productId: string
-): Promise<ProductFormatRow[]> {
-  const result = await query<ProductFormatRow>(
-    `SELECT ${FORMAT_SELECT_FIELDS}
-     FROM product_formats pf
-     INNER JOIN products p ON p.id = pf.product_id
-     WHERE (p.org_id = $1 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
-       AND p.id = $2 
-       AND p.deleted_at IS NULL
-     ORDER BY (
-       CASE pf.format
-         WHEN 'hardcopy' THEN 1
-         WHEN 'pdf' THEN 2
-         WHEN 'epub' THEN 3
-         ELSE 4
-       END
-     ) ASC, pf.created_at ASC`,
-    [orgId, productId]
-  );
-  return result.rows;
+  rawProductId: string,
+  rawFormatId: string
+): Promise<ProductFormatDto> {
+  const productId = validateUuid(rawProductId, 'productId');
+  const formatId = validateUuid(rawFormatId, 'formatId');
+
+  const row = await formatQueries.getFormatById(orgId, productId, formatId);
+  if (!row) {
+    throw new AppError('Product format not found', 404);
+  }
+
+  return toFormatDto(row);
 }
 
-export async function getFormatById(
+export async function createFormat(
   orgId: string,
-  productId: string,
-  formatId: string
-): Promise<ProductFormatRow | null> {
-  const result = await query<ProductFormatRow>(
-    `SELECT ${FORMAT_SELECT_FIELDS}
-     FROM product_formats pf
-     INNER JOIN products p ON p.id = pf.product_id
-     WHERE (p.org_id = $1 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
-       AND p.id = $2 
-       AND pf.id = $3 
-       AND p.deleted_at IS NULL`,
-    [orgId, productId, formatId]
-  );
-  return result.rows[0] ?? null;
+  rawProductId: string,
+  rawBody: unknown
+): Promise<ProductFormatDto> {
+  const productId = validateUuid(rawProductId, 'productId');
+
+  const productExists = await formatQueries.checkProductBelongsToOrg(orgId, productId);
+  if (!productExists) {
+    throw new AppError('Product not found', 404);
+  }
+
+  const parsed = CreateProductFormatSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    const message = parsed.error.issues[0]?.message ?? 'Invalid format payload';
+    throw new AppError(message, 400);
+  }
+
+  const compareAtPrice = parsed.data.compare_at_price ?? parsed.data.compareAtPrice ?? null;
+
+  const row = await formatQueries.createProductFormat(orgId, productId, {
+    format: parsed.data.format,
+    price: parsed.data.price,
+    compareAtPrice,
+    fileUrl: parsed.data.file_url ?? parsed.data.file_public_id,
+    filePublicId: parsed.data.file_public_id,
+    fileSizeBytes: parsed.data.file_size_bytes,
+    stock: parsed.data.stock,
+  });
+
+  if (!row) {
+    throw new AppError('Failed to create format', 500, false);
+  }
+
+  return toFormatDto(row);
 }
 
-export async function createProductFormat(
+export async function updateFormat(
   orgId: string,
-  productId: string,
-  data: CreateFormatInput
-): Promise<ProductFormatRow | null> {
-  const result = await query<ProductFormatRow>(
-    `INSERT INTO product_formats (
-       product_id, format, price, compare_at_price, file_url, file_public_id, file_size_bytes, stock
-     )
-     SELECT p.id, $3, $4, $5, $6, $7, $8, $9
-     FROM products p
-     WHERE p.id = $2 
-       AND (p.org_id = $1 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
-       AND p.deleted_at IS NULL
-     ON CONFLICT (product_id, format) DO UPDATE SET
-       price            = EXCLUDED.price,
-       compare_at_price = EXCLUDED.compare_at_price,
-       file_url         = EXCLUDED.file_url,
-       file_public_id   = EXCLUDED.file_public_id,
-       file_size_bytes  = EXCLUDED.file_size_bytes,
-       stock            = EXCLUDED.stock,
-       updated_at       = NOW()
-     RETURNING ${FORMAT_RETURNING_FIELDS}`,
-    [
-      orgId,
-      productId,
-      data.format,
-      data.price,
-      data.compareAtPrice ?? null,
-      data.fileUrl ?? null,
-      data.filePublicId ?? null,
-      data.fileSizeBytes ?? null,
-      data.stock ?? null,
-    ]
-  );
-  return result.rows[0] ?? null;
+  rawProductId: string,
+  rawFormatId: string,
+  rawBody: unknown
+): Promise<ProductFormatDto> {
+  const productId = validateUuid(rawProductId, 'productId');
+  const formatId = validateUuid(rawFormatId, 'formatId');
+
+  const existing = await formatQueries.getFormatById(orgId, productId, formatId);
+  if (!existing) {
+    throw new AppError('Product format not found', 404);
+  }
+
+  const parsed = UpdateProductFormatSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    const message = parsed.error.issues[0]?.message ?? 'Invalid format update payload';
+    throw new AppError(message, 400);
+  }
+
+  const isDigital = existing.format === 'pdf' || existing.format === 'epub';
+  const isHardcopy = existing.format === 'hardcopy';
+
+  if (isDigital && parsed.data.stock !== undefined && parsed.data.stock !== null) {
+    throw new AppError('Stock count is not allowed for digital formats', 400);
+  }
+
+  if (isHardcopy && (parsed.data.file_url || parsed.data.file_public_id)) {
+    throw new AppError('File attachments are not allowed for hardcopy format', 400);
+  }
+
+  // Resolve compareAtPrice from either casing
+  const compareAtPrice = parsed.data.compare_at_price !== undefined
+    ? parsed.data.compare_at_price
+    : parsed.data.compareAtPrice;
+
+  const row = await formatQueries.updateProductFormat(orgId, productId, formatId, {
+    price: parsed.data.price,
+    compareAtPrice,
+    fileUrl: parsed.data.file_url ?? parsed.data.file_public_id,
+    filePublicId: parsed.data.file_public_id,
+    fileSizeBytes: parsed.data.file_size_bytes,
+    stock: parsed.data.stock,
+  });
+
+  if (!row) {
+    throw new AppError('Product format not found', 404);
+  }
+
+  if (isDigital && (row.file_url || row.file_public_id) && (!existing.file_url && !existing.file_public_id)) {
+    setImmediate(async () => {
+      try {
+        await reconcilePendingDownloadsForFormat(formatId);
+      } catch (e) {
+        console.error('Retroactive format fulfillment error:', e);
+      }
+    });
+  }
+
+  return toFormatDto(row);
 }
 
-export async function updateProductFormat(
+export async function deleteFormat(
   orgId: string,
-  productId: string,
-  formatId: string,
-  data: UpdateFormatInput
-): Promise<ProductFormatRow | null> {
-  const setClauses: string[] = [];
-  const params: unknown[] = [orgId, productId, formatId];
-  let paramIdx = 4;
+  rawProductId: string,
+  rawFormatId: string
+): Promise<void> {
+  const productId = validateUuid(rawProductId, 'productId');
+  const formatId = validateUuid(rawFormatId, 'formatId');
 
-  if (data.price !== undefined) {
-    setClauses.push(`price = $${paramIdx}`);
-    setClauses.push(
-      `compare_at_price = (CASE WHEN compare_at_price IS NOT NULL AND compare_at_price <= $${paramIdx} THEN NULL ELSE compare_at_price END)`
-    );
-    params.push(data.price);
-    paramIdx++;
+  try {
+    const deleted = await formatQueries.deleteProductFormat(orgId, productId, formatId);
+    if (!deleted) {
+      throw new AppError('Product format not found', 404);
+    }
+  } catch (err: any) {
+    if (err.code === '23503') {
+      throw new AppError(
+        'Cannot remove this format because active customer digital downloads depend on it.',
+        409
+      );
+    }
+    throw err;
   }
-
-  if (data.compareAtPrice !== undefined) {
-    setClauses.push(`compare_at_price = $${paramIdx}`);
-    params.push(data.compareAtPrice);
-    paramIdx++;
-  }
-
-  if (data.fileUrl !== undefined) {
-    setClauses.push(`file_url = $${paramIdx}`);
-    params.push(data.fileUrl);
-    paramIdx++;
-  }
-
-  if (data.filePublicId !== undefined) {
-    setClauses.push(`file_public_id = $${paramIdx}`);
-    params.push(data.filePublicId);
-    paramIdx++;
-  }
-
-  if (data.fileSizeBytes !== undefined) {
-    setClauses.push(`file_size_bytes = $${paramIdx}`);
-    params.push(data.fileSizeBytes);
-    paramIdx++;
-  }
-
-  if (data.stock !== undefined) {
-    setClauses.push(`stock = $${paramIdx}`);
-    params.push(data.stock);
-    paramIdx++;
-  }
-
-  if (setClauses.length === 0) {
-    return getFormatById(orgId, productId, formatId);
-  }
-
-  setClauses.push('updated_at = NOW()');
-
-  const result = await query<ProductFormatRow>(
-    `UPDATE product_formats
-     SET ${setClauses.join(', ')}
-     WHERE id = $3
-       AND product_id = $2
-       AND product_id IN (
-         SELECT id FROM products
-         WHERE id = $2 
-           AND (org_id = $1 OR org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
-           AND deleted_at IS NULL
-       )
-     RETURNING ${FORMAT_RETURNING_FIELDS}`,
-    params
-  );
-
-  return result.rows[0] ?? null;
-}
-
-export async function deleteProductFormat(
-  orgId: string,
-  productId: string,
-  formatId: string
-): Promise<boolean> {
-  const result = await query(
-    `DELETE FROM product_formats pf
-     USING products p
-     WHERE pf.product_id = p.id
-       AND (p.org_id = $1 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
-       AND p.id = $2
-       AND pf.id = $3
-       AND p.deleted_at IS NULL`,
-    [orgId, productId, formatId]
-  );
-  return (result.rowCount ?? 0) > 0;
 }
 </file>
 
@@ -15085,6 +14857,327 @@ export async function createProductsBulkHandler(
 }
 </file>
 
+<file path="src/config/env.ts">
+// =============================================================================
+// soko-api/src/config/env.ts
+// Validated Environment Variables with SMTP Configuration
+// =============================================================================
+
+import dotenv from 'dotenv';
+import { z } from 'zod';
+
+dotenv.config();
+
+const envSchema = z.object({
+  PORT:                        z.coerce.number().default(3000),
+  NODE_ENV:                    z.enum(['development', 'production', 'test']).default('development'),
+  DATABASE_URL:                z.string().url(),
+  REDIS_URL:                   z.string().optional().default('redis://127.0.0.1:6379'),
+  JWT_SECRET:                  z.string().min(8),
+  JWT_EXPIRES_IN:              z.string().default('15m'),
+  REFRESH_TOKEN_EXPIRES_DAYS:  z.coerce.number().default(30),
+  DARAJA_CONSUMER_KEY:         z.string().min(1),
+  DARAJA_CONSUMER_SECRET:      z.string().min(1),
+  DARAJA_BASE_URL:             z.string().url().default('https://sandbox.safaricom.co.ke'),
+  DARAJA_SHORTCODE:            z.string().min(1),
+  DARAJA_PASSKEY:              z.string().min(1),
+  ADMIN_SECRET:                z.string().min(16, 'ADMIN_SECRET must be at least 16 characters'),
+  FRONTEND_URL:                z.string().url().optional().default('http://localhost:3333'),
+  API_PUBLIC_URL:              z.string().url().optional().default('http://localhost:3000'),
+  MPESA_CREDENTIALS_KEY:       z.string().min(32, 'MPESA_CREDENTIALS_KEY must be at least 32 characters for AES-256-GCM'),
+  CLOUDINARY_CLOUD_NAME:       z.string().min(1),
+  CLOUDINARY_API_KEY:          z.string().min(1),
+  CLOUDINARY_API_SECRET:       z.string().min(1),
+  R2_ACCOUNT_ID:               z.string().optional().default(''),
+  R2_ACCESS_KEY_ID:           z.string().optional().default(''),
+  R2_SECRET_ACCESS_KEY:       z.string().optional().default(''),
+  R2_BUCKET_NAME:              z.string().optional().default('flemela-books'),
+
+  // Transactional SMTP Settings (Nodemailer)
+  SMTP_HOST:                   z.string().optional().default(''),
+  SMTP_PORT:                   z.coerce.number().default(465),
+  SMTP_SECURE:                 z.coerce.boolean().default(true),
+  SMTP_USER:                   z.string().optional().default(''),
+  SMTP_PASS:                   z.string().optional().default(''),
+  SMTP_FROM:                   z.string().default('Flemela Bookstore <orders@flemela.co.ke>'),
+});
+
+const parsed = envSchema.safeParse(process.env);
+
+if (!parsed.success) {
+  console.error('❌ Invalid environment variables detected on startup:');
+  console.error(JSON.stringify(parsed.error.format(), null, 2));
+  process.exit(1);
+}
+
+export const env = parsed.data;
+</file>
+
+<file path="src/modules/product-formats/product-formats.queries.ts">
+// =============================================================================
+// soko-api/src/modules/product-formats/product-formats.queries.ts
+// Database queries for product formats with constraint-safe compare_at_price updates
+// =============================================================================
+
+import { query } from '../../config/db';
+
+export type FormatType = 'pdf' | 'epub' | 'hardcopy';
+
+export interface ProductFormatRow {
+  id: string;
+  product_id: string;
+  format: FormatType;
+  price: string;
+  compare_at_price: string | null;
+  file_url: string | null;
+  file_public_id: string | null;
+  file_size_bytes: string | null;
+  stock: number | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface CreateFormatInput {
+  format: FormatType;
+  price: number;
+  compareAtPrice?: number | null;
+  fileUrl?: string | null;
+  filePublicId?: string | null;
+  fileSizeBytes?: number | null;
+  stock?: number | null;
+}
+
+export interface UpdateFormatInput {
+  price?: number;
+  compareAtPrice?: number | null;
+  fileUrl?: string | null;
+  filePublicId?: string | null;
+  fileSizeBytes?: number | null;
+  stock?: number | null;
+}
+
+const FORMAT_SELECT_FIELDS = `
+  pf.id,
+  pf.product_id,
+  pf.format,
+  pf.price::text AS price,
+  pf.compare_at_price::text AS compare_at_price,
+  pf.file_url,
+  pf.file_public_id,
+  pf.file_size_bytes::text AS file_size_bytes,
+  pf.stock,
+  pf.created_at,
+  pf.updated_at
+`;
+
+const FORMAT_RETURNING_FIELDS = `
+  product_formats.id,
+  product_formats.product_id,
+  product_formats.format,
+  product_formats.price::text AS price,
+  product_formats.compare_at_price::text AS compare_at_price,
+  product_formats.file_url,
+  product_formats.file_public_id,
+  product_formats.file_size_bytes::text AS file_size_bytes,
+  product_formats.stock,
+  product_formats.created_at,
+  product_formats.updated_at
+`;
+
+export async function checkProductBelongsToOrg(
+  orgId: string,
+  productId: string
+): Promise<boolean> {
+  const result = await query<{ id: string }>(
+    `SELECT p.id 
+     FROM products p 
+     WHERE p.id = $1 
+       AND (p.org_id = $2 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $2 AND deleted_at IS NULL))
+       AND p.deleted_at IS NULL`,
+    [productId, orgId]
+  );
+  return result.rows.length > 0;
+}
+
+export async function getFormatsByProductId(
+  orgId: string,
+  productId: string
+): Promise<ProductFormatRow[]> {
+  const result = await query<ProductFormatRow>(
+    `SELECT ${FORMAT_SELECT_FIELDS}
+     FROM product_formats pf
+     INNER JOIN products p ON p.id = pf.product_id
+     WHERE (p.org_id = $1 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+       AND p.id = $2 
+       AND p.deleted_at IS NULL
+     ORDER BY (
+       CASE pf.format
+         WHEN 'hardcopy' THEN 1
+         WHEN 'pdf' THEN 2
+         WHEN 'epub' THEN 3
+         ELSE 4
+       END
+     ) ASC, pf.created_at ASC`,
+    [orgId, productId]
+  );
+  return result.rows;
+}
+
+export async function getFormatById(
+  orgId: string,
+  productId: string,
+  formatId: string
+): Promise<ProductFormatRow | null> {
+  const result = await query<ProductFormatRow>(
+    `SELECT ${FORMAT_SELECT_FIELDS}
+     FROM product_formats pf
+     INNER JOIN products p ON p.id = pf.product_id
+     WHERE (p.org_id = $1 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+       AND p.id = $2 
+       AND pf.id = $3 
+       AND p.deleted_at IS NULL`,
+    [orgId, productId, formatId]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function createProductFormat(
+  orgId: string,
+  productId: string,
+  data: CreateFormatInput
+): Promise<ProductFormatRow | null> {
+  const result = await query<ProductFormatRow>(
+    `INSERT INTO product_formats (
+       product_id, format, price, compare_at_price, file_url, file_public_id, file_size_bytes, stock
+     )
+     SELECT p.id, $3, $4, $5, $6, $7, $8, $9
+     FROM products p
+     WHERE p.id = $2 
+       AND (p.org_id = $1 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+       AND p.deleted_at IS NULL
+     ON CONFLICT (product_id, format) DO UPDATE SET
+       price            = EXCLUDED.price,
+       compare_at_price = EXCLUDED.compare_at_price,
+       file_url         = EXCLUDED.file_url,
+       file_public_id   = EXCLUDED.file_public_id,
+       file_size_bytes  = EXCLUDED.file_size_bytes,
+       stock            = EXCLUDED.stock,
+       updated_at       = NOW()
+     RETURNING ${FORMAT_RETURNING_FIELDS}`,
+    [
+      orgId,
+      productId,
+      data.format,
+      data.price,
+      data.compareAtPrice ?? null,
+      data.fileUrl ?? null,
+      data.filePublicId ?? null,
+      data.fileSizeBytes ?? null,
+      data.stock ?? null,
+    ]
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
+ * Updates a product format without duplicate column assignments in SQL SET.
+ * Defensively cleans compare_at_price to satisfy chk_product_formats_compare_at_price.
+ */
+export async function updateProductFormat(
+  orgId: string,
+  productId: string,
+  formatId: string,
+  data: UpdateFormatInput
+): Promise<ProductFormatRow | null> {
+  const setClauses: string[] = [];
+  const params: unknown[] = [orgId, productId, formatId];
+  let paramIdx = 4;
+
+  if (data.price !== undefined) {
+    setClauses.push(`price = $${paramIdx}`);
+    params.push(data.price);
+    paramIdx++;
+  }
+
+  // If compareAtPrice is explicitly provided, assign once
+  if (data.compareAtPrice !== undefined) {
+    setClauses.push(`compare_at_price = $${paramIdx}`);
+    params.push(data.compareAtPrice);
+    paramIdx++;
+  } else if (data.price !== undefined) {
+    // Only if compareAtPrice was NOT explicitly passed do we defensively reset invalid older values
+    setClauses.push(
+      `compare_at_price = (CASE WHEN compare_at_price IS NOT NULL AND compare_at_price <= $${paramIdx - 1} THEN NULL ELSE compare_at_price END)`
+    );
+  }
+
+  if (data.fileUrl !== undefined) {
+    setClauses.push(`file_url = $${paramIdx}`);
+    params.push(data.fileUrl);
+    paramIdx++;
+  }
+
+  if (data.filePublicId !== undefined) {
+    setClauses.push(`file_public_id = $${paramIdx}`);
+    params.push(data.filePublicId);
+    paramIdx++;
+  }
+
+  if (data.fileSizeBytes !== undefined) {
+    setClauses.push(`file_size_bytes = $${paramIdx}`);
+    params.push(data.fileSizeBytes);
+    paramIdx++;
+  }
+
+  if (data.stock !== undefined) {
+    setClauses.push(`stock = $${paramIdx}`);
+    params.push(data.stock);
+    paramIdx++;
+  }
+
+  if (setClauses.length === 0) {
+    return getFormatById(orgId, productId, formatId);
+  }
+
+  setClauses.push('updated_at = NOW()');
+
+  const result = await query<ProductFormatRow>(
+    `UPDATE product_formats
+     SET ${setClauses.join(', ')}
+     WHERE id = $3
+       AND product_id = $2
+       AND product_id IN (
+         SELECT id FROM products
+         WHERE id = $2 
+           AND (org_id = $1 OR org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+           AND deleted_at IS NULL
+       )
+     RETURNING ${FORMAT_RETURNING_FIELDS}`,
+    params
+  );
+
+  return result.rows[0] ?? null;
+}
+
+export async function deleteProductFormat(
+  orgId: string,
+  productId: string,
+  formatId: string
+): Promise<boolean> {
+  const result = await query(
+    `DELETE FROM product_formats pf
+     USING products p
+     WHERE pf.product_id = p.id
+       AND (p.org_id = $1 OR p.org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+       AND p.id = $2
+       AND pf.id = $3
+       AND p.deleted_at IS NULL`,
+    [orgId, productId, formatId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+</file>
+
 <file path="src/modules/public/public.controller.ts">
 // =============================================================================
 // soko-api/src/modules/public/public.controller.ts
@@ -15231,62 +15324,6 @@ export async function retryOrderPaymentHandler(
     next(err);
   }
 }
-</file>
-
-<file path="src/config/env.ts">
-// =============================================================================
-// soko-api/src/config/env.ts
-// Validated Environment Variables with SMTP Configuration
-// =============================================================================
-
-import dotenv from 'dotenv';
-import { z } from 'zod';
-
-dotenv.config();
-
-const envSchema = z.object({
-  PORT:                        z.coerce.number().default(3000),
-  NODE_ENV:                    z.enum(['development', 'production', 'test']).default('development'),
-  DATABASE_URL:                z.string().url(),
-  REDIS_URL:                   z.string().optional().default('redis://127.0.0.1:6379'),
-  JWT_SECRET:                  z.string().min(8),
-  JWT_EXPIRES_IN:              z.string().default('15m'),
-  REFRESH_TOKEN_EXPIRES_DAYS:  z.coerce.number().default(30),
-  DARAJA_CONSUMER_KEY:         z.string().min(1),
-  DARAJA_CONSUMER_SECRET:      z.string().min(1),
-  DARAJA_BASE_URL:             z.string().url().default('https://sandbox.safaricom.co.ke'),
-  DARAJA_SHORTCODE:            z.string().min(1),
-  DARAJA_PASSKEY:              z.string().min(1),
-  ADMIN_SECRET:                z.string().min(16, 'ADMIN_SECRET must be at least 16 characters'),
-  FRONTEND_URL:                z.string().url().optional().default('http://localhost:3333'),
-  API_PUBLIC_URL:              z.string().url().optional().default('http://localhost:3000'),
-  MPESA_CREDENTIALS_KEY:       z.string().min(32, 'MPESA_CREDENTIALS_KEY must be at least 32 characters for AES-256-GCM'),
-  CLOUDINARY_CLOUD_NAME:       z.string().min(1),
-  CLOUDINARY_API_KEY:          z.string().min(1),
-  CLOUDINARY_API_SECRET:       z.string().min(1),
-  R2_ACCOUNT_ID:               z.string().optional().default(''),
-  R2_ACCESS_KEY_ID:           z.string().optional().default(''),
-  R2_SECRET_ACCESS_KEY:       z.string().optional().default(''),
-  R2_BUCKET_NAME:              z.string().optional().default('flemela-books'),
-
-  // Transactional SMTP Settings (Nodemailer)
-  SMTP_HOST:                   z.string().optional().default(''),
-  SMTP_PORT:                   z.coerce.number().default(465),
-  SMTP_SECURE:                 z.coerce.boolean().default(true),
-  SMTP_USER:                   z.string().optional().default(''),
-  SMTP_PASS:                   z.string().optional().default(''),
-  SMTP_FROM:                   z.string().default('Flemela Bookstore <orders@flemela.co.ke>'),
-});
-
-const parsed = envSchema.safeParse(process.env);
-
-if (!parsed.success) {
-  console.error('❌ Invalid environment variables detected on startup:');
-  console.error(JSON.stringify(parsed.error.format(), null, 2));
-  process.exit(1);
-}
-
-export const env = parsed.data;
 </file>
 
 <file path="src/services/bookCover.service.ts">
@@ -18031,167 +18068,6 @@ export async function insertProductVariantTransactional(
 }
 </file>
 
-<file path="src/app.ts">
-// =============================================================================
-// soko-api/src/app.ts
-// Multi-Frontend CORS Support & Master Express Route Registrations
-// =============================================================================
-
-import express, { Request, Response, NextFunction } from "express";
-import helmet from "helmet";
-import cors from "cors";
-import pinoHttp from "pino-http";
-import rateLimit from "express-rate-limit";
-import { v4 as uuidv4 } from "uuid";
-import { env } from "./config/env";
-import { errorHandler } from "./middleware/errorHandler";
-import { AppError } from "./utils/error";
-import { HealthCheckResponse } from "./types/health";
-import { pool } from "./config/db";
-
-// Route Imports
-import authRoutes from "./modules/auth/auth.routes";
-import customersRoutes from "./modules/customers/customers.routes";
-import transactionsRoutes from "./modules/transactions/transactions.routes";
-import dashboardRoutes from "./modules/transactions/dashboard.routes";
-import paymentsRoutes from "./modules/payments/payments.routes";
-import agentRoutes from "./verticals/market/agent.routes";
-import expensesRoutes from "./modules/expenses/expenses.routes";
-import adminRoutes from "./modules/admin/admin.routes";
-import productsRoutes from "./modules/products/products.routes";
-import productFormatsRoutes from "./modules/product-formats/product-formats.routes";
-import storesRoutes from "./modules/stores/stores.routes";
-import ordersRoutes from "./modules/orders/orders.routes";
-import publicRoutes from "./modules/public/public.routes";
-import mpesaCredentialsRoutes from "./modules/mpesa-credentials/mpesa-credentials.routes";
-import analyticsRoutes from "./modules/analytics/analytics.routes";
-import booksRoutes from "./verticals/books/books.routes";
-import bannersRoutes from "./modules/banners/banners.routes";
-import smtpRoutes from "./modules/smtp/smtp.routes";
-
-const app = express();
-
-app.use(helmet());
-
-// Multi-Frontend Allowed Origins
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://localhost:3000',
-  'http://localhost:3333',
-];
-
-// Support comma-separated URLs in FRONTEND_URL
-if (env.FRONTEND_URL) {
-  const customOrigins = env.FRONTEND_URL.split(',').map((o) => o.trim().replace(/\/$/, ''));
-  allowedOrigins.push(...customOrigins);
-}
-
-app.use(
-  cors({
-    origin: (requestOrigin, callback) => {
-      if (!requestOrigin) return callback(null, true);
-
-      if (allowedOrigins.includes(requestOrigin)) {
-        return callback(null, true);
-      }
-
-      if (requestOrigin.endsWith('.vercel.app')) {
-        return callback(null, true);
-      }
-
-      return callback(new Error(`Origin ${requestOrigin} is not allowed by CORS`));
-    },
-    credentials: true,
-  })
-);
-
-app.use(express.json());
-
-app.use((req: Request, _res: Response, next: NextFunction) => {
-  req.requestId = uuidv4();
-  next();
-});
-
-app.use(
-  pinoHttp({
-    customProps: req => ({
-      requestId: (req as Request).requestId
-    }),
-    autoLogging: {
-      ignore: req => req.url === "/api/v1/health"
-    }
-  })
-);
-
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 300,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    success: false,
-    error: {
-      message: "Too many requests. Please try again later."
-    }
-  }
-});
-app.use(limiter);
-
-const apiRouter = express.Router();
-
-apiRouter.get("/health", async (_req: Request, res: Response) => {
-  let dbStatus: HealthCheckResponse["db"] = "connected";
-
-  try {
-    await pool.query("SELECT 1");
-  } catch {
-    dbStatus = "error";
-  }
-
-  const response: HealthCheckResponse = {
-    status: dbStatus === "connected" ? "ok" : "error",
-    db: dbStatus,
-    timestamp: new Date().toISOString()
-  };
-
-  res.status(dbStatus === "connected" ? 200 : 503).json(response);
-});
-
-apiRouter.use("/auth", authRoutes);
-apiRouter.use("/customers", customersRoutes);
-apiRouter.use("/transactions", transactionsRoutes);
-apiRouter.use("/dashboard", dashboardRoutes);
-apiRouter.use("/payments", paymentsRoutes);
-apiRouter.use("/agent", agentRoutes);
-apiRouter.use("/expenses", expensesRoutes);
-apiRouter.use("/public", publicRoutes);
-apiRouter.use("/admin", adminRoutes);
-apiRouter.use("/products/:productId/formats", productFormatsRoutes);
-apiRouter.use("/products", productsRoutes);
-apiRouter.use("/store", storesRoutes);
-apiRouter.use("/orders", ordersRoutes);
-apiRouter.use("/mpesa-credentials", mpesaCredentialsRoutes);
-apiRouter.use("/analytics", analyticsRoutes);
-apiRouter.use("/books", booksRoutes);
-apiRouter.use("/banners", bannersRoutes);
-apiRouter.use("/smtp", smtpRoutes);
-
-app.use("/api/v1", apiRouter);
-
-app.use((req: Request, _res: Response, next: NextFunction) => {
-  next(
-    new AppError(
-      `Endpoint not found: ${req.method} ${req.originalUrl}`,
-      404
-    )
-  );
-});
-
-app.use(errorHandler);
-
-export default app;
-</file>
-
 <file path="src/modules/public/public.queries.ts">
 // =============================================================================
 // soko-api/src/modules/public/public.queries.ts
@@ -18675,548 +18551,6 @@ export async function getPublicOrderItems(orderId: string): Promise<PublicOrderI
     [orderId]
   );
   return result.rows;
-}
-</file>
-
-<file path="src/verticals/books/import/import.worker.ts">
-// =============================================================================
-// soko-api/src/verticals/books/import/import.worker.ts
-// Spreadsheet Ingestion Worker with Shared Master Catalog Deduplication
-// =============================================================================
-
-import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
-import axios from 'axios';
-import ExcelJS from 'exceljs';
-import { pool } from '../../../config/db';
-import {
-  getEffectiveCatalogOrgId,
-  findOrCreateCategoryByName,
-  insertProductTransactional,
-  insertInventoryTransactional,
-  insertProductImageTransactional,
-} from '../../../modules/products/products.queries';
-import { findBestBookCover } from '../../../services/bookCover.service';
-import * as importQueries from './import.queries';
-
-export interface ParsedBookRow {
-  title: string;
-  author?: string | null;
-  sku?: string | null;
-  category?: string | null;
-  description?: string | null;
-  regularPrice?: number | null;
-  salePrice?: number | null;
-  pdfPrice?: number | null;
-  epubPrice?: number | null;
-  hardcopyStock?: number | null;
-  coverImageUrl?: string | null;
-  pdfFileUrl?: string | null;
-  epubFileUrl?: string | null;
-}
-
-function normalizeHeader(h: string): string {
-  return h.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-}
-
-function getCellValueAsString(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return value.trim();
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-
-  if (typeof value === 'object') {
-    const val = value as Record<string, unknown>;
-    if (Array.isArray(val.richText)) {
-      return val.richText.map((t: any) => t?.text || '').join('').trim();
-    }
-    if ('text' in val && typeof val.text === 'string') {
-      return val.text.trim();
-    }
-    if ('hyperlink' in val && typeof val.hyperlink === 'string') {
-      return val.hyperlink.trim();
-    }
-    if ('result' in val) {
-      return String(val.result ?? '').trim();
-    }
-  }
-
-  return String(value).trim();
-}
-
-function getCellValueAsNumber(value: unknown): number | null {
-  const str = getCellValueAsString(value).replace(/[^0-9.-]/g, '');
-  if (!str) return null;
-  const num = parseFloat(str);
-  return isNaN(num) ? null : num;
-}
-
-/**
- * Upserts book into the shared master catalog.
- * Performs pre-flight deduplication against SKU and Title.
- */
-async function upsertBookFromImport(
-  orgId: string,
-  row: ParsedBookRow
-): Promise<'inserted' | 'updated' | 'skipped'> {
-  const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN');
-
-    // 1. Safe Category Resolution under Effective Catalog Organization
-    const categoryName = row.category || 'General';
-    const categoryId = await findOrCreateCategoryByName(client, effectiveCatalogOrgId, categoryName);
-
-    // 2. Pre-Flight Duplicate Check across Shared Catalog Bounds
-    let existingProductId: string | null = null;
-
-    if (row.sku && row.sku.trim()) {
-      const skuCheck = await client.query<{ id: string }>(
-        `SELECT id FROM products 
-         WHERE (org_id = $1 OR org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
-           AND LOWER(TRIM(sku)) = LOWER(TRIM($2)) 
-           AND deleted_at IS NULL 
-         LIMIT 1`,
-        [orgId, row.sku.trim()]
-      );
-      if (skuCheck.rows.length > 0) {
-        existingProductId = skuCheck.rows[0].id;
-      }
-    }
-
-    if (!existingProductId) {
-      const titleCheck = await client.query<{ id: string }>(
-        `SELECT id FROM products 
-         WHERE (org_id = $1 OR org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
-           AND LOWER(TRIM(name)) = LOWER(TRIM($2)) 
-           AND deleted_at IS NULL 
-         LIMIT 1`,
-        [orgId, row.title.trim()]
-      );
-      if (titleCheck.rows.length > 0) {
-        existingProductId = titleCheck.rows[0].id;
-      }
-    }
-
-    // 3. Price & Discount Normalization (Ensures compare_at_price > price)
-    let sellingPrice = 999;
-    let compareAtPrice: number | null = null;
-
-    if (row.regularPrice && row.salePrice) {
-      const minP = Math.min(row.regularPrice, row.salePrice);
-      const maxP = Math.max(row.regularPrice, row.salePrice);
-      if (maxP > minP) {
-        sellingPrice = minP;
-        compareAtPrice = maxP;
-      } else {
-        sellingPrice = minP;
-      }
-    } else {
-      sellingPrice = row.salePrice || row.regularPrice || 999;
-    }
-
-    const digitalPrice = row.pdfPrice && row.pdfPrice > 0
-      ? row.pdfPrice
-      : (row.epubPrice && row.epubPrice > 0 ? row.epubPrice : 149);
-
-    let digitalCompareAt: number | null = null;
-    if (compareAtPrice && compareAtPrice > sellingPrice) {
-      const discountRatio = (compareAtPrice - sellingPrice) / compareAtPrice;
-      if (discountRatio > 0 && discountRatio < 1) {
-        digitalCompareAt = Math.round(digitalPrice / (1 - discountRatio));
-      }
-    }
-
-    let targetImageUrl: string | null = row.coverImageUrl || null;
-
-    if (!targetImageUrl) {
-      try {
-        const discovered = await findBestBookCover(
-          row.title,
-          row.author || undefined,
-          row.sku || undefined
-        );
-        if (discovered?.coverUrl) {
-          targetImageUrl = discovered.coverUrl;
-        }
-      } catch {
-        // Non-blocking fallback
-      }
-    }
-
-    let productId = existingProductId;
-    let outcome: 'inserted' | 'updated' = 'inserted';
-
-    if (existingProductId) {
-      outcome = 'updated';
-      await client.query(
-        `UPDATE products
-         SET category_id      = $2,
-             price            = $3,
-             compare_at_price = COALESCE($4, compare_at_price),
-             sku              = COALESCE(products.sku, $5),
-             description      = COALESCE($6, products.description),
-             badge            = (CASE WHEN $4 IS NOT NULL THEN 'FLASH_SALE' ELSE products.badge END),
-             updated_at       = NOW()
-         WHERE id = $1`,
-        [
-          existingProductId,
-          categoryId,
-          sellingPrice,
-          compareAtPrice,
-          row.sku || null,
-          row.description || (row.author ? `By ${row.author}` : null),
-        ]
-      );
-
-      if (row.hardcopyStock !== undefined && row.hardcopyStock !== null) {
-        await client.query(
-          `UPDATE inventory 
-           SET stock = $2, updated_at = NOW() 
-           WHERE product_id = $1`,
-          [existingProductId, row.hardcopyStock]
-        );
-      }
-
-      if (targetImageUrl) {
-        const hasImg = await client.query(
-          `SELECT 1 FROM product_images WHERE product_id = $1 LIMIT 1`,
-          [existingProductId]
-        );
-        if (hasImg.rows.length === 0) {
-          await insertProductImageTransactional(
-            client,
-            existingProductId,
-            targetImageUrl,
-            'auto_cover',
-            0
-          );
-        }
-      }
-    } else {
-      outcome = 'inserted';
-      const cleanSlugTitle = row.title
-        .toLowerCase()
-        .trim()
-        .replace(/[^a-z0-9]/g, '-')
-        .replace(/-+/g, '-')
-        .slice(0, 40);
-      const slugSuffix = crypto.randomBytes(3).toString('hex');
-      const slug = `${cleanSlugTitle}-${slugSuffix}`;
-
-      productId = await insertProductTransactional(client, effectiveCatalogOrgId, {
-        category_id: categoryId,
-        name: row.title,
-        slug,
-        sku: row.sku || null,
-        description: row.description || (row.author ? `By ${row.author}` : null),
-        cost_price: null,
-        price: sellingPrice,
-        compare_at_price: compareAtPrice,
-        badge: compareAtPrice ? 'FLASH_SALE' : null,
-        status: 'published',
-      });
-
-      await insertInventoryTransactional(client, productId, row.hardcopyStock || 10);
-
-      if (targetImageUrl) {
-        await insertProductImageTransactional(
-          client,
-          productId,
-          targetImageUrl,
-          'auto_cover',
-          0
-        );
-      }
-    }
-
-    // Provision Hardcopy Format for Hybrid Storefronts (Sunrise)
-    if (productId && sellingPrice) {
-      await client.query(
-        `INSERT INTO product_formats (
-           product_id, format, price, compare_at_price, stock
-         )
-         VALUES ($1, 'hardcopy', $2, $3, $4)
-         ON CONFLICT (product_id, format) DO UPDATE SET
-           price            = EXCLUDED.price,
-           compare_at_price = EXCLUDED.compare_at_price,
-           stock            = EXCLUDED.stock,
-           updated_at       = NOW()`,
-        [productId, sellingPrice, compareAtPrice, row.hardcopyStock ?? 10]
-      );
-    }
-
-    // Provision Digital PDF Format for Both Storefronts (Sunrise & EbookReads)
-    if (productId && (row.pdfFileUrl || row.pdfPrice)) {
-      const isExternalUrl = row.pdfFileUrl?.startsWith('http://') || row.pdfFileUrl?.startsWith('https://');
-      const filePublicId = isExternalUrl ? null : (row.pdfFileUrl || null);
-
-      await client.query(
-        `INSERT INTO product_formats (
-           product_id, format, price, compare_at_price, file_url, file_public_id
-         )
-         VALUES ($1, 'pdf', $2, $3, $4, $5)
-         ON CONFLICT (product_id, format) DO UPDATE SET
-           price            = EXCLUDED.price,
-           compare_at_price = EXCLUDED.compare_at_price,
-           file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
-           file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
-           updated_at       = NOW()`,
-        [productId, digitalPrice, digitalCompareAt, row.pdfFileUrl || null, filePublicId]
-      );
-    }
-
-    // Provision Digital EPUB Format
-    if (productId && (row.epubFileUrl || row.epubPrice)) {
-      const isExternalUrl = row.epubFileUrl?.startsWith('http://') || row.epubFileUrl?.startsWith('https://');
-      const filePublicId = isExternalUrl ? null : (row.epubFileUrl || null);
-
-      await client.query(
-        `INSERT INTO product_formats (
-           product_id, format, price, compare_at_price, file_url, file_public_id
-         )
-         VALUES ($1, 'epub', $2, $3, $4, $5)
-         ON CONFLICT (product_id, format) DO UPDATE SET
-           price            = EXCLUDED.price,
-           compare_at_price = EXCLUDED.compare_at_price,
-           file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
-           file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
-           updated_at       = NOW()`,
-        [productId, digitalPrice, digitalCompareAt, row.epubFileUrl || null, filePublicId]
-      );
-    }
-
-    await client.query('COMMIT');
-    return outcome;
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-export async function processExcelFile(
-  jobId: string,
-  orgId: string,
-  filePath: string
-): Promise<void> {
-  let totalRows = 0;
-  let processedRows = 0;
-  let insertedRows = 0;
-  let updatedRows = 0;
-  let skippedRows = 0;
-
-  try {
-    const workbook = new ExcelJS.Workbook();
-    const isCsv = filePath.toLowerCase().endsWith('.csv');
-
-    if (isCsv) {
-      await workbook.csv.readFile(filePath);
-    } else {
-      await workbook.xlsx.readFile(filePath);
-    }
-
-    const worksheet = workbook.worksheets[0];
-    if (!worksheet) {
-      throw new Error('Worksheet is empty or corrupted');
-    }
-
-    const headerRow = worksheet.getRow(1);
-    const headerMap = new Map<string, number>();
-
-    headerRow.eachCell((cell, colNumber) => {
-      const headerStr = getCellValueAsString(cell.value);
-      if (headerStr) {
-        headerMap.set(normalizeHeader(headerStr), colNumber);
-      }
-    });
-
-    const rowsCount = worksheet.rowCount;
-    totalRows = Math.max(0, rowsCount - 1);
-
-    await importQueries.updateJobProgress(
-      jobId,
-      { processedRows: 0, totalRows },
-      'processing'
-    );
-
-    for (let rowNumber = 2; rowNumber <= rowsCount; rowNumber++) {
-      const row = worksheet.getRow(rowNumber);
-
-      let hasData = false;
-      row.eachCell(() => {
-        hasData = true;
-      });
-
-      if (!hasData) {
-        skippedRows++;
-        processedRows++;
-        continue;
-      }
-
-      const getVal = (possibleKeys: string[]): unknown => {
-        for (const key of possibleKeys) {
-          const col = headerMap.get(key);
-          if (col) {
-            return row.getCell(col).value;
-          }
-        }
-        return undefined;
-      };
-
-      const title = getCellValueAsString(getVal(['name', 'title', 'booktitle']));
-
-      if (!title) {
-        skippedRows++;
-        processedRows++;
-        continue;
-      }
-
-      const description = getCellValueAsString(getVal(['description', 'synopsis', 'details'])) || null;
-      const sku = getCellValueAsString(getVal(['sellersku', 'sku', 'isbn', 'barcode'])) || null;
-      const category = getCellValueAsString(getVal(['primarycategory', 'category', 'categories'])) || 'General';
-      const author = getCellValueAsString(getVal(['author', 'authors', 'writtenby'])) || null;
-
-      const regularPrice = getCellValueAsNumber(getVal(['pricekes', 'price', 'regularprice', 'regularpricekes']));
-      const salePrice = getCellValueAsNumber(getVal(['salepricekes', 'saleprice', 'discountprice']));
-      const pdfPrice = getCellValueAsNumber(getVal(['pdfsprice', 'pdfprice', 'ebookprice']));
-      const epubPrice = getCellValueAsNumber(getVal(['epubprice']));
-      const hardcopyStock = getCellValueAsNumber(getVal(['stock', 'quantity', 'hardcopystock', 'inventory']));
-
-      const coverImageUrl = getCellValueAsString(getVal(['image1', 'image', 'cover', 'coverimage', 'coverimageurl', 'imageurl'])) || null;
-      const pdfFileUrl = getCellValueAsString(getVal(['pdffile', 'pdfurl', 'pdffileurl', 'pdf'])) || null;
-      const epubFileUrl = getCellValueAsString(getVal(['epubfile', 'epuburl', 'epubfileurl', 'epub'])) || null;
-
-      const parsedRow: ParsedBookRow = {
-        title,
-        author,
-        sku,
-        category,
-        description,
-        regularPrice,
-        salePrice,
-        pdfPrice,
-        epubPrice,
-        hardcopyStock: hardcopyStock !== null ? Math.max(0, Math.floor(hardcopyStock)) : null,
-        coverImageUrl,
-        pdfFileUrl,
-        epubFileUrl,
-      };
-
-      try {
-        const outcome = await upsertBookFromImport(orgId, parsedRow);
-        if (outcome === 'inserted') insertedRows++;
-        else if (outcome === 'updated') updatedRows++;
-        else skippedRows++;
-      } catch (rowErr: any) {
-        skippedRows++;
-        await importQueries.appendJobError(jobId, {
-          row: rowNumber,
-          title,
-          error: rowErr.message || 'Row processing failed',
-        });
-      }
-
-      processedRows++;
-
-      if (processedRows % 10 === 0 || processedRows === totalRows) {
-        await importQueries.updateJobProgress(
-          jobId,
-          {
-            processedRows,
-            insertedRows,
-            updatedRows,
-            skippedRows,
-            totalRows,
-          },
-          'processing'
-        );
-      }
-    }
-
-    await importQueries.finalizeImportJob(jobId, 'done', {
-      processedRows,
-      insertedRows,
-      updatedRows,
-      skippedRows,
-    });
-  } catch (err: any) {
-    console.error(`[Process Excel File Error] Job ${jobId}:`, err);
-    await importQueries.finalizeImportJob(
-      jobId,
-      'failed',
-      undefined,
-      err.message || 'Workbook processing error'
-    );
-    throw err;
-  } finally {
-    if (filePath && fs.existsSync(filePath)) {
-      try {
-        fs.unlinkSync(filePath);
-      } catch {
-        // Ignore file cleanup error
-      }
-    }
-  }
-}
-
-export async function processGoogleSheet(
-  jobId: string,
-  orgId: string,
-  sheetUrl: string
-): Promise<void> {
-  const match = sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-  if (!match || !match[1]) {
-    throw new Error('Invalid Google Sheet URL. Could not extract spreadsheet ID.');
-  }
-
-  const sheetId = match[1];
-  const csvExportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
-  const tempFilePath = path.join(os.tmpdir(), `gsheet-${jobId}-${Date.now()}.csv`);
-
-  try {
-    const response = await axios.get<string>(csvExportUrl, {
-      responseType: 'text',
-      timeout: 30000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      },
-    });
-
-    if (!response.data || typeof response.data !== 'string') {
-      throw new Error('Received empty response from Google Sheet');
-    }
-
-    if (response.data.includes('<!DOCTYPE html>') || response.data.includes('<html')) {
-      throw new Error(
-        'Google Sheet is private or requires authentication. Please set link sharing to "Anyone with the link can view".'
-      );
-    }
-
-    fs.writeFileSync(tempFilePath, response.data, 'utf8');
-    await processExcelFile(jobId, orgId, tempFilePath);
-  } catch (err: any) {
-    console.error(`[Process Google Sheet Error] Job ${jobId}:`, err);
-    await importQueries.finalizeImportJob(
-      jobId,
-      'failed',
-      undefined,
-      err.message || 'Google Sheet fetch failed'
-    );
-    throw err;
-  } finally {
-    if (fs.existsSync(tempFilePath)) {
-      try {
-        fs.unlinkSync(tempFilePath);
-      } catch {
-        // Ignore cleanup error
-      }
-    }
-  }
 }
 </file>
 
@@ -20084,6 +19418,711 @@ export async function retryOrderPayment(
 
   return { success: true, checkoutRequestId };
 }
+</file>
+
+<file path="src/verticals/books/import/import.worker.ts">
+// =============================================================================
+// soko-api/src/verticals/books/import/import.worker.ts
+// Spreadsheet Ingestion Worker with Shared Master Catalog Deduplication
+// =============================================================================
+
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import axios from 'axios';
+import ExcelJS from 'exceljs';
+import { pool } from '../../../config/db';
+import {
+  getEffectiveCatalogOrgId,
+  findOrCreateCategoryByName,
+  insertProductTransactional,
+  insertInventoryTransactional,
+  insertProductImageTransactional,
+} from '../../../modules/products/products.queries';
+import { findBestBookCover } from '../../../services/bookCover.service';
+import * as importQueries from './import.queries';
+
+export interface ParsedBookRow {
+  title: string;
+  author?: string | null;
+  sku?: string | null;
+  category?: string | null;
+  description?: string | null;
+  regularPrice?: number | null;
+  salePrice?: number | null;
+  pdfPrice?: number | null;
+  epubPrice?: number | null;
+  hardcopyStock?: number | null;
+  coverImageUrl?: string | null;
+  pdfFileUrl?: string | null;
+  epubFileUrl?: string | null;
+}
+
+function normalizeHeader(h: string): string {
+  return h.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+}
+
+function getCellValueAsString(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+
+  if (typeof value === 'object') {
+    const val = value as Record<string, unknown>;
+    if (Array.isArray(val.richText)) {
+      return val.richText.map((t: any) => t?.text || '').join('').trim();
+    }
+    if ('text' in val && typeof val.text === 'string') {
+      return val.text.trim();
+    }
+    if ('hyperlink' in val && typeof val.hyperlink === 'string') {
+      return val.hyperlink.trim();
+    }
+    if ('result' in val) {
+      return String(val.result ?? '').trim();
+    }
+  }
+
+  return String(value).trim();
+}
+
+function getCellValueAsNumber(value: unknown): number | null {
+  const str = getCellValueAsString(value).replace(/[^0-9.-]/g, '');
+  if (!str) return null;
+  const num = parseFloat(str);
+  return isNaN(num) ? null : num;
+}
+
+/**
+ * Upserts book into the shared master catalog.
+ * Performs pre-flight deduplication against SKU and Title.
+ * Neutral: does NOT automatically assign FLASH_SALE badges.
+ */
+async function upsertBookFromImport(
+  orgId: string,
+  row: ParsedBookRow
+): Promise<'inserted' | 'updated' | 'skipped'> {
+  const effectiveCatalogOrgId = await getEffectiveCatalogOrgId(orgId);
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // 1. Safe Category Resolution under Effective Catalog Organization
+    const categoryName = row.category || 'General';
+    const categoryId = await findOrCreateCategoryByName(client, effectiveCatalogOrgId, categoryName);
+
+    // 2. Pre-Flight Duplicate Check across Shared Catalog Bounds
+    let existingProductId: string | null = null;
+
+    if (row.sku && row.sku.trim()) {
+      const skuCheck = await client.query<{ id: string }>(
+        `SELECT id FROM products 
+         WHERE (org_id = $1 OR org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+           AND LOWER(TRIM(sku)) = LOWER(TRIM($2)) 
+           AND deleted_at IS NULL 
+         LIMIT 1`,
+        [orgId, row.sku.trim()]
+      );
+      if (skuCheck.rows.length > 0) {
+        existingProductId = skuCheck.rows[0].id;
+      }
+    }
+
+    if (!existingProductId) {
+      const titleCheck = await client.query<{ id: string }>(
+        `SELECT id FROM products 
+         WHERE (org_id = $1 OR org_id IN (SELECT catalog_source_org_id FROM organizations WHERE id = $1 AND deleted_at IS NULL))
+           AND LOWER(TRIM(name)) = LOWER(TRIM($2)) 
+           AND deleted_at IS NULL 
+         LIMIT 1`,
+        [orgId, row.title.trim()]
+      );
+      if (titleCheck.rows.length > 0) {
+        existingProductId = titleCheck.rows[0].id;
+      }
+    }
+
+    // 3. Price & Discount Normalization (Ensures compare_at_price > price)
+    let sellingPrice = 999;
+    let compareAtPrice: number | null = null;
+
+    if (row.regularPrice && row.salePrice) {
+      const minP = Math.min(row.regularPrice, row.salePrice);
+      const maxP = Math.max(row.regularPrice, row.salePrice);
+      if (maxP > minP) {
+        sellingPrice = minP;
+        compareAtPrice = maxP;
+      } else {
+        sellingPrice = minP;
+      }
+    } else {
+      sellingPrice = row.salePrice || row.regularPrice || 999;
+    }
+
+    const digitalPrice = row.pdfPrice && row.pdfPrice > 0
+      ? row.pdfPrice
+      : (row.epubPrice && row.epubPrice > 0 ? row.epubPrice : 149);
+
+    let digitalCompareAt: number | null = null;
+    if (compareAtPrice && compareAtPrice > sellingPrice) {
+      const discountRatio = (compareAtPrice - sellingPrice) / compareAtPrice;
+      if (discountRatio > 0 && discountRatio < 1) {
+        digitalCompareAt = Math.round(digitalPrice / (1 - discountRatio));
+      }
+    }
+
+    let targetImageUrl: string | null = row.coverImageUrl || null;
+
+    if (!targetImageUrl) {
+      try {
+        const discovered = await findBestBookCover(
+          row.title,
+          row.author || undefined,
+          row.sku || undefined
+        );
+        if (discovered?.coverUrl) {
+          targetImageUrl = discovered.coverUrl;
+        }
+      } catch {
+        // Non-blocking fallback
+      }
+    }
+
+    let productId = existingProductId;
+    let outcome: 'inserted' | 'updated' = 'inserted';
+
+    if (existingProductId) {
+      outcome = 'updated';
+      // Deliberate merchandising: preserves existing product badge, does NOT auto-assign FLASH_SALE
+      await client.query(
+        `UPDATE products
+         SET category_id      = $2,
+             price            = $3,
+             compare_at_price = COALESCE($4, compare_at_price),
+             sku              = COALESCE(products.sku, $5),
+             description      = COALESCE($6, products.description),
+             updated_at       = NOW()
+         WHERE id = $1`,
+        [
+          existingProductId,
+          categoryId,
+          sellingPrice,
+          compareAtPrice,
+          row.sku || null,
+          row.description || (row.author ? `By ${row.author}` : null),
+        ]
+      );
+
+      if (row.hardcopyStock !== undefined && row.hardcopyStock !== null) {
+        await client.query(
+          `UPDATE inventory 
+           SET stock = $2, updated_at = NOW() 
+           WHERE product_id = $1`,
+          [existingProductId, row.hardcopyStock]
+        );
+      }
+
+      if (targetImageUrl) {
+        const hasImg = await client.query(
+          `SELECT 1 FROM product_images WHERE product_id = $1 LIMIT 1`,
+          [existingProductId]
+        );
+        if (hasImg.rows.length === 0) {
+          await insertProductImageTransactional(
+            client,
+            existingProductId,
+            targetImageUrl,
+            'auto_cover',
+            0
+          );
+        }
+      }
+    } else {
+      outcome = 'inserted';
+      const cleanSlugTitle = row.title
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]/g, '-')
+        .replace(/-+/g, '-')
+        .slice(0, 40);
+      const slugSuffix = crypto.randomBytes(3).toString('hex');
+      const slug = `${cleanSlugTitle}-${slugSuffix}`;
+
+      // Badge defaults to null: deliberate curation only
+      productId = await insertProductTransactional(client, effectiveCatalogOrgId, {
+        category_id: categoryId,
+        name: row.title,
+        slug,
+        sku: row.sku || null,
+        description: row.description || (row.author ? `By ${row.author}` : null),
+        cost_price: null,
+        price: sellingPrice,
+        compare_at_price: compareAtPrice,
+        badge: null,
+        status: 'published',
+      });
+
+      await insertInventoryTransactional(client, productId, row.hardcopyStock || 10);
+
+      if (targetImageUrl) {
+        await insertProductImageTransactional(
+          client,
+          productId,
+          targetImageUrl,
+          'auto_cover',
+          0
+        );
+      }
+    }
+
+    // Provision Hardcopy Format for Hybrid Storefronts (Sunrise)
+    if (productId && sellingPrice) {
+      await client.query(
+        `INSERT INTO product_formats (
+           product_id, format, price, compare_at_price, stock
+         )
+         VALUES ($1, 'hardcopy', $2, $3, $4)
+         ON CONFLICT (product_id, format) DO UPDATE SET
+           price            = EXCLUDED.price,
+           compare_at_price = EXCLUDED.compare_at_price,
+           stock            = EXCLUDED.stock,
+           updated_at       = NOW()`,
+        [productId, sellingPrice, compareAtPrice, row.hardcopyStock ?? 10]
+      );
+    }
+
+    // Provision Digital PDF Format for Both Storefronts (Sunrise & EbookReads)
+    if (productId && (row.pdfFileUrl || row.pdfPrice)) {
+      const isExternalUrl = row.pdfFileUrl?.startsWith('http://') || row.pdfFileUrl?.startsWith('https://');
+      const filePublicId = isExternalUrl ? null : (row.pdfFileUrl || null);
+
+      await client.query(
+        `INSERT INTO product_formats (
+           product_id, format, price, compare_at_price, file_url, file_public_id
+         )
+         VALUES ($1, 'pdf', $2, $3, $4, $5)
+         ON CONFLICT (product_id, format) DO UPDATE SET
+           price            = EXCLUDED.price,
+           compare_at_price = EXCLUDED.compare_at_price,
+           file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
+           file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
+           updated_at       = NOW()`,
+        [productId, digitalPrice, digitalCompareAt, row.pdfFileUrl || null, filePublicId]
+      );
+    }
+
+    // Provision Digital EPUB Format
+    if (productId && (row.epubFileUrl || row.epubPrice)) {
+      const isExternalUrl = row.epubFileUrl?.startsWith('http://') || row.epubFileUrl?.startsWith('https://');
+      const filePublicId = isExternalUrl ? null : (row.epubFileUrl || null);
+
+      await client.query(
+        `INSERT INTO product_formats (
+           product_id, format, price, compare_at_price, file_url, file_public_id
+         )
+         VALUES ($1, 'epub', $2, $3, $4, $5)
+         ON CONFLICT (product_id, format) DO UPDATE SET
+           price            = EXCLUDED.price,
+           compare_at_price = EXCLUDED.compare_at_price,
+           file_url         = COALESCE(EXCLUDED.file_url, product_formats.file_url),
+           file_public_id   = COALESCE(EXCLUDED.file_public_id, product_formats.file_public_id),
+           updated_at       = NOW()`,
+        [productId, digitalPrice, digitalCompareAt, row.epubFileUrl || null, filePublicId]
+      );
+    }
+
+    await client.query('COMMIT');
+    return outcome;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function processExcelFile(
+  jobId: string,
+  orgId: string,
+  filePath: string
+): Promise<void> {
+  let totalRows = 0;
+  let processedRows = 0;
+  let insertedRows = 0;
+  let updatedRows = 0;
+  let skippedRows = 0;
+
+  try {
+    const workbook = new ExcelJS.Workbook();
+    const isCsv = filePath.toLowerCase().endsWith('.csv');
+
+    if (isCsv) {
+      await workbook.csv.readFile(filePath);
+    } else {
+      await workbook.xlsx.readFile(filePath);
+    }
+
+    const worksheet = workbook.worksheets[0];
+    if (!worksheet) {
+      throw new Error('Worksheet is empty or corrupted');
+    }
+
+    const headerRow = worksheet.getRow(1);
+    const headerMap = new Map<string, number>();
+
+    headerRow.eachCell((cell, colNumber) => {
+      const headerStr = getCellValueAsString(cell.value);
+      if (headerStr) {
+        headerMap.set(normalizeHeader(headerStr), colNumber);
+      }
+    });
+
+    const rowsCount = worksheet.rowCount;
+    totalRows = Math.max(0, rowsCount - 1);
+
+    await importQueries.updateJobProgress(
+      jobId,
+      { processedRows: 0, totalRows },
+      'processing'
+    );
+
+    for (let rowNumber = 2; rowNumber <= rowsCount; rowNumber++) {
+      const row = worksheet.getRow(rowNumber);
+
+      let hasData = false;
+      row.eachCell(() => {
+        hasData = true;
+      });
+
+      if (!hasData) {
+        skippedRows++;
+        processedRows++;
+        continue;
+      }
+
+      const getVal = (possibleKeys: string[]): unknown => {
+        for (const key of possibleKeys) {
+          const col = headerMap.get(key);
+          if (col) {
+            return row.getCell(col).value;
+          }
+        }
+        return undefined;
+      };
+
+      const title = getCellValueAsString(getVal(['name', 'title', 'booktitle']));
+
+      if (!title) {
+        skippedRows++;
+        processedRows++;
+        continue;
+      }
+
+      const description = getCellValueAsString(getVal(['description', 'synopsis', 'details'])) || null;
+      const sku = getCellValueAsString(getVal(['sellersku', 'sku', 'isbn', 'barcode'])) || null;
+      const category = getCellValueAsString(getVal(['primarycategory', 'category', 'categories'])) || 'General';
+      const author = getCellValueAsString(getVal(['author', 'authors', 'writtenby'])) || null;
+
+      const regularPrice = getCellValueAsNumber(getVal(['pricekes', 'price', 'regularprice', 'regularpricekes']));
+      const salePrice = getCellValueAsNumber(getVal(['salepricekes', 'saleprice', 'discountprice']));
+      const pdfPrice = getCellValueAsNumber(getVal(['pdfsprice', 'pdfprice', 'ebookprice']));
+      const epubPrice = getCellValueAsNumber(getVal(['epubprice']));
+      const hardcopyStock = getCellValueAsNumber(getVal(['stock', 'quantity', 'hardcopystock', 'inventory']));
+
+      const coverImageUrl = getCellValueAsString(getVal(['image1', 'image', 'cover', 'coverimage', 'coverimageurl', 'imageurl'])) || null;
+      const pdfFileUrl = getCellValueAsString(getVal(['pdffile', 'pdfurl', 'pdffileurl', 'pdf'])) || null;
+      const epubFileUrl = getCellValueAsString(getVal(['epubfile', 'epuburl', 'epubfileurl', 'epub'])) || null;
+
+      const parsedRow: ParsedBookRow = {
+        title,
+        author,
+        sku,
+        category,
+        description,
+        regularPrice,
+        salePrice,
+        pdfPrice,
+        epubPrice,
+        hardcopyStock: hardcopyStock !== null ? Math.max(0, Math.floor(hardcopyStock)) : null,
+        coverImageUrl,
+        pdfFileUrl,
+        epubFileUrl,
+      };
+
+      try {
+        const outcome = await upsertBookFromImport(orgId, parsedRow);
+        if (outcome === 'inserted') insertedRows++;
+        else if (outcome === 'updated') updatedRows++;
+        else skippedRows++;
+      } catch (rowErr: any) {
+        skippedRows++;
+        await importQueries.appendJobError(jobId, {
+          row: rowNumber,
+          title,
+          error: rowErr.message || 'Row processing failed',
+        });
+      }
+
+      processedRows++;
+
+      if (processedRows % 10 === 0 || processedRows === totalRows) {
+        await importQueries.updateJobProgress(
+          jobId,
+          {
+            processedRows,
+            insertedRows,
+            updatedRows,
+            skippedRows,
+            totalRows,
+          },
+          'processing'
+        );
+      }
+    }
+
+    await importQueries.finalizeImportJob(jobId, 'done', {
+      processedRows,
+      insertedRows,
+      updatedRows,
+      skippedRows,
+    });
+  } catch (err: any) {
+    console.error(`[Process Excel File Error] Job ${jobId}:`, err);
+    await importQueries.finalizeImportJob(
+      jobId,
+      'failed',
+      undefined,
+      err.message || 'Workbook processing error'
+    );
+    throw err;
+  } finally {
+    if (filePath && fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch {
+        // Ignore file cleanup error
+      }
+    }
+  }
+}
+
+export async function processGoogleSheet(
+  jobId: string,
+  orgId: string,
+  sheetUrl: string
+): Promise<void> {
+  const match = sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (!match || !match[1]) {
+    throw new Error('Invalid Google Sheet URL. Could not extract spreadsheet ID.');
+  }
+
+  const sheetId = match[1];
+  const csvExportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+  const tempFilePath = path.join(os.tmpdir(), `gsheet-${jobId}-${Date.now()}.csv`);
+
+  try {
+    const response = await axios.get<string>(csvExportUrl, {
+      responseType: 'text',
+      timeout: 30000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+    });
+
+    if (!response.data || typeof response.data !== 'string') {
+      throw new Error('Received empty response from Google Sheet');
+    }
+
+    if (response.data.includes('<!DOCTYPE html>') || response.data.includes('<html')) {
+      throw new Error(
+        'Google Sheet is private or requires authentication. Please set link sharing to "Anyone with the link can view".'
+      );
+    }
+
+    fs.writeFileSync(tempFilePath, response.data, 'utf8');
+    await processExcelFile(jobId, orgId, tempFilePath);
+  } catch (err: any) {
+    console.error(`[Process Google Sheet Error] Job ${jobId}:`, err);
+    await importQueries.finalizeImportJob(
+      jobId,
+      'failed',
+      undefined,
+      err.message || 'Google Sheet fetch failed'
+    );
+    throw err;
+  } finally {
+    if (fs.existsSync(tempFilePath)) {
+      try {
+        fs.unlinkSync(tempFilePath);
+      } catch {
+        // Ignore cleanup error
+      }
+    }
+  }
+}
+</file>
+
+<file path="src/app.ts">
+// =============================================================================
+// soko-api/src/app.ts
+// Multi-Frontend CORS Support & Master Express Route Registrations
+// =============================================================================
+
+import express, { Request, Response, NextFunction } from "express";
+import helmet from "helmet";
+import cors from "cors";
+import pinoHttp from "pino-http";
+//import rateLimit from "express-rate-limit";
+import { v4 as uuidv4 } from "uuid";
+import { env } from "./config/env";
+import { errorHandler } from "./middleware/errorHandler";
+import { AppError } from "./utils/error";
+import { HealthCheckResponse } from "./types/health";
+import { pool } from "./config/db";
+
+// Route Imports
+import authRoutes from "./modules/auth/auth.routes";
+import customersRoutes from "./modules/customers/customers.routes";
+import transactionsRoutes from "./modules/transactions/transactions.routes";
+import dashboardRoutes from "./modules/transactions/dashboard.routes";
+import paymentsRoutes from "./modules/payments/payments.routes";
+import agentRoutes from "./verticals/market/agent.routes";
+import expensesRoutes from "./modules/expenses/expenses.routes";
+import adminRoutes from "./modules/admin/admin.routes";
+import productsRoutes from "./modules/products/products.routes";
+import productFormatsRoutes from "./modules/product-formats/product-formats.routes";
+import storesRoutes from "./modules/stores/stores.routes";
+import ordersRoutes from "./modules/orders/orders.routes";
+import publicRoutes from "./modules/public/public.routes";
+import mpesaCredentialsRoutes from "./modules/mpesa-credentials/mpesa-credentials.routes";
+import analyticsRoutes from "./modules/analytics/analytics.routes";
+import booksRoutes from "./verticals/books/books.routes";
+import bannersRoutes from "./modules/banners/banners.routes";
+import smtpRoutes from "./modules/smtp/smtp.routes";
+
+const app = express();
+
+app.use(helmet());
+
+// Multi-Frontend Allowed Origins
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:3333',
+];
+
+// Support comma-separated URLs in FRONTEND_URL
+if (env.FRONTEND_URL) {
+  const customOrigins = env.FRONTEND_URL.split(',').map((o) => o.trim().replace(/\/$/, ''));
+  allowedOrigins.push(...customOrigins);
+}
+
+app.use(
+  cors({
+    origin: (requestOrigin, callback) => {
+      if (!requestOrigin) return callback(null, true);
+
+      if (allowedOrigins.includes(requestOrigin)) {
+        return callback(null, true);
+      }
+
+      if (requestOrigin.endsWith('.vercel.app')) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`Origin ${requestOrigin} is not allowed by CORS`));
+    },
+    credentials: true,
+  })
+);
+
+app.use(express.json());
+
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  req.requestId = uuidv4();
+  next();
+});
+
+app.use(
+  pinoHttp({
+    customProps: req => ({
+      requestId: (req as Request).requestId
+    }),
+    autoLogging: {
+      ignore: req => req.url === "/api/v1/health"
+    }
+  })
+);
+
+//const limiter = rateLimit({
+ // windowMs: 15 * 60 * 1000,
+ // max: 300,
+ // standardHeaders: true,
+ // legacyHeaders: false,
+ // message: {
+   // success: false,
+   // error: {
+    //  message: "Too many requests. Please try again later."
+   // }
+ // }
+//});
+//app.use(limiter);
+
+const apiRouter = express.Router();
+
+apiRouter.get("/health", async (_req: Request, res: Response) => {
+  let dbStatus: HealthCheckResponse["db"] = "connected";
+
+  try {
+    await pool.query("SELECT 1");
+  } catch {
+    dbStatus = "error";
+  }
+
+  const response: HealthCheckResponse = {
+    status: dbStatus === "connected" ? "ok" : "error",
+    db: dbStatus,
+    timestamp: new Date().toISOString()
+  };
+
+  res.status(dbStatus === "connected" ? 200 : 503).json(response);
+});
+
+apiRouter.use("/auth", authRoutes);
+apiRouter.use("/customers", customersRoutes);
+apiRouter.use("/transactions", transactionsRoutes);
+apiRouter.use("/dashboard", dashboardRoutes);
+apiRouter.use("/payments", paymentsRoutes);
+apiRouter.use("/agent", agentRoutes);
+apiRouter.use("/expenses", expensesRoutes);
+apiRouter.use("/public", publicRoutes);
+apiRouter.use("/admin", adminRoutes);
+apiRouter.use("/products/:productId/formats", productFormatsRoutes);
+apiRouter.use("/products", productsRoutes);
+apiRouter.use("/store", storesRoutes);
+apiRouter.use("/orders", ordersRoutes);
+apiRouter.use("/mpesa-credentials", mpesaCredentialsRoutes);
+apiRouter.use("/analytics", analyticsRoutes);
+apiRouter.use("/books", booksRoutes);
+apiRouter.use("/banners", bannersRoutes);
+apiRouter.use("/smtp", smtpRoutes);
+
+app.use("/api/v1", apiRouter);
+
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  next(
+    new AppError(
+      `Endpoint not found: ${req.method} ${req.originalUrl}`,
+      404
+    )
+  );
+});
+
+app.use(errorHandler);
+
+export default app;
 </file>
 
 </files>
